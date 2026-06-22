@@ -4,118 +4,202 @@
       <span class="brand">RFPlay</span>
       <div class="nav-links">
         <router-link to="/dashboard">Dashboard</router-link>
-        <router-link to="/products">Products</router-link>
+        <router-link to="/plans">Plans</router-link>
+        <router-link to="/account">Account</router-link>
         <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
       </div>
       <span class="user-badge">{{ auth.username }}</span>
     </nav>
 
     <main class="content">
-      <h2>Our Products</h2>
+      <h2>Plans &amp; Pricing</h2>
       <p class="subtitle">Choose a plan that fits your needs</p>
 
-      <div class="product-grid">
-        <div v-for="p in products" :key="p.id" class="product-card">
-          <div class="icon" :style="{ background: p.color + '18' }">
-            <span :style="{ color: p.color }">{{ p.icon }}</span>
+      <div v-if="loading" class="loading">Loading plans…</div>
+      <div v-if="error" class="error-msg">{{ error }}</div>
+
+      <div v-if="plans.length" class="plan-grid">
+        <div v-for="p in plans" :key="p.id" class="plan-card">
+          <div class="plan-header">
+            <h3>{{ p.name }}</h3>
+            <p class="price">${{ formatPrice(p.price) }}<span v-if="p.duration_days"> / {{ formatDuration(p.duration_days) }}</span></p>
           </div>
-          <h3>{{ p.name }}</h3>
-          <p class="desc">{{ p.description }}</p>
-          <p class="price">${{ p.price }}<span v-if="p.period"> / {{ p.period }}</span></p>
-          <span class="tag">{{ p.type }}</span>
-          <button class="btn" @click="selectProduct(p)">Select</button>
+          <div class="plan-features">
+            <div class="feature">
+              <span class="feature-label">Traffic</span>
+              <span class="feature-value">{{ formatTraffic(p.traffic_bytes) }}</span>
+            </div>
+            <div class="feature">
+              <span class="feature-label">Duration</span>
+              <span class="feature-value">{{ formatDuration(p.duration_days) }}</span>
+            </div>
+            <div class="feature">
+              <span class="feature-label">Speed Limit</span>
+              <span class="feature-value">{{ formatSpeed(p.speed_limit_bps) }}</span>
+            </div>
+            <div v-if="p.description" class="feature-desc">{{ p.description }}</div>
+          </div>
+          <button class="btn buy-btn" @click="goCheckout(p)">Purchase</button>
         </div>
+      </div>
+
+      <div v-if="!plans.length && !loading && !error" class="empty">
+        <p>No plans available at the moment. Please check back later.</p>
       </div>
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import api from '../api/index.js'
+
 const auth = useAuthStore()
+const router = useRouter()
 
-const products = [
-  { id: 1, name: 'Starter VPN', description: 'Basic VPN access for light browsing', price: 9.99, period: 'month', type: 'VPN', color: '#1a73e8', icon: '🛡' },
-  { id: 2, name: 'Pro VPN', description: 'High-speed VPN with dedicated nodes', price: 19.99, period: 'month', type: 'VPN', color: '#34a853', icon: '🚀' },
-  { id: 3, name: 'Business VPN', description: 'Team VPN with admin controls', price: 49.99, period: 'month', type: 'VPN', color: '#ea4335', icon: '🏢' },
-  { id: 4, name: 'Proxy Pack S', description: '5 residential proxies', price: 14.99, period: 'month', type: 'Proxy', color: '#fbbc04', icon: '🌐' },
-  { id: 5, name: 'Proxy Pack M', description: '20 residential proxies', price: 39.99, period: 'month', type: 'Proxy', color: '#ff6d01', icon: '🌍' },
-  { id: 6, name: 'Dedicated IP', description: 'Static dedicated IP address', price: 4.99, period: 'month', type: 'IP', color: '#9334e6', icon: '📍' },
-]
-
-function selectProduct(p: typeof products[0]) {
-  alert(`Selected: ${p.name} — API integration coming soon`)
+interface Plan {
+  id: string
+  name: string
+  description?: string
+  price: number
+  traffic_bytes: number
+  duration_days: number
+  speed_limit_bps: number
+  [key: string]: any
 }
+
+const plans = ref<Plan[]>([])
+const loading = ref(true)
+const error = ref('')
+
+async function fetchPlans() {
+  loading.value = true
+  error.value = ''
+  try {
+    // Try authenticated first, fall back to public
+    const res = await api.get('/web/plans')
+    plans.value = Array.isArray(res.data) ? res.data : (res.data.plans || [])
+  } catch (e: any) {
+    if (!e.response || e.response.status === 401) {
+      // Public endpoint — try without auth
+      try {
+        const res = await api.get('/web/plans', {
+          headers: { Authorization: '' }
+        })
+        plans.value = Array.isArray(res.data) ? res.data : (res.data.plans || [])
+      } catch (e2: any) {
+        error.value = e2.response?.data?.error || 'Failed to load plans'
+      }
+    } else {
+      error.value = e.response?.data?.error || 'Failed to load plans'
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+function formatPrice(cents: number): string {
+  if (cents >= 100) return (cents / 100).toFixed(2)
+  return String(cents)
+}
+
+function formatTraffic(bytes: number): string {
+  if (!bytes || bytes <= 0) return 'Unlimited'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let b = bytes
+  while (b >= 1024 && i < units.length - 1) { b /= 1024; i++ }
+  return `${b.toFixed(i > 1 ? 1 : 0)} ${units[i]}`
+}
+
+function formatDuration(days: number): string {
+  if (days <= 0) return '—'
+  if (days >= 365) return `${Math.floor(days / 365)} year${days >= 730 ? 's' : ''}`
+  if (days >= 30) return `${Math.floor(days / 30)} month${days >= 60 ? 's' : ''}`
+  return `${days} day${days > 1 ? 's' : ''}`
+}
+
+function formatSpeed(bps: number): string {
+  if (!bps || bps <= 0) return 'No limit'
+  if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(1)} Gbps`
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(0)} Mbps`
+  if (bps >= 1_000) return `${(bps / 1_000).toFixed(0)} Kbps`
+  return `${bps} bps`
+}
+
+function goCheckout(p: Plan) {
+  router.push(`/checkout/${p.id}`)
+}
+
+onMounted(fetchPlans)
 </script>
 
 <style scoped>
 .products {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: #1a1a2e;
+  color: #e0e0e0;
 }
 .topbar {
   display: flex;
   align-items: center;
   padding: 0.75rem 2rem;
-  background: white;
-  border-bottom: 1px solid #e0e0e0;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
   gap: 2rem;
 }
-.brand { font-weight: 700; color: #1a73e8; font-size: 1.2rem; }
+.brand { font-weight: 700; color: #e94560; font-size: 1.2rem; }
 .nav-links { display: flex; gap: 1.25rem; flex: 1; }
-.nav-links a { color: #555; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.nav-links a:hover, .nav-links a.router-link-active { color: #1a73e8; }
-.user-badge { background: #e8f0fe; color: #1a73e8; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+.nav-links a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
+.nav-links a:hover, .nav-links a.router-link-active { color: #e94560; }
+.user-badge { background: rgba(233,69,96,0.15); color: #e94560; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
 .content { max-width: 960px; margin: 0 auto; padding: 2rem; }
-h2 { margin: 0; font-size: 1.5rem; color: #222; }
-.subtitle { color: #666; margin: 0.25rem 0 2rem; }
-.product-grid {
+h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
+.subtitle { color: #a0a0b0; margin: 0.25rem 0 2rem; font-size: 0.9rem; }
+.loading { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
+.error-msg { color: #ff6b6b; background: rgba(255,107,107,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+.empty { color: #a0a0b0; text-align: center; padding: 3rem 0; font-size: 0.9rem; }
+
+.plan-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 1.25rem;
 }
-.product-card {
-  background: white;
+.plan-card {
+  background: #16213e;
   border-radius: 12px;
+  border: 1px solid #0f3460;
   padding: 1.5rem;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
   display: flex;
   flex-direction: column;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
-.icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.4rem;
-  margin-bottom: 1rem;
+.plan-card:hover {
+  border-color: #e94560;
+  box-shadow: 0 4px 20px rgba(233,69,96,0.1);
 }
-.product-card h3 { margin: 0 0 0.35rem; font-size: 1.1rem; color: #222; }
-.desc { margin: 0 0 0.75rem; font-size: 0.85rem; color: #777; flex: 1; }
-.price { margin: 0 0 0.5rem; font-size: 1.35rem; font-weight: 700; color: #1a73e8; }
-.price span { font-size: 0.85rem; font-weight: 400; color: #888; }
-.tag {
-  display: inline-block;
-  background: #e8f0fe;
-  color: #1a73e8;
-  padding: 0.2rem 0.6rem;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  margin-bottom: 1rem;
-  width: fit-content;
-}
-.btn {
-  padding: 0.55rem;
-  background: #1a73e8;
+.plan-header { margin-bottom: 1.25rem; }
+.plan-header h3 { margin: 0 0 0.35rem; font-size: 1.15rem; color: #f0f0f0; }
+.price { margin: 0; font-size: 1.5rem; font-weight: 700; color: #e94560; }
+.price span { font-size: 0.85rem; font-weight: 400; color: #a0a0b0; }
+.plan-features { flex: 1; display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.5rem; }
+.feature { display: flex; justify-content: space-between; align-items: center; }
+.feature-label { color: #a0a0b0; font-size: 0.85rem; }
+.feature-value { color: #e0e0e0; font-size: 0.9rem; font-weight: 500; }
+.feature-desc { color: #a0a0b0; font-size: 0.8rem; font-style: italic; margin-top: 0.3rem; }
+.buy-btn {
+  padding: 0.65rem;
+  background: #e94560;
   color: white;
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: background 0.2s;
   margin-top: auto;
 }
-.btn:hover { background: #1557b0; }
+.buy-btn:hover { background: #d63851; }
 </style>
