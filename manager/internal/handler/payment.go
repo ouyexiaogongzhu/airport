@@ -73,6 +73,25 @@ func CreateOrder(c *fiber.Ctx) error {
 	})
 }
 
+// ListOrders returns all orders for the authenticated user.
+func ListOrders(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "unauthorized",
+		})
+	}
+
+	var orders []model.Order
+	if result := db.DB.Where("user_id = ?", userID).Order("created_at DESC").Find(&orders); result.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to list orders",
+		})
+	}
+
+	return c.JSON(orders)
+}
+
 type MockPayCallbackRequest struct {
 	OrderID uint   `json:"order_id" validate:"required"`
 	Status  string `json:"status" validate:"required"` // paid, cancelled

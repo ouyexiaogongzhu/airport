@@ -48,6 +48,7 @@ func main() {
 	user.Get("/profile", handler.GetProfile)
 	user.Put("/profile", handler.UpdateProfile)
 	user.Post("/orders", handler.CreateOrder)
+	user.Get("/orders", handler.ListOrders)
 
 	// Admin routes (JWT + AdminOnly)
 	admin := v1.Group("/admin", middleware.JWTProtected(), middleware.AdminOnly())
