@@ -41,7 +41,24 @@ func main() {
 	public := v1.Group("/public")
 	public.Post("/register", handler.Register)
 	public.Post("/login", handler.Login)
+	public.Post("/token-login", handler.TokenLogin)
 	public.Post("/payment/callback", handler.MockPayCallback)
+
+	// Client routes (public)
+	v1.Get("/client/config", handler.GetClientConfig)
+	v1.Get("/client/links/:token", handler.GetLinksV2ray)
+	v1.Get("/client/links/:token/clash", handler.GetLinksClash)
+	v1.Get("/client/links/:token/singbox", handler.GetLinksSingbox)
+	v1.Get("/client/links/:token/qrcode", handler.GetLinksQRCode)
+
+	// Client routes (JWT required)
+	client := v1.Group("/client", middleware.JWTProtected())
+	client.Get("/subscription", handler.GetSubscription)
+
+	// Web routes (JWT required)
+	web := v1.Group("/web", middleware.JWTProtected())
+	web.Get("/client-token", handler.GetClientToken)
+	web.Post("/client-token/regenerate", handler.RegenerateClientToken)
 
 	// User routes (JWT required)
 	user := v1.Group("/user", middleware.JWTProtected())

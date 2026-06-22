@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"time"
 
@@ -19,6 +21,10 @@ type RegisterRequest struct {
 type LoginRequest struct {
 	Username string `json:"username" validate:"required"`
 	Password string `json:"password" validate:"required"`
+}
+
+type TokenLoginRequest struct {
+	Token string `json:"token"`
 }
 
 type AuthResponse struct {
@@ -85,6 +91,14 @@ func Register(c *fiber.Ctx) error {
 		})
 	}
 
+	// Generate client_token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		// non-fatal, continue
+	}
+	user.ClientToken = "rf_" + hex.EncodeToString(tokenBytes)
+	db.DB.Model(&user).Update("client_token", user.ClientToken)
+
 	// Generate JWT
 	token, err := generateToken(&user)
 	if err != nil {
@@ -130,6 +144,51 @@ func Login(c *fiber.Ctx) error {
 	if user.Status != "active" {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error": "account is not active",
+		})
+	}
+
+	token, err := generateToken(&user)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to generate token",
+		})
+	}
+
+	return c.JSON(AuthResponse{
+		Token: token,
+		User:  &user,
+	})
+}
+
+// TokenLogin authenticates a user via client token and returns a JWT.
+func TokenLogin(c *fiber.Ctx) error {
+	req := new(TokenLoginRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid request body",
+		})
+	}
+	if req.Token == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "token is required",
+		})
+	}
+
+	var user model.User
+	if result := db.DB.Where("client_token = ?", req.Token).First(&user); result.Error != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "INVALID_TOKEN",
+		})
+	}
+
+	if user.SubscriptionStatus == "expired" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "SUBSCRIPTION_EXPIRED",
+		})
+	}
+	if user.SubscriptionStatus == "pending" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "SUBSCRIPTION_PENDING",
 		})
 	}
 

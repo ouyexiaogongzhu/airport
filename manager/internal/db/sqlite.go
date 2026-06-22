@@ -1,6 +1,9 @@
 package db
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -40,6 +43,19 @@ func Init(dataDir string) {
 		&model.TrafficRecord{},
 	); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
+	}
+
+	// Backfill client_token for existing users
+	var tokenlessUsers []model.User
+	DB.Where("client_token IS NULL OR client_token = ''").Find(&tokenlessUsers)
+	for _, u := range tokenlessUsers {
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			continue
+		}
+		token := "rf_" + hex.EncodeToString(tokenBytes)
+		DB.Model(&u).Update("client_token", token)
+		fmt.Printf("backfilled client_token for user %d\n", u.ID)
 	}
 
 	log.Printf("database initialized at %s", dbPath)
