@@ -18,6 +18,7 @@ import (
 
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	ResetRegisterLimits()
 	dbPath := t.TempDir() + "/test.db"
 	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {

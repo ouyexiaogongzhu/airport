@@ -16,6 +16,14 @@ import (
 
 var registerLimits sync.Map
 
+// ResetRegisterLimits clears the per-IP registration counters (used in tests).
+func ResetRegisterLimits() {
+	registerLimits.Range(func(key, value interface{}) bool {
+		registerLimits.Delete(key)
+		return true
+	})
+}
+
 type registerCounter struct {
 	mu         sync.Mutex
 	timestamps []time.Time

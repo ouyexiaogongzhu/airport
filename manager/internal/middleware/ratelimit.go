@@ -7,6 +7,22 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// Test helper: reset rate limiter state between tests
+var ResetRateLimiter = func() {
+	resetGlobalLimiter()
+}
+
+func resetGlobalLimiter() {
+	globalLimiter.mu.Lock()
+	defer globalLimiter.mu.Unlock()
+	globalLimiter.windows = make(map[string]*slidingWindow)
+}
+
+var (
+	rateVisitors sync.Map
+	regVisitors  sync.Map
+)
+
 // RateGroup defines the rate limit for a group of endpoints.
 type RateGroup struct {
 	Name      string
