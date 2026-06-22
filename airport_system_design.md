@@ -862,6 +862,88 @@ Token 存 Keychain / EncryptedSharedPreferences；**不用 cookie，不用 CSRF*
   }
   ```
 
+### 4.4.1 Standard Subscription Format (for Third-Party Clients)
+
+Third-party clients (V2rayNG, Shadowrocket, Clash Verge, Sing-box) use a **subscription URL** instead of the Flutter JSON API. The subscription URL uses the `rf_` token directly for authentication — no JWT needed.
+
+| Client | Format | Endpoint |
+| :--- | :--- | :--- |
+| V2rayNG / Shadowrocket | V2ray base64 | `GET /api/client/links/:token` |
+| Clash / Clash Verge | Clash YAML | `GET /api/client/links/:token/clash` |
+| Sing-box | Sing-box JSON | `GET /api/client/links/:token/singbox` |
+
+**Auth**: via `rf_` token in URL path (`:token`). No JWT, no header — third-party clients paste the URL directly.
+
+**Rate limit**: Per-IP, max 1 request per 10 seconds per token (prevents polling abuse).
+
+**`GET /api/client/links/:token` — V2ray base64 format**:
+
+- Returns standard V2ray subscription response: each node encoded as a **VMess/VLESS/Shadowsocks/Trojan URI**, concatenated with newlines, then **base64-encoded**.
+- **Response headers**:
+  ```
+  Content-Type: text/plain; charset=utf-8
+  X-UltraUsage-Remaining: 53687091200
+  X-UltraUsage-Total: 107374182400
+  X-UltraUsage-Expiry: 1782049000
+  X-UltraUsage-Reset-Day: 15
+  Subscription-Userinfo: upload=0; download=53687091200; total=107374182400; expire=1782049000
+  ```
+  The `Subscription-Userinfo` header follows the standard V2ray subscription convention so clients can display traffic/expiry info.
+
+- **Error responses**:
+  - `401 INVALID_TOKEN` — `rf_` token not found or reset
+  - `403 SUBSCRIPTION_EXPIRED` — plan expired
+  - `403 SUBSCRIPTION_PENDING` — never purchased
+  - `204 No Content` — active but no active nodes available
+
+**`GET /api/client/links/:token/clash` — Clash YAML format**:
+
+- Returns standard Clash/Mihomo configuration YAML.
+- ```yaml
+  port: 7890
+  socks-port: 7891
+  mode: Rule
+  log-level: info
+  
+  proxies:
+    - name: "Node-01"
+      type: vmess
+      server: node01.example.com
+      port: 443
+      uuid: "xxxx-xxxx-xxxx"
+      alterId: 0
+      cipher: auto
+      tls: true
+      network: ws
+      ws-path: /xxx
+      ws-headers:
+        Host: node01.example.com
+  
+  proxy-groups:
+    - name: Proxy
+      type: url-test
+      proxies:
+        - Node-01
+        - Node-02
+      url: http://www.gstatic.com/generate_204
+      interval: 300
+  
+  rules:
+    - GEOIP,CN,DIRECT
+    - MATCH,Proxy
+  ```
+
+**`GET /api/client/links/:token/singbox` — Sing-box JSON format**:
+
+- Returns standard Sing-box configuration JSON (multi-outbound + selector group).
+- Same auth and error semantics as the V2ray format above.
+
+**QR Code (for mobile clients)**:
+
+- `GET /api/client/links/:token/qrcode` — Returns a PNG QR code image encoding the V2ray base64 subscription URL.
+  - Useful for V2rayNG on Android — scan QR instead of pasting URL.
+  - Response header: `Content-Type: image/png`.
+
 ### 4.5 Payment Callback & Auto-Activation
 
 * **URL**: `POST /api/payment/callback/{provider}` (`bepusdt` | `payoneer`)
