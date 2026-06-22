@@ -1,0 +1,65 @@
+{
+  "log": {
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log",
+    "loglevel": "warning"
+  },
+  "verify_url": "http://localhost:8080",
+  "rate_limit": {
+    "enabled": true,
+    "rate": 100,
+    "burst": 50
+  },
+  "inbounds": [
+    {
+      "port": 443,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [],
+        "disableInsecureEncryption": true
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/xray/ws",
+          "host": "rfplay.example.com"
+        },
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/etc/ssl/certs/rfplay.example.com.pem",
+              "keyFile": "/etc/ssl/private/rfplay.example.com.key"
+            }
+          ]
+        }
+      },
+      "tag": "vmess-ws-inbound"
+    },
+    {
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/xray/vless-ws",
+          "host": "rfplay.example.com"
+        }
+      },
+      "tag": "vless-ws-inbound"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
+    }
+  ]
+}
