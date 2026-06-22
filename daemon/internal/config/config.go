@@ -4,78 +4,75 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
 // Config holds the daemon configuration.
 type Config struct {
-	// NodeID is this daemon's unique identifier (matches Manager node ID).
-	NodeID uint `json:"node_id"`
-
-	// ManagerURL is the base URL of the Manager API (e.g. http://localhost:8080).
-	ManagerURL string `json:"manager_url"`
-
-	// ManagerToken is the JWT token used to authenticate with the Manager API.
-	ManagerToken string `json:"manager_token"`
-
-	// SyncInterval is how often to sync node config from the Manager.
-	SyncInterval time.Duration `json:"sync_interval"`
-
-	// ListenAddr is the address the daemon HTTP API listens on.
-	ListenAddr string `json:"listen_addr"`
-
-	// DataDir is the directory for storing local config and data.
-	DataDir string `json:"data_dir"`
+	NodeID         uint          `json:"node_id"`
+	ManagerURL     string        `json:"manager_url"`
+	ManagerToken   string        `json:"manager_token"`
+	SyncInterval   time.Duration `json:"sync_interval"`
+	DataDir        string        `json:"data_dir"`
+	ListenAddr     string        `json:"listen_addr"`
+	LogLevel       string        `json:"log_level"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		NodeID:        1,
-		ManagerURL:    "http://localhost:8080",
-		ManagerToken:  "",
-		SyncInterval:  60 * time.Second,
-		ListenAddr:    ":9090",
-		DataDir:       "./data",
+		NodeID:       1,
+		ManagerURL:   "http://localhost:8080",
+		ManagerToken: "default-token",
+		SyncInterval: 30 * time.Second,
+		DataDir:      "/var/lib/airport",
+		ListenAddr:   ":9090",
+		LogLevel:     "info",
 	}
 }
 
-// LoadConfig reads configuration from a JSON file.
-// Returns a default config merged with file contents.
+// LoadConfig reads a JSON config file at path. If path does not exist,
+// it returns DefaultConfig with no error. Invalid JSON returns an error.
 func LoadConfig(path string) (*Config, error) {
-	cfg := DefaultConfig()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return DefaultConfig(), nil
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
-		return nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, fmt.Errorf("read config: %w", err)
 	}
 
+	cfg := DefaultConfig()
 	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, fmt.Errorf("parse config: %w", err)
 	}
-
 	return cfg, nil
 }
 
-// SaveConfig writes the config to a JSON file.
-func (c *Config) SaveConfig(path string) error {
-	data, err := json.MarshalIndent(c, "", "  ")
+// SaveConfig writes cfg as pretty-printed JSON to path.
+func SaveConfig(cfg *Config, path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
+
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
+		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
 }
 
-// Validate checks the config for required fields.
+// Validate checks that required fields are set. Returns an error if invalid.
 func (c *Config) Validate() error {
-	if c.NodeID == 0 {
-		return fmt.Errorf("node_id is required")
+	if c.NodeID <= 0 {
+		return fmt.Errorf("node_id must be positive")
 	}
 	if c.ManagerURL == "" {
 		return fmt.Errorf("manager_url is required")

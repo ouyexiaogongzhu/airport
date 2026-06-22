@@ -193,3 +193,13 @@ func (s *Syncer) readLocalConfig() ([]NodeConfig, error) {
 func (s *Syncer) GetLocalNodes() ([]NodeConfig, error) {
 	return s.readLocalConfig()
 }
+
+// GetDataDirForTesting returns the syncer's data directory — used in tests.
+func (s *Syncer) GetDataDirForTesting() string {
+	return s.cfg.DataDir
+}
+
+// GetConfigForTesting returns the syncer's config — used in tests.
+func (s *Syncer) GetConfigForTesting() *config.Config {
+	return s.cfg
+}
