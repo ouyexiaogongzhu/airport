@@ -7,22 +7,27 @@ import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/main_shell.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final authService = AuthService();
+  await authService.init();
+
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthService()),
+        ChangeNotifierProvider.value(value: authService),
         ChangeNotifierProvider(create: (_) => SubscriptionService()),
         ChangeNotifierProvider(create: (_) => VpnService()),
       ],
-      child: const RFPlayApp(),
+      child: RFPlayApp(authService: authService),
     ),
   );
 }
 
 class RFPlayApp extends StatelessWidget {
-  const RFPlayApp({super.key});
+  final AuthService authService;
+
+  const RFPlayApp({super.key, required this.authService});
 
   @override
   Widget build(BuildContext context) {
@@ -109,8 +114,7 @@ class RFPlayApp extends StatelessWidget {
         ),
       ),
 
-      // Routes
-      initialRoute: '/login',
+      initialRoute: authService.isLoggedIn ? '/main' : '/login',
       routes: {
         '/login': (_) => const LoginScreen(),
         '/register': (_) => const RegisterScreen(),

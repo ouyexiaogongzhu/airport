@@ -1,70 +1,109 @@
-class Subscription {
-  final String planName;
-  final String expiryDate;
-  final double totalTraffic;
-  final double usedTraffic;
-  final List<VpnNode> nodes;
+class VpnNode {
+  final String name;
+  final String uri;
 
-  Subscription({
-    required this.planName,
-    required this.expiryDate,
-    required this.totalTraffic,
-    required this.usedTraffic,
-    required this.nodes,
-  });
+  VpnNode({required this.name, required this.uri});
 
-  factory Subscription.fromJson(Map<String, dynamic> json) {
-    return Subscription(
-      planName: json['plan_name'] as String? ?? '',
-      expiryDate: json['expiry_date'] as String? ?? '',
-      totalTraffic: (json['total_traffic'] as num?)?.toDouble() ?? 0,
-      usedTraffic: (json['used_traffic'] as num?)?.toDouble() ?? 0,
-      nodes: (json['nodes'] as List<dynamic>?)
-              ?.map((e) => VpnNode.fromJson(e as Map<String, dynamic>))
-              .toList() ??
-          [],
+  factory VpnNode.fromUri(String uri, int index) {
+    return VpnNode(
+      name: 'Node-${index + 1}',
+      uri: uri,
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'plan_name': planName,
-      'expiry_date': expiryDate,
-      'total_traffic': totalTraffic,
-      'used_traffic': usedTraffic,
-      'nodes': nodes.map((e) => e.toJson()).toList(),
-    };
   }
 }
 
-class VpnNode {
-  final String name;
-  final String location;
-  final int latency;
-  final bool isOnline;
+class SubscriptionInfo {
+  final int id;
+  final String tier;
+  final int trafficRemainingBytes;
+  final int expireTime;
+  final List<VpnNode> nodes;
+  final Map<String, dynamic> routing;
+  final int subscriptionVersion;
 
-  VpnNode({
-    required this.name,
-    required this.location,
-    required this.latency,
-    required this.isOnline,
+  SubscriptionInfo({
+    required this.id,
+    required this.tier,
+    required this.trafficRemainingBytes,
+    required this.expireTime,
+    required this.nodes,
+    required this.routing,
+    required this.subscriptionVersion,
   });
 
-  factory VpnNode.fromJson(Map<String, dynamic> json) {
-    return VpnNode(
-      name: json['name'] as String? ?? '',
-      location: json['location'] as String? ?? '',
-      latency: json['latency'] as int? ?? 0,
-      isOnline: json['is_online'] as bool? ?? false,
+  factory SubscriptionInfo.fromJson(Map<String, dynamic> json) {
+    final user = json['user'] as Map<String, dynamic>? ?? {};
+    final nodeUris = (json['nodes'] as List<dynamic>?)
+            ?.map((e) => e.toString())
+            .toList() ?? [];
+    final nodes = nodeUris
+        .asMap()
+        .entries
+        .map((e) => VpnNode.fromUri(e.value, e.key))
+        .toList();
+
+    return SubscriptionInfo(
+      id: user['id'] as int? ?? 0,
+      tier: user['tier'] as String? ?? 'free',
+      trafficRemainingBytes: (user['traffic_remaining_bytes'] as num?)?.toInt() ?? 0,
+      expireTime: (user['expire_time'] as num?)?.toInt() ?? 0,
+      nodes: nodes,
+      routing: (json['routing'] as Map<String, dynamic>?) ?? {},
+      subscriptionVersion: json['subscription_version'] as int? ?? 0,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'name': name,
-      'location': location,
-      'latency': latency,
-      'is_online': isOnline,
+      'user': {
+        'id': id,
+        'tier': tier,
+        'traffic_remaining_bytes': trafficRemainingBytes,
+        'expire_time': expireTime,
+      },
+      'nodes': nodes.map((n) => n.uri).toList(),
+      'routing': routing,
+      'subscription_version': subscriptionVersion,
     };
   }
+
+  /// Format bytes to human-readable GB
+  String get trafficRemainingGb {
+    final gb = trafficRemainingBytes / (1024 * 1024 * 1024);
+    return gb.toStringAsFixed(2);
+  }
+
+  /// Get total traffic estimate (not available from API, use remaining + 10GB as estimate)
+  String get totalTrafficEstimateGb {
+    final gb = trafficRemainingBytes / (1024 * 1024 * 1024);
+    return gb.toStringAsFixed(2);
+  }
+
+  /// Format expire time as DateTime
+  DateTime? get expireDateTime {
+    if (expireTime <= 0) return null;
+    return DateTime.fromMillisecondsSinceEpoch(expireTime * 1000);
+  }
+
+  /// Format expire time as readable string
+  String get expireDateFormatted {
+    if (expireTime <= 0) return '永久';
+    final dt = expireDateTime!;
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+  }
+
+  String get tierLabel {
+    switch (tier) {
+      case 'pro':
+        return 'Pro';
+      case 'basic':
+        return '基础版';
+      case 'premium':
+        return '高级版';
+      default:
+        return tier;
+    }
+  }
+
+  int get nodeCount => nodes.length;
 }

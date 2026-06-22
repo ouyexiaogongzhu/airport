@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import '../models/user.dart';
 import 'api_service.dart';
 
 class AuthService extends ChangeNotifier {
   final ApiService _api = ApiService();
+  static const String _tokenFile = 'rfplay_auth_token';
 
   User? _currentUser;
   bool _isLoading = false;
@@ -14,113 +17,134 @@ class AuthService extends ChangeNotifier {
   bool get isLoggedIn => _currentUser != null;
   String? get error => _error;
 
-  /// Login: try real API → mock fallback
+  String get _tokenPath {
+    // Store token in a temp file
+    final dir = Directory.systemTemp.path;
+    return '$dir/$_tokenFile';
+  }
+
+  Future<String?> _loadToken() async {
+    try {
+      final file = File(_tokenPath);
+      if (await file.exists()) {
+        return await file.readAsString();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _saveToken(String token) async {
+    try {
+      final file = File(_tokenPath);
+      await file.writeAsString(token);
+    } catch (_) {}
+  }
+
+  Future<void> _deleteToken() async {
+    try {
+      final file = File(_tokenPath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
+  /// Initialize: restore token from file
+  Future<void> init() async {
+    final savedToken = await _loadToken();
+    if (savedToken != null && savedToken.isNotEmpty) {
+      _api.setToken(savedToken);
+      // Try to load profile to verify token
+      try {
+        final data = await _api.get('/user/profile');
+        _currentUser = User.fromJson(data);
+        notifyListeners();
+      } catch (_) {
+        // Token expired or invalid — clear
+        _api.setToken(null);
+        await _deleteToken();
+      }
+    }
+  }
+
+  /// Login via real API
   Future<bool> login(String username, String password) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final response = await _api.post('/auth/login', body: {
+      final response = await _api.post('/public/login', body: {
         'username': username,
         'password': password,
       });
 
+      final token = response['token'] as String;
+      final userData = response['user'] as Map<String, dynamic>;
+
       final user = User.fromJson({
-        ...response['user'] as Map<String, dynamic>? ?? {},
-        'token': response['token'] as String?,
-        'username': response['username'] as String? ?? username,
+        ...userData,
+        'token': token,
       });
 
-      _api.setToken(user.token);
+      _api.setToken(token);
       _currentUser = user;
+
+      // Persist token
+      await _saveToken(token);
+
       _isLoading = false;
       notifyListeners();
       return true;
     } catch (e) {
-      // Mock fallback
-      if (username == 'admin' && password == 'admin123') {
-        _currentUser = User(
-          id: 1,
-          username: 'admin',
-          email: 'admin@rfplay.com',
-          role: 'admin',
-          token: 'mock_token_admin_123',
-          createdAt: '2025-01-01T00:00:00Z',
-        );
-        _api.setToken(_currentUser!.token);
-        _isLoading = false;
-        notifyListeners();
-        return true;
-      }
-
-      if (username == 'user' && password == 'user123') {
-        _currentUser = User(
-          id: 2,
-          username: 'user',
-          email: 'user@rfplay.com',
-          role: 'user',
-          token: 'mock_token_user_456',
-          createdAt: '2025-03-15T00:00:00Z',
-        );
-        _api.setToken(_currentUser!.token);
-        _isLoading = false;
-        notifyListeners();
-        return true;
-      }
-
-      _error = '用户名或密码错误';
+      _error = e.toString();
       _isLoading = false;
       notifyListeners();
       return false;
     }
   }
 
-  /// Register: try real API → mock fallback
+  /// Register via real API
   Future<bool> register(String username, String email, String password) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final response = await _api.post('/auth/register', body: {
+      final response = await _api.post('/public/register', body: {
         'username': username,
-        'email': email,
         'password': password,
       });
 
+      final token = response['token'] as String;
+      final userData = response['user'] as Map<String, dynamic>;
+
       final user = User.fromJson({
-        ...response['user'] as Map<String, dynamic>? ?? {},
-        'token': response['token'] as String?,
-        'username': response['username'] as String? ?? username,
+        ...userData,
+        'token': token,
       });
 
-      _api.setToken(user.token);
+      _api.setToken(token);
       _currentUser = user;
+
+      await _saveToken(token);
+
       _isLoading = false;
       notifyListeners();
       return true;
     } catch (e) {
-      // Mock fallback — accept any registration
-      _currentUser = User(
-        id: DateTime.now().millisecondsSinceEpoch,
-        username: username,
-        email: email,
-        role: 'user',
-        token: 'mock_token_${username}_${DateTime.now().millisecondsSinceEpoch}',
-        createdAt: DateTime.now().toIso8601String(),
-      );
-      _api.setToken(_currentUser!.token);
+      _error = e.toString();
       _isLoading = false;
       notifyListeners();
-      return true;
+      return false;
     }
   }
 
   /// Logout
-  void logout() {
+  Future<void> logout() async {
     _currentUser = null;
     _api.setToken(null);
+    await _deleteToken();
     notifyListeners();
   }
 

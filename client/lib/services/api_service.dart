@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  static const String baseUrl = 'http://10.0.2.2:8080/api/v1';
+  static const String baseUrl = 'http://localhost:8080/api/v1';
   static const Duration _timeout = Duration(seconds: 10);
 
   String? _token;
@@ -109,13 +109,14 @@ class ApiService {
       _token = null;
       throw ApiException('未授权，请重新登录');
     } else if (response.statusCode == 403) {
-      throw ApiException('没有权限');
+      final msg = body['error'] as String? ?? '没有权限';
+      throw ApiException(msg);
     } else if (response.statusCode == 404) {
       throw ApiException('请求的资源不存在');
     } else if (response.statusCode >= 500) {
       throw ApiException('服务器内部错误');
     } else {
-      final msg = body['message'] as String? ?? '请求失败 (${response.statusCode})';
+      final msg = body['error'] as String? ?? body['message'] as String? ?? '请求失败 (${response.statusCode})';
       throw ApiException(msg);
     }
   }

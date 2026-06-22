@@ -302,29 +302,16 @@ class _NodeTile extends StatelessWidget {
           ),
         ),
         subtitle: Text(
-          '${node.location} · ${node.latency} ms',
-          style: TextStyle(color: Colors.grey[500], fontSize: 12),
+          node.uri,
+          style: TextStyle(
+            fontSize: 12,
+            color: isSelected ? Colors.cyanAccent.withAlpha(180) : Colors.grey,
+          ),
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: node.isOnline ? Colors.green : Colors.red,
-              ),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              node.isOnline ? '在线' : '离线',
-              style: TextStyle(
-                color: node.isOnline ? Colors.green : Colors.red,
-                fontSize: 12,
-              ),
-            ),
-          ],
+        trailing: Icon(
+          isSelected ? Icons.check_circle : Icons.circle_outlined,
+          color: isSelected ? Colors.cyanAccent : Colors.grey,
+          size: 20,
         ),
       ),
     );

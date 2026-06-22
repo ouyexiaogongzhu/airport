@@ -158,7 +158,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     );
                   },
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
 
                 // Register link
                 TextButton(
@@ -166,18 +166,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     Navigator.pushNamed(context, '/register');
                   },
                   child: const Text('没有账号？立即注册'),
-                ),
-
-                const SizedBox(height: 24),
-
-                // Mock hint
-                Text(
-                  'Mock 账号: admin / admin123',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-                Text(
-                  'Mock 账号: user / user123',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
                 ),
               ],
             ),
