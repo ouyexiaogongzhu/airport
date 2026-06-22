@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "name": "TestNode",
+    "type": "v2ray",
+    "address": "127.0.0.1",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 3072,
+    "traffic_down": 6144,
+    "user_id": 0
+  },
+  {
+    "id": 2,
+    "name": "TestNode",
+    "type": "v2ray",
+    "address": "127.0.0.1",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 0,
+    "traffic_down": 0,
+    "user_id": 0
+  },
+  {
+    "id": 3,
+    "name": "Tokyo Node",
+    "type": "v2ray",
+    "address": "tok01.rfplay.uk",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 0,
+    "traffic_down": 0,
+    "user_id": 0
+  },
+  {
+    "id": 4,
+    "name": "TestNode",
+    "type": "v2ray",
+    "address": "127.0.0.1",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 0,
+    "traffic_down": 0,
+    "user_id": 0
+  },
+  {
+    "id": 5,
+    "name": "TestNode",
+    "type": "v2ray",
+    "address": "127.0.0.1",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 0,
+    "traffic_down": 0,
+    "user_id": 0
+  },
+  {
+    "id": 6,
+    "name": "TestNode",
+    "type": "v2ray",
+    "address": "127.0.0.1",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 0,
+    "traffic_down": 0,
+    "user_id": 0
+  }
+]

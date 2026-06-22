@@ -1,0 +1,9 @@
+{
+  "node_id": 1,
+  "manager_url": "http://localhost:8080",
+  "manager_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODIyMzA2MDcsImlhdCI6MTc4MjE0NDIwNywicm9sZSI6ImFkbWluIiwidXNlcl9pZCI6MiwidXNlcm5hbWUiOiJhZG1pbiJ9.23lUz9ri8Rw1Vuy95N0reJxe2XaTjegkSUQbWryAXtg",
+  "sync_interval": 5000000000,
+  "data_dir": "/home/vincent/code/airport/daemon/data",
+  "listen_addr": ":9090",
+  "log_level": "info"
+}
