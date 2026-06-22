@@ -9,13 +9,13 @@
 
 ## 1. 团队分工
 
-| 角色 | 负责人 | Pipeline | 核心产出 |
+| 角色 | Agent (Telegram) | Pipeline | 核心产出 |
 |:---|:---|:---|:---|
-| **后端** | @mac5_developer_backend_bot | A | Manager API (Go), Daemon, Xray-core fork, CF-WS 部署 |
-| **前端** | @mac5_developer_frontend_bot | B | Portal Vue 3 → www.rfplay.uk, Admin Vue 3 → admin.rfplay.uk |
-| **移动端** | @mac5_developer_mobile_bot | C | Flutter Client → App Store |
-| **QA** | @mac5_developer_qa_bot | D | 测试策略、回归、安全审计、E2E 验收 |
-| **组长** | vincent | 全局 | 基础设施、Git 仓库、Code Review、部署、协调 |
+| **开发组长** | @ubuntu_game_bot | 全局 | 规划、Git 管理、环境搭建、任务调度、集成测试、部署 |
+| **后端** | @ubuntu_game_combat_bot | A | Manager API (Go+Fiber), Daemon, Xray-core fork, CF-WS 部署 |
+| **前端** | @ubuntu_game_ui_bot | B | Portal Vue 3 → www.rfplay.uk, Admin Vue 3 → admin.rfplay.uk |
+| **移动端** | @ubuntu_game_char_bot | C | Flutter Android Client → App Store |
+| **QA** | 前端/后端交叉验证 | — | API 测试、联调验证、上线 checklist |
 
 ---
 
@@ -128,7 +128,7 @@ airport-system/                        # GitHub: vincent/airport-system (私有)
 
 ## 3. 并行流水线
 
-### Pipeline A：后端（Backend Bot）— 全周期独立
+### Pipeline A：后端（@ubuntu_game_combat_bot）— 全周期独立
 
 ```
 Sprint 1 ────────────────────────────────────── Sprint 2-3 ────────────────── Sprint 4
@@ -146,7 +146,7 @@ Sprint 1 ───────────────────────�
 - **Sprint 2**：Xray-core 改造（这是最复杂的模块）+ 剩余 Manager API + Daemon
 - Xray-core fork 与 Manager API 可并行开发（不同目录、独立 Go module）
 
-### Pipeline B：前端（Frontend Bot）— 与后端并行
+### Pipeline B：前端（@ubuntu_game_ui_bot）— 与后端并行
 
 ```
 Sprint 1 ─────────────────────────────── Sprint 2 ─────────────────── Sprint 4
@@ -164,7 +164,7 @@ Sprint 1 ───────────────────────�
 - 前端不堵后端 — S1.3 (auth) 完成后 Portal/Admin login 就可接上
 - SPA 路由、_redirects、withCredentials + CSRF 拦截器一次配好
 
-### Pipeline C：移动端（Mobile Bot）— Mock 先行
+### Pipeline C：移动端（@ubuntu_game_char_bot）— Mock 先行
 
 ```
 Sprint 1 ─────────────────────────────── Sprint 3 ─────────────────── Sprint 4
@@ -183,14 +183,14 @@ Sprint 1 ───────────────────────�
 - Sprint 3 Manager API 稳定后切到实时 API
 - **不阻塞其它 Pipeline**
 
-### Pipeline D：QA — 从第一天介入
+### Pipeline D：组长集成测试（@ubuntu_game_bot）
 
 ```
 Sprint 1 ────────────── Sprint 2 ────────────── Sprint 3 ──────────── Sprint 4
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌────────────────┐
-│ 测试策略      │    │ API 回归测试  │    │ Xray 集成    │    │ 全链路 E2E     │
-│ 测试环境搭建   │    │ Frontend     │    │ Flutter 测试  │    │ 安全审计       │
-│ API 测试脚本  │    │ 功能测试      │    │ 节点部署验证   │    │ 上线 checklist │
+│ 环境搭建      │    │ API 回归测试  │    │ 全链路联调   │    │ 安全审计       │
+│ 目录骨架      │    │ Frontend     │    │ Flutter 测试  │    │ 生产部署       │
+│ 工具链安装    │    │ 功能验证     │    │ 节点部署验证   │    │ 上线 checklist │
 └──────────────┘    └──────────────┘    └──────────────┘    └────────────────┘
 ```
 
@@ -204,39 +204,38 @@ Sprint 1 ────────────── Sprint 2 ──────�
 
 | ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
 |:---|:---|:---|:---|:---|:---|
-| 1.0 | Git 仓库初始化 + monorepo 目录骨架 + GitHub push | 组长 | — | §22 | S |
-| 1.1 | 安装 Flutter SDK + `flutter create client/` | 组长 | 1.0 | §3 | S |
-| 1.2 | Xray-core 克隆 + 验证 Go build | Backend | 1.0 | task.md Phase 1 | S |
-| 1.3 | Manager Go 项目 init + SQLite schema + TLS :443 + CF IP middleware | Backend | 1.0 | §3 DB schema, §14 | M |
-| 1.4 | Manager MCPCookie + CSRF 中间件 (portal + admin 双套) | Backend | 1.3 | §4.2.1, §10.12 | M |
-| 1.5 | Manager 双模式 login (cookie + Bearer) + logout/refresh/validate | Backend | 1.4 | §4.2.1, §4.2.2 | M |
-| 1.6 | Managerverify-token + sync API（无 user_list） | Backend | 1.3 | §4.1, §4.1.1 | M |
-| 1.7 | Portal Vue 骨架 + axios WithCredentials + login/register 页 + Plans | Frontend | 1.5 | §10.4, §2.2 | M |
-| 1.8 | Admin Vue 骨架 + admin_session login + Users 列表页 | Frontend | 1.5 | §10.5, §10.6 | M |
-| 1.9 | Flutter 骨架 + API Service + routing + mock data 模式 | Mobile | 1.1 | §3 | M |
-| 1.10 | QA 测试策略文档 + 测试环境搭建 + API 测试脚本 (curl) | QA | 1.3 | full spec | M |
+| 8.0 | 本机开发环境搭建（Go/Flutter/Android SDK） | @ubuntu_game_bot | — | §22 | S |
+| 8.1 | Monorepo 目录骨架创建 + 初始化 | @ubuntu_game_bot | 8.0 | §22 | S |
+| 8.2 | Xray-core 克隆 + 验证 Go build | @ubuntu_game_combat_bot | 8.1 | task.md Phase 1 | S |
+| 8.3 | Manager Go 项目 init + SQLite schema + TLS :443 + CF IP middleware | @ubuntu_game_combat_bot | 8.1 | §3 DB schema, §14 | M |
+| 8.4 | Manager Cookie + CSRF 中间件 (portal + admin 双套) | @ubuntu_game_combat_bot | 8.3 | §4.2.1, §10.12 | M |
+| 8.5 | Manager 双模式 login (cookie + Bearer) + logout/refresh/validate | @ubuntu_game_combat_bot | 8.4 | §4.2.1, §4.2.2 | M |
+| 8.6 | Manager verify-token + sync API（无 user_list） | @ubuntu_game_combat_bot | 8.3 | §4.1, §4.1.1 | M |
+| 8.7 | Portal Vue 骨架 + axios WithCredentials + login/register 页 + Plans | @ubuntu_game_ui_bot | 8.5 或 mock | §10.4, §2.2 | M |
+| 8.8 | Admin Vue 骨架 + admin_session login + Users 列表页 | @ubuntu_game_ui_bot | 8.5 或 mock | §10.5, §10.6 | M |
+| 8.9 | Flutter 骨架 + API Service + routing + mock data 模式 | @ubuntu_game_char_bot | 8.0 | §3 | M |
+| 1.10 | ~~QA 测试策略文档 + 测试环境搭建 + API 测试脚本 (curl)~~ | — | — | 无需独立 QA agent；整合到集成测试 |
 
 **并行分析**：
 
 ```
-Week 1                Week 2                Week 3
-├─┤1.0 组长 init─────┤
-  ├─┤1.2 Xray clone──┤
-  ├─┤1.3 Manager─────┤
-  │                    ├─┤1.4 CSRF──────┤
-  │                    │                 ├─┤1.5 Auth───────┤
-  │                    └─┤1.6 Node API──┤
-  ├─┤1.1 Flutter install─┤1.9 Flutter mock──────┤
-  ├─┤1.10 QA test plan─────────────────────────┤
-  │                    ├─┤1.7 Portal────────────┤
-  │                    ├─┤1.8 Admin─────────────┤
+|Week 1                Week 2                Week 3
+├─┤8.0 ubuntu_game_bot init─────┤
+  ├─┤8.2 Xray clone──┤
+  ├─┤8.3 Manager─────┤
+  │                    ├─┤8.4 CSRF──────┤
+  │                    │                 ├─┤8.5 Auth───────┤
+  │                    └─┤8.6 Node API──┤
+  ├─┤8.9 Flutter mock─────────────┤
+  ├─┤8.7 Portal───────────────────┤                ← mock 先行，等 8.5 后切 real
+  ├─┤8.8 Admin────────────────────┤                ← 同上
 ```
 
 **实际并发**：
-- Backend 可同时跑：1.3（Manager 骨架）+ 1.2（Xray clone）— 不同目录
-- Frontend 1.7 + 1.8 需要等 1.5（auth API）或先用 mock → 建议 mock 先行，等 1.5 完成后再切 real API
-- Mobile 1.9 完全独立（mock data）
-- 组长 1.0 完成后可并行做其它事
+- Backend (combat_bot) 可同时跑：8.3（Manager 骨架）+ 8.2（Xray clone）— 不同目录
+- Frontend (ui_bot) 8.7 + 8.8 需要等 8.5（auth API）或先用 mock → 建议 mock 先行，等 8.5 完成后再切 real API
+- Mobile (char_bot) 8.9 完全独立（mock data）
+- @ubuntu_game_bot 8.0 完成后可并行做其它事（集成测试准备）
 
 ### Sprint 2：完整功能 + Xray 改造（A+B+C+D 四线全开）
 
@@ -244,19 +243,19 @@ Week 1                Week 2                Week 3
 
 | ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
 |:---|:---|:---|:---|:---|:---|
-| 2.1 | Manager 支付流程：plans/orders/payment callback + BEpusdt + Payoneer | Backend | 1.5 | §4.3, §4.5, §4.7 | L |
-| 2.2 | Managerrf\_/at\_ token-login + issued\_tokens immutable CRUD | Backend | 1.5 | §3.1.1, §3.2 | M |
-| 2.3 | ManagerResend/Brevo 注册验证邮件 | Backend | 1.5 | §14A | S |
-| 2.4 | Managerclient config + subscription + traffic aggregation | Backend | 1.5 | §4.4, §6.3 | M |
-| 2.5 | Manager 自到期 cron + Admin API（users/nodes/plans CRUD） | Backend | 1.5 | §7, §4.6 | M |
-| 2.6 | Xray-core：inbound verify 回调 → Daemon /internal/verify | Backend | 1.2 | §4.1.1, Phase 2 | L |
-| 2.7 | Xray-core：rate limiter (Go token bucket per session) | Backend | 2.6 | §5 | M |
-| 2.8 | Xray-core：P2P audit + traffic stats + Loki push hooks | Backend | 2.6 | §13, §15 | M |
-| 2.9 | Portal 全功能：checkout, pay poll, account, token copy/regenerate, devices | Frontend | 1.7, 2.1-2.2 | §2.2, §3.2 | L |
-| 2.10 | Admin 全功能：nodes CRUD + CF DNS, users, tokens batch/renew, orders, charts | Frontend | 1.8, 2.5 | §10.11 | L |
-| 2.11 | Daemon：verify-token client + 60s cache + sync loop + dynamic port | Backend | 1.6 | §9, §4.1 | M |
-| 2.12 | Flutter login + token 导入 + secure storage | Mobile | 1.9 | §3.2 | M |
-| 2.13 | QA API 回归 + Portal/Admin 功能测试 | QA | 2.9, 2.10 | full spec | M |
+|| 2.1 | Manager 支付流程：plans/orders/payment callback + BEpusdt + Payoneer | @ubuntu_game_combat_bot | 8.5 | §4.3, §4.5, §4.7 | L |
+|| 2.2 | Manager rf\\_/at\\_ token-login + issued\\_tokens immutable CRUD | @ubuntu_game_combat_bot | 8.5 | §3.1.1, §3.2 | M |
+|| 2.3 | Manager Resend/Brevo 注册验证邮件 | @ubuntu_game_combat_bot | 8.5 | §14A | S |
+|| 2.4 | Manager client config + subscription + traffic aggregation | @ubuntu_game_combat_bot | 8.5 | §4.4, §6.3 | M |
+|| 2.5 | Manager 自动到期 cron + Admin API（users/nodes/plans CRUD） | @ubuntu_game_combat_bot | 8.5 | §7, §4.6 | M |
+|| 2.6 | Xray-core：inbound verify 回调 → Daemon /internal/verify | @ubuntu_game_combat_bot | 8.2 | §4.1.1, Phase 2 | L |
+|| 2.7 | Xray-core：rate limiter (Go token bucket per session) | @ubuntu_game_combat_bot | 2.6 | §5 | M |
+|| 2.8 | Xray-core：P2P audit + traffic stats + Loki push hooks | @ubuntu_game_combat_bot | 2.6 | §13, §15 | M |
+|| 2.9 | Portal 全功能：checkout, pay poll, account, token copy/regenerate, devices | @ubuntu_game_ui_bot | 8.7, 2.1-2.2 | §2.2, §3.2 | L |
+|| 2.10 | Admin 全功能：nodes CRUD + CF DNS, users, tokens batch/renew, orders, charts | @ubuntu_game_ui_bot | 8.8, 2.5 | §10.11 | L |
+|| 2.11 | Daemon：verify-token client + 60s cache + sync loop + dynamic port | @ubuntu_game_combat_bot | 8.6 | §9, §4.1 | M |
+|| 2.12 | Flutter login + token 导入 + secure storage | @ubuntu_game_char_bot | 8.9 | §3.2 | M |
+|| 2.13 | @ubuntu_game_bot 集成测试：Portal/Admin/API 全链路验证 | @ubuntu_game_bot | 2.9, 2.10 | full spec | M |
 
 **注意**：
 - 2.6-2.8 (Xray-core) 是最大技术风险点。建议 **后端优先** 2.1-2.5（Manager 完整 API）再攻 Xray
@@ -269,14 +268,14 @@ Week 1                Week 2                Week 3
 
 | ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
 |:---|:---|:---|:---|:---|:---|
-| 3.1 | Flutter 主界面：节点列表 + 连接状态 + 续费入口 | Mobile | 2.12 | §3.3 | M |
-| 3.2 | Flutter 设备管理 + 到期提醒 | Mobile | 2.12 | §3.4 | M |
-| 3.3 | Flutter VPN 集成：Xray config 生成 + VPN service | Mobile | 2.12 | §3.5 | L |
-| 3.4 | Daemon 完整：Loki push + CF IP firewall | Backend | 2.11 | §15, §14.4 | S |
-| 3.5 | CF-WS Nginx 伪装站部署脚本 | Backend | 1.2 | §14.5 | M |
-| 3.6 | REALITY 节点部署脚本 | Backend | 1.2 | §14 | S |
-| 3.7 | Manager 生产部署 + systemd service | Backend | 2.1-2.5 | §14.2 | S |
-| 3.8 | QA Flutter 验证 + 节点部署验证 | QA | 3.1-3.6 | full spec | M |
+|| 3.1 | Flutter 主界面：节点列表 + 连接状态 + 续费入口 | @ubuntu_game_char_bot | 2.12 | §3.3 | M |
+|| 3.2 | Flutter 设备管理 + 到期提醒 | @ubuntu_game_char_bot | 2.12 | §3.4 | M |
+|| 3.3 | Flutter VPN 集成：Xray config 生成 + VPN service | @ubuntu_game_char_bot | 2.12 | §3.5 | L |
+|| 3.4 | Daemon 完整：Loki push + CF IP firewall | @ubuntu_game_combat_bot | 2.11 | §15, §14.4 | S |
+|| 3.5 | CF-WS Nginx 伪装站部署脚本 | @ubuntu_game_combat_bot | 8.2 | §14.5 | M |
+|| 3.6 | REALITY 节点部署脚本 | @ubuntu_game_combat_bot | 8.2 | §14 | S |
+|| 3.7 | Manager 生产部署 + systemd service | @ubuntu_game_bot | 2.1-2.5 | §14.2 | S |
+|| 3.8 | @ubuntu_game_bot 集成验证：Flutter + 节点全链路 | @ubuntu_game_bot | 3.1-3.6 | full spec | M |
 
 ### Sprint 4：集成 + 上线
 
@@ -284,13 +283,13 @@ Week 1                Week 2                Week 3
 
 | ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
 |:---|:---|:---|:---|:---|:---|
-| 4.1 | 官网购套餐 → webhook → Flutter 连接 E2E | 全员 | all | §6 | L |
-| 4.2 | 多设备连不同节点 + online verify | 全员 | 3.3, 1.6 | §14B | M |
-| 4.3 | 流量计费 + 设备上限 + 到期自动禁用 | QA+Backend | 2.5, 2.11 | §6, §7 | M |
-| 4.4 | CF Pages 生产部署（portal + admin） | Frontend | 2.9, 2.10 | §10.4, §10.5 | S |
-| 4.5 | 安全审计：CORS/CSRF/XSS/Cookie/IP firewall | QA | all | §10.9 | M |
-| 4.6 | Loki + Grafana 监控就绪 | Backend | 3.4 | §15 | M |
-| 4.7 | 上线前 checklist 执行 | 组长 | all | §22.5 | S |
+|| 4.1 | 官网购套餐 → webhook → Flutter 连接 E2E | 全员 | all | §6 | L |
+|| 4.2 | 多设备连不同节点 + online verify | 全员 | 3.3, 8.6 | §14B | M |
+|| 4.3 | 流量计费 + 设备上限 + 到期自动禁用 | @ubuntu_game_combat_bot + @ubuntu_game_bot | 2.5, 2.11 | §6, §7 | M |
+|| 4.4 | CF Pages 生产部署（portal + admin） | @ubuntu_game_bot | 2.9, 2.10 | §10.4, §10.5 | S |
+|| 4.5 | 安全审计：CORS/CSRF/XSS/Cookie/IP firewall | @ubuntu_game_bot | all | §10.9 | M |
+|| 4.6 | Loki + Grafana 监控就绪 | @ubuntu_game_combat_bot | 3.4 | §15 | M |
+|| 4.7 | 上线前 checklist 执行 | @ubuntu_game_bot | all | §22.5 | S |
 
 ---
 
@@ -352,13 +351,13 @@ QA:
 
 ---
 
-## 7. 你需要提供的信息汇总
+## 7. 需要提供的信息
 
-### 开始开发前需要
+### Sprint 0 开始前需要
 
-- [ ] **GitHub Token / SSH Key** — 用于 `git init && push`
-- [ ] **仓库名**（建议 `airport-system` 或 `rfplay-airport`）
-- [ ] **GitHub 用户名或组织名**
+- [x] ~~GitHub Token / SSH Key~~ — **已有**（仓库已 clone 到本地）
+- [x] ~~仓库名~~ — **`airport`（已存在）**
+- [x] ~~GitHub 用户~~ — **`ouyexiaogongzhu`（已存在）**
 
 ### Sprint 1 结束时需要
 
@@ -371,7 +370,44 @@ QA:
 
 ---
 
-## 8. 产出物总览
+## 8. 任务调度机制
+
+### 工作流程
+
+```
+@ubuntu_game_bot (组长)
+  │ 1. 在群中 @agent 派发任务（带 deadline/引用设计文档 §n）
+  ├─→ @ubuntu_game_combat_bot
+  │   完成 → 回复 ✅ [做了什么] [关键结果]
+  │
+  ├─→ @ubuntu_game_ui_bot
+  │   完成 → 回复 ✅ [做了什么] [关键结果]
+  │
+  └─→ @ubuntu_game_char_bot
+      完成 → 回复 ✅ [做了什么] [关键结果]
+```
+
+### 规则
+
+1. **组长调度**：@ubuntu_game_bot 在群中按 Sprint 计划逐个派发任务，@mention 对应 agent
+2. **自主执行**：接到任务后 agent 自主完成，不需要请示
+3. **报告完成**：完成后在群中回复 `✅ [概要] [关键结果]`
+4. **问题处理**：遇到阻塞（环境/依赖/设计歧义）→ 在群中报告问题并等待组长决策
+5. **并行**：不同 agent 可同时工作（写不同目录/文件），无冲突
+6. **集成测试**：@ubuntu_game_bot 在每个子任务完成后做集成验证，再派发下一个
+
+### Sprint 0 前置条件
+
+开发开始前，@ubuntu_game_bot 需要先：
+- [ ] 安装 Go 1.22+
+- [ ] 安装 Flutter + Android SDK
+- [ ] 创建 monorepo 目录骨架（manager/ portal/ admin/ daemon/ client/ xray-core/）
+- [ ] 初始化 Go module / Vue 3 项目 / Flutter 项目
+- [ ] 配置各 agent 的工作目录和权限
+
+---
+
+## 9. 产出物总览
 
 | Sprint | 可演示的成果 |
 |:---|:---|
