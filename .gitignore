@@ -1,38 +1,44 @@
-# Dependencies
-node_modules/
-portal/node_modules/
-admin/node_modules/
-client/.dart_tool/
-client/build/
-
 # Go
-manager/tmp/
-daemon/tmp/
+manager/data/
 *.exe
-*.test
 
-# Build output
-portal/dist/
-admin/dist/
-xray-core/
-
-# Secrets & runtime
-.env
-.env.*
-*.pem
-*.key
-manager/data/*.db
-manager/data/*.db-*
-
-# IDE & OS
-.idea/
-.vscode/
-.DS_Store
-*.swp
+# Node / Vue
+node_modules/
+dist/
+*.local
 
 # Flutter
-client/.flutter-plugins
-client/.flutter-plugins-dependencies
+client/build/
+client/.dart_tool/
+client/.packages
+client/.pub/
+client/pubspec.lock
+client/ios/Pods/
+client/ios/.symlinks
+client/android/.gradle/
+client/android/local.properties
+client/android/key.properties
 
-# Logs
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Generated
 *.log
+*.tmp
+
+# Unity skills cache (from old project)
+.com-unity-codely.json
+.agent/
+.cursor/
+screenshots/
