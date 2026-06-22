@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
 import 'products_screen.dart';
+import 'vpn_screen.dart';
 import 'profile_screen.dart';
 
 class MainShell extends StatefulWidget {
@@ -18,13 +19,8 @@ class _MainShellState extends State<MainShell> {
   final List<Widget> _screens = const [
     DashboardScreen(),
     ProductsScreen(),
+    VpnScreen(),
     ProfileScreen(),
-  ];
-
-  final List<String> _titles = const [
-    '仪表盘',
-    '产品管理',
-    '个人中心',
   ];
 
   @override
@@ -60,6 +56,11 @@ class _MainShellState extends State<MainShell> {
             icon: Icon(Icons.inventory_2_outlined),
             selectedIcon: Icon(Icons.inventory_2),
             label: '产品',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.vpn_lock_outlined),
+            selectedIcon: Icon(Icons.vpn_lock),
+            label: 'VPN',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),

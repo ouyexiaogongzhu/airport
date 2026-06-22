@@ -36,6 +36,8 @@ func Init(dataDir string) {
 		&model.User{},
 		&model.Order{},
 		&model.Product{},
+		&model.Node{},
+		&model.TrafficRecord{},
 	); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}

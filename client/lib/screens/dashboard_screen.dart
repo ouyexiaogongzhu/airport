@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/subscription_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -16,6 +18,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadStats();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final sub = context.read<SubscriptionService>();
+      if (sub.subscription == null && !sub.isLoading) {
+        sub.loadSubscription();
+      }
+    });
+  }
+
+  Future<void> _loadAll() async {
+    final subscriptionService = context.read<SubscriptionService>();
+    await Future.wait([
+      _loadStats(),
+      subscriptionService.loadSubscription(),
+    ]);
   }
 
   Future<void> _loadStats() async {
@@ -47,7 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
-      onRefresh: _loadStats,
+      onRefresh: _loadAll,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -64,6 +80,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
             style: TextStyle(color: Colors.grey[400]),
           ),
           const SizedBox(height: 24),
+
+          // Subscription card
+          Consumer<SubscriptionService>(
+            builder: (context, subService, _) {
+              final sub = subService.subscription;
+              if (subService.isLoading && sub == null) {
+                return const Padding(
+                  padding: EdgeInsets.only(bottom: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (sub == null) return const SizedBox.shrink();
+
+              final ratio = sub.totalTraffic > 0
+                  ? (sub.usedTraffic / sub.totalTraffic).clamp(0.0, 1.0)
+                  : 0.0;
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 16),
+                color: Colors.cyanAccent.withAlpha(20),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.cyanAccent.withAlpha(60)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.shield,
+                            color: Colors.cyanAccent,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            sub.planName,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.cyanAccent,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '到期日期: ${sub.expiryDate}',
+                        style: TextStyle(color: Colors.grey[400]),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        '已用 ${sub.usedTraffic} GB / ${sub.totalTraffic.toInt()} GB',
+                        style: TextStyle(
+                          color: Colors.grey[300],
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: ratio,
+                          minHeight: 8,
+                          backgroundColor: Colors.grey[800],
+                          color: Colors.cyanAccent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
 
           if (_loading)
             const Center(

@@ -1,0 +1,52 @@
+<!-- RFPlay Airport Manager — Users -->
+<div class="page-view" id="page-users">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Users</h1>
+      <p class="page-subtitle">Manage system users and roles</p>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <div class="table-toolbar">
+      <div class="table-toolbar-left">
+        <div class="search-input-wrapper">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="form-input" placeholder="Search by username or email..." id="users-search" oninput="Users.search()" style="width:280px;">
+        </div>
+        <select class="form-select" id="users-role-filter" onchange="Users.filter()" style="width:130px;">
+          <option value="all">All Roles</option>
+          <option value="admin">Admin</option>
+          <option value="operator">Operator</option>
+          <option value="viewer">Viewer</option>
+        </select>
+        <select class="form-select" id="users-status-filter" onchange="Users.filter()" style="width:130px;">
+          <option value="all">All Status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+          <option value="suspended">Suspended</option>
+        </select>
+      </div>
+      <div class="table-toolbar-right">
+        <span class="text-muted text-sm" id="users-count"></span>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Orders</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-table-body">
+        <tr><td colspan="8" class="table-empty">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>

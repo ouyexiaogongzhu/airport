@@ -41,11 +41,31 @@ func main() {
 	public := v1.Group("/public")
 	public.Post("/register", handler.Register)
 	public.Post("/login", handler.Login)
+	public.Post("/payment/callback", handler.MockPayCallback)
 
 	// User routes (JWT required)
 	user := v1.Group("/user", middleware.JWTProtected())
 	user.Get("/profile", handler.GetProfile)
 	user.Put("/profile", handler.UpdateProfile)
+	user.Post("/orders", handler.CreateOrder)
+
+	// Admin routes (JWT + AdminOnly)
+	admin := v1.Group("/admin", middleware.JWTProtected(), middleware.AdminOnly())
+	admin.Get("/users", handler.ListUsers)
+	admin.Get("/users/:id", handler.GetUser)
+
+	// Node management (admin)
+	nodes := admin.Group("/nodes")
+	nodes.Post("/", handler.CreateNode)
+	nodes.Get("/", handler.ListNode)
+	nodes.Get("/:id", handler.GetNode)
+	nodes.Put("/:id", handler.UpdateNode)
+	nodes.Delete("/:id", handler.DeleteNode)
+
+	// Traffic (admin)
+	traffic := admin.Group("/traffic")
+	traffic.Post("/report", handler.ReportTraffic)
+	traffic.Get("/stats", handler.GetTrafficStats)
 
 	// Start server
 	port := os.Getenv("PORT")

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/user.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
 
@@ -12,7 +11,6 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  Map<String, dynamic> _profileData = {};
   bool _loading = true;
 
   @override
@@ -24,17 +22,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadProfile() async {
     setState(() => _loading = true);
     try {
-      final data = await ApiService().get('/auth/profile');
-      setState(() {
-        _profileData = data;
-        _loading = false;
-      });
+      await ApiService().get('/auth/profile');
     } catch (_) {
       // Mock fallback — use current user info
-      setState(() {
-        _profileData = {};
-        _loading = false;
-      });
+    }
+    if (mounted) {
+      setState(() => _loading = false);
     }
   }
 
@@ -42,6 +35,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
     final user = auth.currentUser;
+
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
     return ListView(
       padding: const EdgeInsets.all(16),
