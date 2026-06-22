@@ -1,5 +1,5 @@
 <template>
-  <div class="page users-page">
+  <div class="page products-page">
     <aside class="sidebar">
       <h2 class="brand">RFPlay Admin</h2>
       <nav>
@@ -16,27 +16,24 @@
 
     <main class="main">
       <header class="topbar">
-        <h2>Users</h2>
-        <div class="topbar-right">
-          <input v-model="search" placeholder="Search users…" class="search-input" />
-          <button class="btn-sm">+ Add User</button>
-        </div>
+        <h2>Products</h2>
+        <button class="btn-sm">+ Add Product</button>
       </header>
 
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>ID</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th></tr>
+            <tr><th>ID</th><th>Name</th><th>Type</th><th>Price</th><th>Period</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            <tr v-for="u in filteredUsers" :key="u.id">
-              <td>{{ u.id }}</td>
-              <td>{{ u.username }}</td>
-              <td>{{ u.email }}</td>
-              <td><span class="tag">{{ u.role }}</span></td>
-              <td><span :class="['status', u.status]">{{ u.status }}</span></td>
-              <td>{{ u.created_at }}</td>
-              <td><a href="#" class="action">Edit</a> <a href="#" class="action danger">Suspend</a></td>
+            <tr v-for="p in products" :key="p.id">
+              <td>{{ p.id }}</td>
+              <td>{{ p.name }}</td>
+              <td><span class="tag">{{ p.type }}</span></td>
+              <td>${{ p.price }}</td>
+              <td>{{ p.period }}</td>
+              <td><span :class="['status', p.status]">{{ p.status }}</span></td>
+              <td><a href="#" class="action">Edit</a> <a href="#" class="action danger">Archive</a></td>
             </tr>
           </tbody>
         </table>
@@ -46,31 +43,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
 import { useAuthStore } from '../stores/auth'
 const auth = useAuthStore()
 
-const search = ref('')
-
-const users = [
-  { id: 1, username: 'john.doe', email: 'john@example.com', role: 'user', status: 'active', created_at: '2026-01-15' },
-  { id: 2, username: 'jane.smith', email: 'jane@example.com', role: 'user', status: 'active', created_at: '2026-02-03' },
-  { id: 3, username: 'bob.wilson', email: 'bob@example.com', role: 'user', status: 'suspended', created_at: '2025-11-20' },
-  { id: 4, username: 'alice.j', email: 'alice@example.com', role: 'admin', status: 'active', created_at: '2025-06-01' },
-  { id: 5, username: 'charlie.b', email: 'charlie@example.com', role: 'user', status: 'active', created_at: '2026-03-10' },
-  { id: 6, username: 'diana.r', email: 'diana@example.com', role: 'user', status: 'inactive', created_at: '2026-04-22' },
+const products = [
+  { id: 1, name: 'Starter VPN', type: 'VPN', price: 9.99, period: 'month', status: 'active' },
+  { id: 2, name: 'Pro VPN', type: 'VPN', price: 19.99, period: 'month', status: 'active' },
+  { id: 3, name: 'Business VPN', type: 'VPN', price: 49.99, period: 'month', status: 'active' },
+  { id: 4, name: 'Proxy Pack S', type: 'Proxy', price: 14.99, period: 'month', status: 'active' },
+  { id: 5, name: 'Proxy Pack M', type: 'Proxy', price: 39.99, period: 'month', status: 'active' },
+  { id: 6, name: 'Proxy Pack L', type: 'Proxy', price: 99.99, period: 'month', status: 'inactive' },
+  { id: 7, name: 'Dedicated IP', type: 'IP', price: 4.99, period: 'month', status: 'active' },
+  { id: 8, name: 'Static IP Bundle', type: 'IP', price: 12.99, period: 'month', status: 'inactive' },
 ]
-
-const filteredUsers = computed(() =>
-  users.filter(u =>
-    u.username.toLowerCase().includes(search.value.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.value.toLowerCase())
-  )
-)
 </script>
 
 <style scoped>
-.users-page {
+.products-page {
   display: flex;
   min-height: 100vh;
   background: #12141a;
@@ -100,17 +89,6 @@ const filteredUsers = computed(() =>
   border-bottom: 1px solid #2a2d35;
 }
 .topbar h2 { margin: 0; font-size: 1.3rem; color: #fff; }
-.topbar-right { display: flex; gap: 0.75rem; align-items: center; }
-.search-input {
-  padding: 0.45rem 0.75rem;
-  border: 1px solid #444;
-  border-radius: 6px;
-  background: #1a1d23;
-  color: #eee;
-  font-size: 0.85rem;
-  width: 200px;
-}
-.search-input:focus { outline: none; border-color: #4a9eff; }
 .btn-sm {
   padding: 0.45rem 0.9rem;
   background: #4a9eff;
@@ -147,7 +125,6 @@ const filteredUsers = computed(() =>
   text-transform: capitalize;
 }
 .status.active { background: #1a3a1a; color: #4caf50; }
-.status.suspended { background: #3a1a1a; color: #ff6b6b; }
 .status.inactive { background: #2a2a2a; color: #888; }
 .action { color: #4a9eff; text-decoration: none; font-size: 0.8rem; margin-right: 0.5rem; }
 .action.danger { color: #ff6b6b; }
