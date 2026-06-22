@@ -6,6 +6,7 @@ import 'services/vpn_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/main_shell.dart';
+import 'screens/order_history_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -119,6 +120,7 @@ class RFPlayApp extends StatelessWidget {
         '/login': (_) => const LoginScreen(),
         '/register': (_) => const RegisterScreen(),
         '/main': (_) => const MainShell(),
+        '/orders': (_) => const OrderHistoryScreen(),
       },
     );
   }

@@ -99,7 +99,6 @@ class _ProductsScreenState extends State<ProductsScreen> {
         _loading = false;
       });
     } catch (_) {
-      // Mock fallback
       setState(() {
         _products = _mockProducts;
         _loading = false;

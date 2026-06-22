@@ -65,7 +65,8 @@ func CreateOrder(c *fiber.Ctx) error {
 		providerName = "mock"
 	}
 
-	if _, ok := GetPaymentProvider(providerName); !ok {
+	provider, ok := GetPaymentProvider(providerName)
+	if !ok {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "invalid payment provider",
 		})
@@ -84,29 +85,27 @@ func CreateOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	if providerName != "mock" {
-		provider, _ := GetPaymentProvider(providerName)
-		notifyURL := fmt.Sprintf("%s://%s/api/v1/payment/callback/%s", c.Protocol(), c.Hostname(), providerName)
-		returnURL := fmt.Sprintf("%s://%s/user/orders/%d", c.Protocol(), c.Hostname(), order.ID)
+	notifyURL := fmt.Sprintf("%s://%s/api/v1/payment/callback/%s", c.Protocol(), c.Hostname(), providerName)
+	returnURL := fmt.Sprintf("%s://%s/user/orders/%d", c.Protocol(), c.Hostname(), order.ID)
 
-		paymentURL, err := provider.CreatePayment(&PaymentOrder{
-			ID:        order.ID,
-			UserID:    userID,
-			Amount:    order.Amount,
-			NotifyURL: notifyURL,
-			ReturnURL: returnURL,
+	paymentURL, err := provider.CreatePayment(&PaymentOrder{
+		ID:        order.ID,
+		UserID:    userID,
+		Amount:    order.Amount,
+		NotifyURL: notifyURL,
+		ReturnURL: returnURL,
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to create payment",
 		})
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "failed to create payment",
-			})
-		}
-		order.PaymentURL = paymentURL
-		if result := db.DB.Model(&order).Update("payment_url", paymentURL); result.Error != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "failed to save payment url",
-			})
-		}
+	}
+
+	order.PaymentURL = paymentURL
+	if result := db.DB.Model(&order).Update("payment_url", paymentURL); result.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to save payment url",
+		})
 	}
 
 	if result := db.DB.Model(&model.Product{}).Where("id = ?", req.ProductID).
@@ -150,7 +149,7 @@ func GetOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	id, err := c.ParamsInt("id")
+	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "invalid order id",
@@ -185,9 +184,6 @@ func PaymentCallback(c *fiber.Ctx) error {
 
 	result, err := provider.VerifyCallback(c)
 	if err != nil {
-		if e, ok := err.(*fiber.Error); ok {
-			return c.Status(e.Code).JSON(fiber.Map{"error": e.Message})
-		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
 		})
@@ -207,43 +203,42 @@ func PaymentCallback(c *fiber.Ctx) error {
 		})
 	}
 
-	if result.Status != "paid" {
-		db.DB.Model(&order).Update("status", "failed")
-		return c.SendStatus(fiber.StatusOK)
-	}
-
 	if order.Status == "paid" {
 		return c.SendString("ok")
 	}
 
-	if order.Status != "pending" {
+	if result.Status == "paid" && order.Status == "pending" {
+		if err := db.DB.Model(&order).Update("status", "paid").Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to update order",
+			})
+		}
+
+		var user model.User
+		if dbResult := db.DB.First(&user, order.UserID); dbResult.Error != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "user not found",
+			})
+		}
+
+		var product model.Product
+		if dbResult := db.DB.First(&product, order.ProductID); dbResult.Error != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "product not found",
+			})
+		}
+
+		if err := activateSubscription(&user, &product, order.Amount); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to activate subscription",
+			})
+		}
+
 		return c.SendString("ok")
 	}
 
-	if err := db.DB.Model(&order).Update("status", "paid").Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to update order",
-		})
-	}
-
-	var user model.User
-	if dbResult := db.DB.First(&user, order.UserID); dbResult.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "user not found",
-		})
-	}
-
-	var product model.Product
-	if dbResult := db.DB.First(&product, order.ProductID); dbResult.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "product not found",
-		})
-	}
-
-	if err := activateSubscription(&user, &product, order.Amount); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to activate subscription",
-		})
+	if result.Status == "failed" || result.Status == "expired" {
+		db.DB.Model(&order).Update("status", result.Status)
 	}
 
 	return c.SendString("ok")
@@ -253,6 +248,10 @@ func activateSubscription(user *model.User, product *model.Product, amount float
 	now := time.Now().Unix()
 	trafficLimit := int64(amount * gbBytes)
 
+	if user.SubscriptionStatus == "active" {
+		return db.DB.Model(user).Update("expire_time", user.ExpireTime+subscriptionDays).Error
+	}
+
 	updates := map[string]interface{}{
 		"subscription_status":  "active",
 		"subscription_tier":    product.Name,
@@ -260,12 +259,7 @@ func activateSubscription(user *model.User, product *model.Product, amount float
 		"rate_limit_bps":       int64(0),
 		"traffic_used_bytes":   int64(0),
 		"traffic_period_start": now,
-	}
-
-	if user.SubscriptionStatus == "active" && user.ExpireTime > 0 {
-		updates["expire_time"] = user.ExpireTime + subscriptionDays
-	} else {
-		updates["expire_time"] = now + subscriptionDays
+		"expire_time":          now + subscriptionDays,
 	}
 
 	return db.DB.Model(user).Updates(updates).Error
@@ -285,7 +279,7 @@ func AdminListOrders(c *fiber.Ctx) error {
 
 // AdminGetOrder returns a single order with product details.
 func AdminGetOrder(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
+	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "invalid order id",
@@ -304,7 +298,7 @@ func AdminGetOrder(c *fiber.Ctx) error {
 
 // AdminRefundOrder refunds an order and restores product stock.
 func AdminRefundOrder(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
+	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "invalid order id",
@@ -318,9 +312,9 @@ func AdminRefundOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	if order.Status == "refunded" {
+	if order.Status != "paid" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "order already refunded",
+			"error": "can only refund paid orders",
 		})
 	}
 

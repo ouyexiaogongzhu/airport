@@ -24,7 +24,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       await ApiService().get('/auth/profile');
     } catch (_) {
-      // Mock fallback — use current user info
     }
     if (mounted) {
       setState(() => _loading = false);
@@ -125,6 +124,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
               : '-',
         ),
         const SizedBox(height: 32),
+
+        // Order history button
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: OutlinedButton.icon(
+            onPressed: () {
+              Navigator.pushNamed(context, '/orders');
+            },
+            icon: const Icon(Icons.receipt_long_outlined),
+            label: const Text('订单历史'),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Colors.grey[700]!),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
 
         // Logout button
         SizedBox(
