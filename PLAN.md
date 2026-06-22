@@ -376,20 +376,43 @@ QA:
 
 ```
 @ubuntu_game_bot (组长)
-  │ 1. 在群中 @agent 派发任务（带 deadline/引用设计文档 §n）
+  │ 1. 群里写任务描述（你可见）
+  │ 2. 终端 dispatch：hermes chat --profile <agent> -q "任务" --quiet
   ├─→ @ubuntu_game_combat_bot
-  │   完成 → 回复 ✅ [做了什么] [关键结果]
+  │   完成 → Telegram 群回复 ✅ [做了什么] [关键结果]
   │
   ├─→ @ubuntu_game_ui_bot
-  │   完成 → 回复 ✅ [做了什么] [关键结果]
+  │   完成 → Telegram 群回复 ✅ [做了什么] [关键结果]
   │
   └─→ @ubuntu_game_char_bot
-      完成 → 回复 ✅ [做了什么] [关键结果]
+      完成 → Telegram 群回复 ✅ [做了什么] [关键结果]
+```
+
+### 为什么不能 @mention
+
+**Telegram 限制**：bot 发的消息不会被群里其他 bot 收到。因此 ubuntu_game_bot 不能通过 @mention 给其他 agent 派发任务。必须用终端 dispatch。
+
+### 终端派发命令格式
+
+```bash
+# 派发给后端
+hermes chat --profile ubuntu_game_combat_bot -q "
+任务: XXX
+参考: airport_system_design.md §X.X
+分支: feat/xxx
+完成后在群中回复 ✅ 结果
+" --quiet
+
+# 派发给前端
+hermes chat --profile ubuntu_game_ui_bot -q "..." --quiet
+
+# 派发给移动端
+hermes chat --profile ubuntu_game_char_bot -q "..." --quiet
 ```
 
 ### 规则
 
-1. **组长调度**：@ubuntu_game_bot 在群中按 Sprint 计划逐个派发任务，@mention 对应 agent
+1. **组长调度**：@ubuntu_game_bot 在群中写任务描述（你可见），同时通过终端 dispatch 派发给对应 agent
 2. **自主执行**：接到任务后 agent 自主完成，不需要请示
 3. **报告完成**：完成后在群中回复 `✅ [概要] [关键结果]`
 4. **问题处理**：遇到阻塞（环境/依赖/设计歧义）→ 在群中报告问题并等待组长决策
