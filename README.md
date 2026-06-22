@@ -53,9 +53,10 @@ Portal/Admin: `axios.withCredentials = true` + CSRF header
 
 ## Docs
 
-* [Architecture & API](airport_system_design.md)
-* [Implementation plan](implementation_plan.md)
-* [Task checklist](task.md)
+* **[PLAN.md](PLAN.md)** — 当前交付计划（Phase 0-5，MVP 优先） ← **必读**
+* [Architecture & API](airport_system_design.md) — 系统架构设计
+* [Implementation plan](implementation_plan.md) — （归档）旧 Sprint 计划
+* [Task checklist](task.md) — （归档）旧任务清单
 
 ## DNS (rfplay.uk)
 
