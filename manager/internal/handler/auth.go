@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -12,6 +13,41 @@ import (
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
 	"golang.org/x/crypto/bcrypt"
 )
+
+var registerLimits sync.Map
+
+type registerCounter struct {
+	mu         sync.Mutex
+	timestamps []time.Time
+}
+
+func checkRegisterLimit(ip string) bool {
+	const maxAttempts = 5
+	const window = time.Hour
+
+	now := time.Now()
+	val, _ := registerLimits.LoadOrStore(ip, &registerCounter{})
+	rc := val.(*registerCounter)
+
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	// Prune timestamps outside the sliding window
+	var valid []time.Time
+	for _, t := range rc.timestamps {
+		if now.Sub(t) < window {
+			valid = append(valid, t)
+		}
+	}
+	rc.timestamps = valid
+
+	if len(rc.timestamps) >= maxAttempts {
+		return false
+	}
+
+	rc.timestamps = append(rc.timestamps, now)
+	return true
+}
 
 type RegisterRequest struct {
 	Username string `json:"username" validate:"required,min=3,max=64"`
@@ -46,6 +82,12 @@ func Register(c *fiber.Ctx) error {
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "invalid request body",
+		})
+	}
+
+	if !checkRegisterLimit(c.IP()) {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error": "registration rate limit exceeded",
 		})
 	}
 

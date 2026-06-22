@@ -87,7 +87,8 @@ func DeleteProduct(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid product id"})
 	}
 
-	if result := db.DB.Delete(&model.Product{}, id); result.Error != nil {
+	result := db.DB.Delete(&model.Product{}, id)
+	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete product"})
 	}
 	if result.RowsAffected == 0 {

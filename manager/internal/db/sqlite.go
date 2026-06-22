@@ -58,5 +58,12 @@ func Init(dataDir string) {
 		fmt.Printf("backfilled client_token for user %d\n", u.ID)
 	}
 
+	// Check if any users exist; if not, remind admin to seed
+	var count int64
+	DB.Model(&model.User{}).Count(&count)
+	if count == 0 {
+		log.Printf("[SECURITY] No users found. Create an admin via env ADMIN_USERNAME/ADMIN_PASSWORD or run: go run scripts/seed.go")
+	}
+
 	log.Printf("database initialized at %s", dbPath)
 }
