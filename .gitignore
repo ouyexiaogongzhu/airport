@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+portal/node_modules/
+admin/node_modules/
+client/.dart_tool/
+client/build/
+
+# Go
+manager/tmp/
+daemon/tmp/
+*.exe
+*.test
+
+# Build output
+portal/dist/
+admin/dist/
+xray-core/
+
+# Secrets & runtime
+.env
+.env.*
+*.pem
+*.key
+manager/data/*.db
+manager/data/*.db-*
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Flutter
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+
+# Logs
+*.log
