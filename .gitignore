@@ -37,6 +37,9 @@ Thumbs.db
 *.log
 *.tmp
 
+# SSL dev certificates
+deploy/certs/
+
 # Unity skills cache (from old project)
 .com-unity-codely.json
 .agent/

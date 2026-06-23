@@ -1,0 +1,22 @@
+# RFPlay Xray-core fork — Multi-stage Docker build
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /build
+COPY xray-core/ .
+
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /build/xray-core .
+
+# --- Runtime ---
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+COPY --from=builder /build/xray-core .
+COPY xray-core/config.json /app/config.json
+
+EXPOSE 443 8443 1099
+
+ENV VERIFY_URL=http://manager:8080/api/v1
+
+ENTRYPOINT ["/app/xray-core", "/app/config.json"]

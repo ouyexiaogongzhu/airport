@@ -1,0 +1,123 @@
+# RFPlay Airport — Docker Compose Production Configuration
+# ========================================================
+
+# Usage:
+#   docker compose up -d                           # Start all services
+#   docker compose up -d manager nginx             # Start core only
+#   docker compose up -d --profile dev             # Start with dev config
+#   docker compose down                            # Stop all
+#   docker compose logs -f manager                 # Tail logs
+
+networks:
+  rfplay-net:
+    driver: bridge
+
+volumes:
+  manager-data:
+    driver: local
+  certbot-www:
+    driver: local
+  certbot-conf:
+    driver: local
+
+services:
+  # ─── Nginx Reverse Proxy + SPA Server ───
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-conf:/etc/letsencrypt
+    networks:
+      - rfplay-net
+    depends_on:
+      - manager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ─── Manager API Backend (Go/Fiber) ───
+  manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.manager
+    expose:
+      - "8080"
+    volumes:
+      - manager-data:/app/data
+    environment:
+      - PORT=8080
+      - DATA_DIR=/app/data
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-in-production}
+      - CORS_ORIGINS=https://rfplay.uk,https://admin.rfplay.uk
+    networks:
+      - rfplay-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ─── Node Daemon (optional — enable with --profile full) ───
+  daemon:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: Dockerfile.daemon
+    expose:
+      - "9090"
+    environment:
+      - DAEMON_MANAGER_URL=http://manager:8080
+      - DAEMON_LISTEN_ADDR=:9090
+      - DAEMON_NODE_ID=${DAEMON_NODE_ID:-1}
+    networks:
+      - rfplay-net
+    depends_on:
+      manager:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Xray-core (optional — enable with --profile full) ───
+  xray:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: Dockerfile.xray
+    expose:
+      - "443"
+      - "8443"
+      - "1099"
+    environment:
+      - VERIFY_URL=http://manager:8080/api/v1
+    networks:
+      - rfplay-net
+    depends_on:
+      manager:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Certbot for Let's Encrypt SSL (one-shot) ───
+  certbot:
+    image: certbot/certbot:v3.1
+    profiles: ["ssl-setup"]
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-conf:/etc/letsencrypt
+    entrypoint: >
+      sh -c "certbot certonly --webroot -w /var/www/certbot
+      -d rfplay.uk -d api.rfplay.uk
+      --email admin@rfplay.uk --agree-tos --non-interactive"
+    networks:
+      - rfplay-net
+    depends_on:
+      - nginx
