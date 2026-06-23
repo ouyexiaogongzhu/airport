@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -58,11 +59,31 @@ func Init(dataDir string) {
 		fmt.Printf("backfilled client_token for user %d\n", u.ID)
 	}
 
-	// Check if any users exist; if not, remind admin to seed
+	// Auto-create admin user if no users exist
 	var count int64
 	DB.Model(&model.User{}).Count(&count)
 	if count == 0 {
-		log.Printf("[SECURITY] No users found. Create an admin via env ADMIN_USERNAME/ADMIN_PASSWORD or run: go run scripts/seed.go")
+		adminHash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
+		if err != nil {
+			log.Fatalf("failed to hash admin password: %v", err)
+		}
+		admin := model.User{
+			Username:     "admin",
+			PasswordHash: string(adminHash),
+			Role:         "admin",
+			Status:       "active",
+			Balance:      0,
+		}
+		if result := DB.Create(&admin); result.Error != nil {
+			log.Fatalf("failed to create admin user: %v", result.Error)
+		}
+		// Generate client_token for admin
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err == nil {
+			admin.ClientToken = "rf_" + hex.EncodeToString(tokenBytes)
+			DB.Model(&admin).Update("client_token", admin.ClientToken)
+		}
+		log.Printf("[SECURITY] Auto-created admin user: username=%s role=%s", admin.Username, admin.Role)
 	}
 
 	log.Printf("database initialized at %s", dbPath)

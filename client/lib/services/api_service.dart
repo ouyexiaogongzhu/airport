@@ -3,7 +3,17 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  static const String baseUrl = 'http://localhost:8080/api/v1';
+  /// Base URL for API requests.
+  ///
+  /// Defaults to '/api/v1' (relative path). For mobile apps, this must be
+  /// overridden at build time via --dart-define=API_BASE_URL=... or at
+  /// runtime via [configure].
+  ///
+  /// Examples:
+  ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
+  ///   flutter build apk --dart-define=API_BASE_URL=https://example.com/api/v1
+  static String get baseUrl => _baseUrl;
+  static String _baseUrl = _resolveDefault();
   static const Duration _timeout = Duration(seconds: 10);
 
   String? _token;
@@ -12,6 +22,20 @@ class ApiService {
   factory ApiService() => _instance;
 
   ApiService._internal();
+
+  /// Resolve the default base URL from compile-time define or fallback.
+  static String _resolveDefault() {
+    const envUrl = String.fromEnvironment(
+      'API_BASE_URL',
+      defaultValue: '/api/v1',
+    );
+    return envUrl;
+  }
+
+  /// Override the API base URL at runtime (e.g., from remote config).
+  static void configure({required String baseUrl}) {
+    _baseUrl = baseUrl;
+  }
 
   String? get token => _token;
 

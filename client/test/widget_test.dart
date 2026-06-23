@@ -1,30 +1,31 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 
 import 'package:rfplay_client/main.dart';
+import 'package:rfplay_client/services/auth_service.dart';
+import 'package:rfplay_client/services/subscription_service.dart';
+import 'package:rfplay_client/services/vpn_service.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const RFPlayApp());
+  testWidgets('RFPlayApp smoke test — renders login screen',
+      (WidgetTester tester) async {
+    // Create unauthenticated AuthService (no init needed for basic smoke test)
+    final authService = AuthService();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Build our app with required providers
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: authService),
+          ChangeNotifierProvider(create: (_) => SubscriptionService()),
+          ChangeNotifierProvider(create: (_) => VpnService()),
+        ],
+        child: RFPlayApp(authService: authService),
+      ),
+    );
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Verify that the app renders without crashing
+    expect(find.byType(MaterialApp), findsOneWidget);
   });
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'services/api_service.dart';
 import 'services/auth_service.dart';
 import 'services/subscription_service.dart';
 import 'services/vpn_service.dart';
@@ -10,6 +11,17 @@ import 'screens/order_history_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Configure API base URL from --dart-define at build time.
+  // For production release:
+  //   flutter build apk --dart-define=API_BASE_URL=https://your-server.com/api/v1
+  // For Android emulator dev:
+  //   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
+  const apiBaseUrl = String.fromEnvironment('API_BASE_URL');
+  if (apiBaseUrl.isNotEmpty) {
+    ApiService.configure(baseUrl: apiBaseUrl);
+  }
+
   final authService = AuthService();
   await authService.init();
 

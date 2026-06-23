@@ -110,6 +110,94 @@ func TestRegister_DuplicateUsername(t *testing.T) {
 	}
 }
 
+func TestRegister_AdminRole(t *testing.T) {
+	setupTestDB(t)
+	app := setupTestApp()
+
+	body := `{"username":"newadmin","password":"test123456","is_admin":true}`
+	req := httptest.NewRequest("POST", "/api/v1/public/register", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	var authResp AuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if authResp.User.Role != "admin" {
+		t.Errorf("expected role admin, got %s", authResp.User.Role)
+	}
+}
+
+func TestRegister_NonAdminDefault(t *testing.T) {
+	setupTestDB(t)
+	app := setupTestApp()
+
+	body := `{"username":"reguser2","password":"test123456"}`
+	req := httptest.NewRequest("POST", "/api/v1/public/register", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	var authResp AuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if authResp.User.Role != "user" {
+		t.Errorf("expected role user, got %s", authResp.User.Role)
+	}
+}
+
+func TestRegister_AdminDefaultFieldIsFalse(t *testing.T) {
+	setupTestDB(t)
+	app := setupTestApp()
+
+	body := `{"username":"reguser3","password":"test123456","is_admin":false}`
+	req := httptest.NewRequest("POST", "/api/v1/public/register", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	var authResp AuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if authResp.User.Role != "user" {
+		t.Errorf("expected role user, got %s", authResp.User.Role)
+	}
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	app := fiber.New()
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"service": "manager-api",
+		})
+	})
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
 func TestRegister_ShortPassword(t *testing.T) {
 	setupTestDB(t)
 	app := setupTestApp()

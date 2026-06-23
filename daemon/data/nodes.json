@@ -7,8 +7,8 @@
     "port": 443,
     "protocol": "vmess",
     "status": "inactive",
-    "traffic_up": 3072,
-    "traffic_down": 6144,
+    "traffic_up": 4096,
+    "traffic_down": 8192,
     "user_id": 0
   },
   {
@@ -61,6 +61,18 @@
   },
   {
     "id": 6,
+    "name": "TestNode",
+    "type": "v2ray",
+    "address": "127.0.0.1",
+    "port": 443,
+    "protocol": "vmess",
+    "status": "inactive",
+    "traffic_up": 0,
+    "traffic_down": 0,
+    "user_id": 0
+  },
+  {
+    "id": 7,
     "name": "TestNode",
     "type": "v2ray",
     "address": "127.0.0.1",
