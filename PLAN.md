@@ -116,19 +116,18 @@ Day 1 ──┬── combat_bot → Manager API 订阅端点
 
 ---
 
-## Phase 3 — Flutter 客户端完整版（MVP+ · ~14天）
+## Phase 3 — Flutter 客户端完整版（MVP+ · ~7天）
 
-> **范围**: 真 VPN 集成 + Xray 内核嵌入 + 全面功能
+> **范围**: 真 VPN 集成 + 全面功能
 
 | 阶段 | 任务 | 说明 |
 |------|------|------|
 | 3.1 | 订阅导入 → 解析配置 → 节点列表 | Phase 0 已有，切真实 API |
 | 3.2 | Android VpnService 通道 | tun 设备读写，iptables 规则 |
-| 3.3 | 嵌入 Xray-core 内核 | go → .so 编译 + Flutter FFI |
-| 3.4 | 节点测速 | ICMP ping + TCP connect 延迟 |
-| 3.5 | 连接/断开/切节点 UI 联动 | VPN 按钮实装，状态实时同步 |
-| 3.6 | 真实流量统计 + 图表 | 读取系统流量 / Xray API |
-| 3.7 | iOS NETunnelProvider | 需 Mac 编译环境（deferred） |
+| 3.3 | 节点测速 | ICMP ping + TCP connect 延迟 |
+| 3.4 | 连接/断开/切节点 UI 联动 | VPN 按钮实装，状态实时同步 |
+| 3.5 | 真实流量统计 + 图表 | 读取系统流量 / Xray API |
+| 3.6 | iOS NETunnelProvider | 需 Mac 编译环境（deferred） |
 
 ---
 
@@ -166,12 +165,12 @@ Phase 0 — 订阅系统        ████████░░  3天  (三路并
 
 Phase 1 — 支付集成        ████░░░░░░  2天
 Phase 2 — 安全加固        ██░░░░░░░░  1天
-Phase 3 — Flutter 完整版  ████████████████  ~14天 (MVP+)
+Phase 3 — Flutter 完整版  ██████████  ~7天 (MVP+)
 Phase 4 — E2E 验收        ████░░░░░░  2天
 Phase 5 — 生产部署        ██░░░░░░░░  1天
                       ──────────────
 MVP (含 Phase 0-2)         ≈ 6天
-Full (含 Phase 3)          ≈ 20天
+Full (含 Phase 3)          ≈ 13天
 ```
 
 ---
@@ -228,4 +227,4 @@ hermes chat --profile ubuntu_game_<agent> -q "Phase X: [标题]
 
 ---
 
-*最后更新: 2026-06-22 (v2 — 全 Agent 并行 + char_bot Phase 0 任务 + QR码/VPN 确认)*
+*最后更新: 2026-06-24 (v3 — 移除 Phase 3.3 Xray 内核嵌入 FFI，架构确认：服务端 Xray Docker + 客户端 VpnService 隧道)*
