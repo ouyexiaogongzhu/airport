@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/subscription.dart' show SubscriptionInfo;
@@ -268,7 +269,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () => Navigator.pushNamed(context, '/traffic'),
+                onPressed: () => context.push('/traffic'),
                 icon: const Icon(Icons.bar_chart, size: 18),
                 label: const Text('查看详细统计'),
                 style: OutlinedButton.styleFrom(
