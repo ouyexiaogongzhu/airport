@@ -1,5 +1,6 @@
 # Go
 manager/data/
+manager/server
 *.exe
 
 # Node / Vue

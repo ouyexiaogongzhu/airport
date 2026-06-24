@@ -64,7 +64,7 @@ LOGIN_RESP=$(curl -s -X POST $BASE/public/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"ittest","password":"test123456"}')
 echo "   Resp: $LOGIN_RESP"
-TOKEN=***"$LOGIN_RESP" -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+TOKEN=***"$LOGIN_RESP" "$LOGIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
 [ -n "$TOKEN" ] && check "Login_Success" PASS "获取 Token: ${TOKEN:0:20}..." || check "Login_Success" FAIL "无 Token"
 
 # 6. Wrong password → 401
@@ -80,7 +80,7 @@ ADMIN_LOGIN=$(curl -s -X POST $BASE/public/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}')
 echo "   Resp: $ADMIN_LOGIN"
-ADMIN_TOKEN=***"$ADMIN_LOGIN" -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+ADMIN_TOKEN=***"$ADMIN_LOGIN" "$ADMIN_LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
 if [ -n "$ADMIN_TOKEN" ]; then
     check "Admin_Login" PASS "获取 Admin Token: ${ADMIN_TOKEN:0:20}..."
 else
@@ -102,7 +102,7 @@ if [ -n "$ADMIN_TOKEN" ] && [ "$ADMIN_TOKEN" != "$TOKEN" ]; then
       -H "Authorization: Bearer $ADMIN_TOKEN" \
       -d '{"name":"TestNode","type":"v2ray","address":"127.0.0.1","port":443,"protocol":"vmess","status":"active"}')
     echo "   Resp: $NODE_RESP"
-    NODE_ID=***"$NODE_RESP" -c "import sys,json; print(json.load(sys.stdin).get('id',0))" 2>/dev/null || echo 0)
+    NODE_ID=$(echo"$NODE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',0))" 2>/dev/null || echo 0)
     [ "$NODE_ID" -gt 0 ] && check "Node_Create" PASS "节点 $NODE_ID 创建成功" || check "Node_Create" FAIL "创建失败"
 else
     check "Node_Create" PASS "跳过 (无 admin token)"
@@ -121,7 +121,7 @@ ORDER_RESP=$(curl -s -X POST $BASE/user/orders \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"product_id":1}')
 echo "   Resp: $ORDER_RESP"
-ORDER_ID=***"$ORDER_RESP" -c "
+ORDER_ID=$(echo"$ORDER_RESP" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 o=d.get('order',d)
