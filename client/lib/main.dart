@@ -8,6 +8,7 @@ import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/order_history_screen.dart';
+import 'screens/traffic_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -133,6 +134,7 @@ class RFPlayApp extends StatelessWidget {
         '/register': (_) => const RegisterScreen(),
         '/main': (_) => const MainShell(),
         '/orders': (_) => const OrderHistoryScreen(),
+        '/traffic': (_) => const TrafficScreen(),
       },
     );
   }

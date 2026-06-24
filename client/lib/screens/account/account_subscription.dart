@@ -152,6 +152,26 @@ class _AccountSubscriptionState extends State<AccountSubscription> {
                                   label:
                                       '剩余 ${_formatTrafficGb(sub.trafficRemainingBytes / (1024 * 1024 * 1024))} GB',
                                 ),
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.pushNamed(context, '/traffic');
+                                    },
+                                    icon: const Icon(Icons.bar_chart, size: 18),
+                                    label: const Text('查看详细流量统计'),
+                                    style: OutlinedButton.styleFrom(
+                                      side: BorderSide(
+                                        color: Colors.cyanAccent.withAlpha(100),
+                                      ),
+                                      foregroundColor: Colors.cyanAccent,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                           ),

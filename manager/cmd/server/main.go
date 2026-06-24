@@ -84,6 +84,7 @@ func main() {
 	admin := v1.Group("/admin", middleware.JWTProtected(), middleware.AdminOnly(), middleware.RateLimit(middleware.RateGroupAPI))
 	admin.Get("/users", handler.ListUsers)
 	admin.Get("/users/:id", handler.GetUser)
+	admin.Put("/users/:id", handler.UpdateUser)
 
 	// Node management (admin)
 	nodes := admin.Group("/nodes")
