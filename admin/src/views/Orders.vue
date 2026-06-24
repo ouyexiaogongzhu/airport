@@ -7,6 +7,10 @@
         <router-link to="/users" class="nav-item">👥 Users</router-link>
         <router-link to="/products" class="nav-item">📦 Products</router-link>
         <router-link to="/orders" class="nav-item">🛒 Orders</router-link>
+        <router-link to="/nodes" class="nav-item">🖥️ Nodes</router-link>
+        <router-link to="/tokens" class="nav-item">🔑 Tokens</router-link>
+        <router-link to="/settings" class="nav-item">⚙️ Settings</router-link>
+        <router-link to="/plans" class="nav-item">📋 Plans</router-link>
       </nav>
       <div class="sidebar-footer">
         <span class="badge">{{ auth.username }}</span>

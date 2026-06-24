@@ -31,9 +31,7 @@ class MainActivity : FlutterActivity() {
                     val intent = VpnService.prepare(this@MainActivity)
                     if (intent != null) {
                         // Need to ask user for permission
-                        startIntentSenderForResult(
-                            intent.intentSender, VPN_REQUEST_CODE, null, 0, 0, 0, null
-                        )
+                        startActivityForResult(intent, VPN_REQUEST_CODE)
                         // Store params for after permission grant
                         pendingVpnConfig = VpnConfig(host, port, name)
                         result.success("PERMISSION_REQUIRED")
