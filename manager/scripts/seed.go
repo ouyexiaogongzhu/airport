@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -38,53 +37,9 @@ func main() {
 		log.Fatalf("failed to migrate: %v", err)
 	}
 
-	// --- Seed users ---
-
-	adminHash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
-	if err != nil {
-		log.Fatalf("failed to hash admin password: %v", err)
-	}
-	admin := model.User{
-		Username:     "admin",
-		PasswordHash: string(adminHash),
-		Role:         "admin",
-		Status:       "active",
-		Balance:      0,
-	}
-	res := db.Where("username = ?", admin.Username).FirstOrCreate(&admin)
-	if res.Error != nil {
-		log.Fatalf("failed to create admin user: %v", res.Error)
-	}
-	if res.RowsAffected > 0 {
-		// Set a placeholder client_token for the admin
-		if err := db.Model(&admin).Update("client_token", "rf_seed_admin_token_placeholder").Error; err != nil {
-			log.Printf("warning: failed to set admin client_token: %v", err)
-		}
-		log.Printf("created admin user: username=%s role=%s", admin.Username, admin.Role)
-	} else {
-		log.Printf("admin user already exists, skipped")
-	}
-
-	testHash, err := bcrypt.GenerateFromPassword([]byte("test123"), bcrypt.DefaultCost)
-	if err != nil {
-		log.Fatalf("failed to hash testuser password: %v", err)
-	}
-	testUser := model.User{
-		Username:     "testuser",
-		PasswordHash: string(testHash),
-		Role:         "user",
-		Status:       "active",
-		Balance:      0,
-	}
-	res = db.Where("username = ?", testUser.Username).FirstOrCreate(&testUser)
-	if res.Error != nil {
-		log.Fatalf("failed to create test user: %v", res.Error)
-	}
-	if res.RowsAffected > 0 {
-		log.Printf("created user: username=%s role=%s", testUser.Username, testUser.Role)
-	} else {
-		log.Printf("test user already exists, skipped")
-	}
+	// Note: User accounts are NOT seeded here.
+	// Users must be created through the /api/v1/public/register endpoint.
+	// Run the server and use the API to create users.
 
 	// --- Seed products ---
 

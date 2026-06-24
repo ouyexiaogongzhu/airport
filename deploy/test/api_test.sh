@@ -64,7 +64,7 @@ LOGIN_RESP=$(curl -s -X POST $BASE/public/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"ittest","password":"test123456"}')
 echo "   Resp: $LOGIN_RESP"
-TOKEN=***"$LOGIN_RESP" "$LOGIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+TOKEN=$(echo "$LOGIN_RESP" "$LOGIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
 [ -n "$TOKEN" ] && check "Login_Success" PASS "获取 Token: ${TOKEN:0:20}..." || check "Login_Success" FAIL "无 Token"
 
 # 6. Wrong password → 401
@@ -80,7 +80,7 @@ ADMIN_LOGIN=$(curl -s -X POST $BASE/public/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}')
 echo "   Resp: $ADMIN_LOGIN"
-ADMIN_TOKEN=***"$ADMIN_LOGIN" "$ADMIN_LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+ADMIN_TOKEN=$(echo "$ADMIN_LOGIN" "$ADMIN_LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
 if [ -n "$ADMIN_TOKEN" ]; then
     check "Admin_Login" PASS "获取 Admin Token: ${ADMIN_TOKEN:0:20}..."
 else

@@ -21,6 +21,14 @@
           <label>Confirm Password</label>
           <input v-model="confirmPassword" type="password" placeholder="Confirm your password" required />
         </div>
+        <div v-if="captchaQuestion" class="field captcha-field">
+          <label>Security Check</label>
+          <div class="captcha-row">
+            <span class="captcha-question">{{ captchaQuestion }}</span>
+            <input v-model="captchaAnswer" type="text" placeholder="Answer" class="captcha-input" required />
+            <button type="button" class="btn-refresh" @click="fetchCaptcha" :disabled="captchaLoading">⟳</button>
+          </div>
+        </div>
         <p v-if="error" class="error">{{ error }}</p>
         <button type="submit" class="btn" :disabled="loading">
           {{ loading ? 'Creating account…' : 'Create Account' }}
@@ -36,9 +44,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import api from '../api/index.js'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -50,6 +59,28 @@ const confirmPassword = ref('')
 const error = ref('')
 const loading = ref(false)
 
+// Captcha
+const captchaQuestion = ref('')
+const captchaToken = ref('')
+const captchaAnswer = ref('')
+const captchaLoading = ref(false)
+
+async function fetchCaptcha() {
+  captchaLoading.value = true
+  try {
+    const res = await api.get('/captcha')
+    captchaQuestion.value = res.data.question
+    captchaToken.value = res.data.token
+    captchaAnswer.value = ''
+  } catch {
+    // Captcha unavailable, allow registration without it
+    captchaQuestion.value = ''
+    captchaToken.value = ''
+  } finally {
+    captchaLoading.value = false
+  }
+}
+
 async function handleRegister() {
   error.value = ''
   if (password.value !== confirmPassword.value) {
@@ -60,15 +91,22 @@ async function handleRegister() {
     error.value = 'Password must be at least 6 characters'
     return
   }
+  if (captchaToken.value && !captchaAnswer.value) {
+    error.value = 'Please answer the security question'
+    return
+  }
   loading.value = true
-  const res = await auth.register(username.value, email.value, password.value)
+  const res = await auth.register(username.value, email.value, password.value, captchaToken.value, captchaAnswer.value)
   loading.value = false
   if (res.success) {
     router.push('/dashboard')
   } else {
     error.value = res.error || 'Registration failed'
+    if (captchaToken.value) fetchCaptcha() // Refresh captcha on failure
   }
 }
+
+onMounted(fetchCaptcha)
 </script>
 
 <style scoped>
@@ -138,4 +176,11 @@ h1 {
 .error { color: #d93025; font-size: 0.85rem; margin: 0.5rem 0; }
 .switch { text-align: center; margin-top: 1.25rem; font-size: 0.85rem; color: #666; }
 .switch a { color: #1a73e8; text-decoration: none; font-weight: 500; }
+.captcha-field { margin-bottom: 0.5rem; }
+.captcha-row { display: flex; align-items: center; gap: 0.5rem; }
+.captcha-question { background: #f0f4ff; border: 1px solid #d0d8e8; border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.95rem; font-weight: 600; color: #333; white-space: nowrap; }
+.captcha-input { flex: 1; padding: 0.55rem 0.75rem; border: 1px solid #d0d8e8; border-radius: 6px; font-size: 0.9rem; outline: none; }
+.captcha-input:focus { border-color: #1a73e8; }
+.btn-refresh { background: transparent; border: 1px solid #d0d8e8; border-radius: 6px; padding: 0.45rem 0.65rem; font-size: 1.1rem; cursor: pointer; }
+.btn-refresh:hover { border-color: #1a73e8; color: #1a73e8; }
 </style>

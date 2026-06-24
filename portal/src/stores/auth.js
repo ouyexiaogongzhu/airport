@@ -46,9 +46,14 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function register(username, email, password) {
+  async function register(username, email, password, captchaToken, captchaAnswer) {
     try {
-      const res = await api.post('/public/register', { username, email, password })
+      const payload = { username, email, password }
+      if (captchaToken) {
+        payload.captcha_token = captchaToken
+        payload.captcha_answer = captchaAnswer
+      }
+      const res = await api.post('/public/register', payload)
       const { token: t, user: u } = res.data
       token.value = t
       user.value = u

@@ -34,6 +34,7 @@ var (
 	RateGroupPublic = RateGroup{Name: "public", Rate: 10}
 	RateGroupAuth   = RateGroup{Name: "auth", Rate: 5}
 	RateGroupAPI    = RateGroup{Name: "api", Rate: 30}
+	RateGroupUser   = RateGroup{Name: "user", Rate: 100}
 )
 
 // slidingWindow stores request timestamps for a single IP.
@@ -58,6 +59,7 @@ func init() {
 			RateGroupPublic.Name: RateGroupPublic,
 			RateGroupAuth.Name:   RateGroupAuth,
 			RateGroupAPI.Name:    RateGroupAPI,
+			RateGroupUser.Name:   RateGroupUser,
 		},
 		stopCh: make(chan struct{}),
 	}

@@ -69,13 +69,13 @@ func main() {
 	client := v1.Group("/client", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
 	client.Get("/subscription", handler.GetSubscription)
 
-	// Web routes (JWT required, rate limited: 30 req/s per IP)
-	web := v1.Group("/web", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
+	// Web routes (JWT required, rate limited: 100 req/s per IP)
+	web := v1.Group("/web", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupUser))
 	web.Get("/client-token", handler.GetClientToken)
 	web.Post("/client-token/regenerate", handler.RegenerateClientToken)
 
-	// User routes (JWT required, rate limited: 30 req/s per IP)
-	user := v1.Group("/user", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
+	// User routes (JWT required, rate limited: 100 req/s per IP)
+	user := v1.Group("/user", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupUser))
 	user.Get("/profile", handler.GetProfile)
 	user.Put("/profile", handler.UpdateProfile)
 	user.Post("/orders", handler.CreateOrder)
