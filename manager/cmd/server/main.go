@@ -56,6 +56,7 @@ func main() {
 	public.Post("/login", handler.Login)
 	public.Post("/token-login", handler.TokenLogin)
 	public.Post("/payment/callback", handler.MockPayCallback)
+	public.Post("/payment/callback/:provider", handler.PaymentCallback)
 
 	// Client routes (public, rate limited: 10 req/s per IP)
 	v1.Get("/client/config", middleware.RateLimit(middleware.RateGroupPublic), handler.GetClientConfig)

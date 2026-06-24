@@ -73,12 +73,40 @@
         </table>
       </div>
     </main>
+
+    <!-- Order Detail Modal -->
+    <div v-if="detailOrder" class="modal-overlay" @click.self="closeDetail">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Order #{{ detailOrder.id }}</h3>
+          <button class="modal-close" @click="closeDetail">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="detail-row"><span class="dl">Customer</span><span class="dv">{{ detailOrder.username || detailOrder.customer || '—' }}</span></div>
+          <div class="detail-row"><span class="dl">Product</span><span class="dv">{{ detailOrder.product_name || detailOrder.product || '—' }}</span></div>
+          <div class="detail-row"><span class="dl">Amount</span><span class="dv">${{ formatAmount(detailOrder.amount) }}</span></div>
+          <div class="detail-row"><span class="dl">Status</span><span :class="['status', 'status-' + (detailOrder.status || 'unknown')]">{{ statusLabel(detailOrder.status) }}</span></div>
+          <div class="detail-row"><span class="dl">Provider</span><span class="dv">{{ detailOrder.payment_provider || detailOrder.gateway || '—' }}</span></div>
+          <div class="detail-row"><span class="dl">Created</span><span class="dv">{{ formatDate(detailOrder.created_at || detailOrder.date) }}</span></div>
+          <div class="detail-row"><span class="dl">Updated</span><span class="dv">{{ formatDate(detailOrder.updated_at) }}</span></div>
+          <div v-if="detailOrder.payment_url" class="detail-row">
+            <span class="dl">Payment URL</span>
+            <a :href="detailOrder.payment_url" target="_blank" class="dv link">{{ detailOrder.payment_url.slice(0, 50) }}…</a>
+          </div>
+          <div v-if="detailOrder.transaction_id" class="detail-row"><span class="dl">TX ID</span><span class="dv mono">{{ detailOrder.transaction_id.slice(0, 20) }}…</span></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="closeDetail">Close</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import api from '../api/index.js'
 const auth = useAuthStore()
 
 const search = ref('')
@@ -87,6 +115,7 @@ const orders = ref<any[]>([])
 const loading = ref(false)
 const error = ref('')
 const refundingId = ref<number | null>(null)
+const detailOrder = ref<any | null>(null)
 
 function formatAmount(amount: any): string {
   const n = parseFloat(amount)
@@ -123,39 +152,33 @@ async function loadOrders() {
   loading.value = true
   error.value = ''
   try {
-    const res = await fetch('http://localhost:8080/api/v1/admin/orders', {
-      headers: { 'Authorization': 'Bearer ' + auth.token }
-    })
-    if (!res.ok) throw new Error('HTTP ' + res.status)
-    const data = await res.json()
+    const res = await api.get('/admin/orders')
+    const data = res.data
     orders.value = Array.isArray(data) ? data :
                    data.orders ? data.orders : []
   } catch (e: any) {
-    error.value = e.message || 'Failed to load orders'
+    error.value = e.response?.data?.error || e.message || 'Failed to load orders'
   } finally {
     loading.value = false
   }
 }
 
 function viewOrder(o: any) {
-  alert(`Order #${o.id}\nCustomer: ${o.username || o.customer}\nAmount: $${formatAmount(o.amount)}\nStatus: ${o.status}\nProvider: ${o.payment_provider || o.gateway}\nDate: ${formatDate(o.created_at || o.date)}`)
+  detailOrder.value = o
+}
+
+function closeDetail() {
+  detailOrder.value = null
 }
 
 async function refundOrder(o: any) {
   if (!confirm(`Refund order #${o.id} for $${formatAmount(o.amount)}?`)) return
   refundingId.value = o.id
   try {
-    const res = await fetch(`http://localhost:8080/api/v1/admin/orders/${o.id}/refund`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + auth.token
-      }
-    })
-    if (!res.ok) throw new Error('HTTP ' + res.status)
+    await api.post(`/admin/orders/${o.id}/refund`)
     o.status = 'refunded'
   } catch (e: any) {
-    error.value = e.message || 'Refund failed'
+    error.value = e.response?.data?.error || e.message || 'Refund failed'
   } finally {
     refundingId.value = null
   }
@@ -212,4 +235,21 @@ onMounted(loadOrders)
 .btn-tiny:hover { border-color: #4a9eff; color: #4a9eff; }
 .btn-tiny:disabled { opacity: 0.4; cursor: not-allowed; }
 .actions-cell { white-space: nowrap; }
+
+/* Modal */
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: #1a1d23; border: 1px solid #2a2d35; border-radius: 10px; max-width: 500px; width: 90%; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid #2a2d35; }
+.modal-header h3 { margin: 0; color: #fff; font-size: 1.1rem; }
+.modal-close { background: none; border: none; color: #888; font-size: 1.3rem; cursor: pointer; }
+.modal-close:hover { color: #fff; }
+.modal-body { padding: 1.25rem; }
+.modal-footer { padding: 0.75rem 1.25rem; border-top: 1px solid #2a2d35; text-align: right; }
+.detail-row { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #22252b; }
+.detail-row:last-child { border-bottom: none; }
+.dl { color: #888; font-size: 0.85rem; }
+.dv { color: #e0e0e0; font-size: 0.9rem; }
+.mono { font-family: monospace; font-size: 0.8rem; }
+.link { color: #4a9eff; text-decoration: none; }
+.link:hover { text-decoration: underline; }
 </style>

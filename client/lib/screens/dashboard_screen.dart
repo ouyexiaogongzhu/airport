@@ -1,7 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../models/subscription.dart' show SubscriptionInfo;
 import '../services/subscription_service.dart';
 import '../widgets/loading_overlay.dart';
@@ -45,11 +45,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    final uri = Uri.parse(url);
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+    // Open URL via platform command
+    try {
+      await Process.run('xdg-open', [url]);
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('无法打开链接: $url')),
+        SnackBar(content: Text('请手动访问: $url')),
       );
     }
   }
@@ -269,7 +271,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () => context.push('/traffic'),
+                onPressed: () => Navigator.pushNamed(context, '/traffic'),
                 icon: const Icon(Icons.bar_chart, size: 18),
                 label: const Text('查看详细统计'),
                 style: OutlinedButton.styleFrom(

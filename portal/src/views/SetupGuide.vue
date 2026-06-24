@@ -6,6 +6,7 @@
         <router-link to="/dashboard">Dashboard</router-link>
         <router-link to="/account">Account</router-link>
         <router-link to="/products">Products</router-link>
+        <router-link to="/subscription">Subscription</router-link>
         <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
       </div>
       <span class="user-badge">{{ auth.username }}</span>

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import '../../services/subscription_service.dart';
 
 /// QR scanner page: scans a QR code and auto-imports subscription.
+///
+/// Since mobile_scanner is unavailable (no pub.dev access), this page
+/// shows a camera-unavailable placeholder and prompts the user to
+/// manually input their subscription link instead.
 ///
 /// Returns `true` via Navigator.pop if import succeeded.
 class QrScannerPage extends StatefulWidget {
@@ -14,124 +17,26 @@ class QrScannerPage extends StatefulWidget {
 }
 
 class _QrScannerPageState extends State<QrScannerPage> {
-  bool _scanned = false;
+  final _linkController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _isImporting = false;
   String? _error;
-  bool _cameraAvailable = true;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('扫描二维码'),
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context).pop(false),
-        ),
-      ),
-      body: Column(
-        children: [
-          // Camera preview area
-          Expanded(
-            child: _cameraAvailable
-                ? _buildCameraPreview()
-                : _buildCameraUnavailable(),
-          ),
-
-          // Error display
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withAlpha(25),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.withAlpha(80)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: Colors.red, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _error!,
-                        style: const TextStyle(color: Colors.red, fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Bottom info / manual input
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                Icon(Icons.qr_code, size: 32, color: Colors.grey[500]),
-                const SizedBox(height: 8),
-                Text(
-                  '将二维码对准相机框内自动扫描',
-                  style: TextStyle(color: Colors.grey[400], fontSize: 14),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  '也可以手动输入订阅链接',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+  void dispose() {
+    _linkController.dispose();
+    super.dispose();
   }
 
-  Widget _buildCameraPreview() {
-    try {
-      return _MobileScannerWidget(
-        onScan: _handleScan,
-        onCameraError: _handleCameraError,
-      );
-    } catch (e) {
-      return _buildCameraUnavailable();
-    }
-  }
+  Future<void> _importLink() async {
+    if (!_formKey.currentState!.validate()) return;
 
-  Widget _buildCameraUnavailable() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.videocam_off, size: 64, color: Colors.grey[600]),
-          const SizedBox(height: 16),
-          Text(
-            '相机不可用',
-            style: TextStyle(color: Colors.grey[400], fontSize: 16),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '请检查相机权限或使用手动输入',
-            style: TextStyle(color: Colors.grey[600], fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
+    setState(() {
+      _isImporting = true;
+      _error = null;
+    });
 
-  void _handleCameraError() {
-    if (mounted) {
-      setState(() => _cameraAvailable = false);
-    }
-  }
-
-  void _handleScan(String text) async {
-    if (_scanned) return; // prevent double-trigger
-    _scanned = true;
-    setState(() => _error = null);
-
+    final text = _linkController.text.trim();
     final subService = context.read<SubscriptionService>();
     subService.clearImport();
 
@@ -151,54 +56,157 @@ class _QrScannerPageState extends State<QrScannerPage> {
       Navigator.of(context).pop(true);
     } else {
       setState(() {
-        _error = subService.importError ?? '无法解析二维码内容';
-        _scanned = false; // allow retry
+        _error = subService.importError ?? '无法解析输入内容';
+        _isImporting = false;
       });
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Mobile Scanner widget — wraps mobile_scanner package
-// ---------------------------------------------------------------------------
-class _MobileScannerWidget extends StatelessWidget {
-  final void Function(String text) onScan;
-  final VoidCallback? onCameraError;
-
-  const _MobileScannerWidget({
-    required this.onScan,
-    this.onCameraError,
-  });
 
   @override
   Widget build(BuildContext context) {
-    // Use MobileScanner from the package
-    return MobileScanner(
-      fit: BoxFit.cover,
-      errorBuilder: (context, error, child) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          onCameraError?.call();
-        });
-        return Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.videocam_off, size: 64, color: Colors.grey[600]),
-              const SizedBox(height: 16),
-              Text(
-                '相机错误: ${error.errorCode}',
-                style: TextStyle(color: Colors.grey[400]),
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('扫描二维码'),
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.of(context).pop(false),
+        ),
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            const SizedBox(height: 32),
+
+            // Camera unavailable placeholder
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Colors.grey.withAlpha(20),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey.withAlpha(60)),
               ),
-            ],
-          ),
-        );
-      },
-      onDetect: (capture) {
-        final barcode = capture.barcodes.firstOrNull;
-        if (barcode != null && barcode.rawValue != null) {
-          onScan(barcode.rawValue!);
-        }
-      },
+              child: Column(
+                children: [
+                  Icon(Icons.qr_code_scanner, size: 72, color: Colors.grey[500]),
+                  const SizedBox(height: 16),
+                  Text(
+                    'QR 扫描需要 camera 权限',
+                    style: TextStyle(
+                      color: Colors.grey[300],
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '由于环境限制，相机功能暂不可用。\n请手动输入订阅链接或节点链接。',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.grey[500],
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Manual input form
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '手动输入订阅链接',
+                      style: TextStyle(
+                        color: Colors.grey[300],
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _linkController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        labelText: '订阅链接 / 节点链接',
+                        hintText: 'https://example.com/subscribe?token=...',
+                        prefixIcon: const Padding(
+                          padding: EdgeInsets.only(bottom: 48),
+                          child: Icon(Icons.link),
+                        ),
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return '请输入订阅链接';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '支持: HTTP/HTTPS 订阅链接、SS/vMess/vLESS/Trojan/Hysteria2/TUIC 节点链接',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Error display
+                    if (_error != null)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withAlpha(25),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.withAlpha(80)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.error_outline, color: Colors.red, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _error!,
+                                style: const TextStyle(color: Colors.red, fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+
+                    // Import button
+                    SizedBox(
+                      height: 48,
+                      child: ElevatedButton(
+                        onPressed: _isImporting ? null : _importLink,
+                        child: _isImporting
+                            ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('导入', style: TextStyle(fontSize: 16)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

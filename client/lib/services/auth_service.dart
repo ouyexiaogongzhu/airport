@@ -1,13 +1,35 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/user.dart';
 import 'api_service.dart';
 
+/// Simple file-based storage path for auth token.
+///
+/// Uses the home directory on Linux/macOS, system temp as fallback.
+String get _defaultTokenPath {
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'];
+  if (home != null) {
+    final dir = Directory('$home/.rfplay');
+    if (!dir.existsSync()) {
+      try {
+        dir.createSync(recursive: true);
+      } catch (_) {}
+    }
+    return '$home/.rfplay/auth_token';
+  }
+  return '${Directory.systemTemp.path}/rfplay_auth_token';
+}
+
 class AuthService extends ChangeNotifier {
   final ApiService _api = ApiService();
-  static const String _tokenKey = 'rfplay_auth_token';
 
-  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+  /// The file path used to persist the auth token.
+  /// Overridable for testing.
+  String _tokenPath = _defaultTokenPath;
 
   User? _currentUser;
   bool _isLoading = false;
@@ -18,26 +40,35 @@ class AuthService extends ChangeNotifier {
   bool get isLoggedIn => _currentUser != null;
   String? get error => _error;
 
+  /// Allows overriding the token path (useful for testing).
+  set tokenPath(String path) => _tokenPath = path;
+
   Future<String?> _loadToken() async {
     try {
-      return await _secureStorage.read(key: _tokenKey);
+      final file = File(_tokenPath);
+      if (await file.exists()) {
+        return await file.readAsString();
+      }
     } catch (_) {}
     return null;
   }
 
   Future<void> _saveToken(String token) async {
     try {
-      await _secureStorage.write(key: _tokenKey, value: token);
+      await File(_tokenPath).writeAsString(token);
     } catch (_) {}
   }
 
   Future<void> _deleteToken() async {
     try {
-      await _secureStorage.delete(key: _tokenKey);
+      final file = File(_tokenPath);
+      if (await file.exists()) {
+        await file.delete();
+      }
     } catch (_) {}
   }
 
-  /// Initialize: restore token from secure storage
+  /// Initialize: restore token from file storage
   Future<void> init() async {
     final savedToken = await _loadToken();
     if (savedToken != null && savedToken.isNotEmpty) {

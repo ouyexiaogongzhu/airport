@@ -137,6 +137,7 @@ func init() {
 	RegisterPaymentProvider(&MockProvider{})
 	RegisterPaymentProvider(&BEpusdtProvider{})
 	RegisterPaymentProvider(&PayoneerProvider{})
+	RegisterPaymentProvider(&StripeProvider{})
 }
 
 func RegisterPaymentProvider(p PaymentProvider) {

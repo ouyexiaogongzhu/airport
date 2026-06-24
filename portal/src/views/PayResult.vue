@@ -5,6 +5,7 @@
       <div class="nav-links">
         <router-link to="/dashboard">Dashboard</router-link>
         <router-link to="/plans">Plans</router-link>
+        <router-link to="/subscription">Subscription</router-link>
         <router-link to="/account">Account</router-link>
         <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
       </div>

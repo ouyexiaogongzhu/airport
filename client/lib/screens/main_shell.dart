@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
@@ -8,11 +7,22 @@ import 'profile_screen.dart';
 
 /// Main shell with bottom navigation bar.
 ///
-/// Uses GoRouter's [StatefulShellRoute.indexedStack] for persistent tab state.
-class MainShell extends StatelessWidget {
-  final StatefulNavigationShell navigationShell;
+/// Uses [IndexedStack] for persistent tab state across navigation.
+class MainShell extends StatefulWidget {
+  const MainShell({super.key});
 
-  const MainShell({super.key, required this.navigationShell});
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends State<MainShell> {
+  int _currentIndex = 0;
+
+  final List<Widget> _screens = const [
+    DashboardScreen(),
+    SubscriptionInputPage(),
+    ProfileScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -20,20 +30,20 @@ class MainShell extends StatelessWidget {
     final auth = context.watch<AuthService>();
     if (!auth.isLoggedIn) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        context.go('/login');
+        Navigator.pushReplacementNamed(context, '/login');
       });
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
-      body: navigationShell,
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _screens,
+      ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
+        selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
-          navigationShell.goBranch(
-            index,
-            initialLocation: index == navigationShell.currentIndex,
-          );
+          setState(() => _currentIndex = index);
         },
         destinations: const [
           NavigationDestination(

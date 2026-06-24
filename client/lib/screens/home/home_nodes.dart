@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/subscription.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vpn_service.dart';
@@ -46,6 +47,25 @@ class _HomeNodesState extends State<HomeNodes> {
     await vpn.pingNode(node.name, '8.8.8.8', 53);
   }
 
+  Future<void> _openRenewalPortal(SubscriptionService subService) async {
+    final url = subService.renewalUrl;
+    if (url == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('续费链接暂不可用')),
+      );
+      return;
+    }
+
+    final uri = Uri.parse(url);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('无法打开链接: $url')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final vpn = context.watch<VpnService>();
@@ -71,7 +91,18 @@ class _HomeNodesState extends State<HomeNodes> {
               const SizedBox(height: 24),
               Consumer<SubscriptionService>(
                 builder: (context, subService, _) {
-                  final nodes = subService.subscription?.nodes ?? [];
+                  final sub = subService.subscription;
+                  final nodes = sub?.nodes ?? [];
+                  final statusError = subService.statusError;
+
+                  // --- Empty / expired state ---
+                  if (nodes.isEmpty && statusError != null) {
+                    // Show renewal card for expired/pending subscriptions
+                    return _ExpiredRenewalCard(
+                      statusError: statusError,
+                      onRenew: () => _openRenewalPortal(subService),
+                    );
+                  }
 
                   if (nodes.isEmpty) {
                     return SizedBox(
@@ -103,6 +134,28 @@ class _HomeNodesState extends State<HomeNodes> {
                   );
                 },
               ),
+              // --- Renewal button (always visible when nodes exist) ---
+              Consumer<SubscriptionService>(
+                builder: (context, subService, _) {
+                  final nodes = subService.subscription?.nodes ?? [];
+                  if (nodes.isEmpty) return const SizedBox.shrink();
+
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => _openRenewalPortal(subService),
+                        icon: const Icon(Icons.replay, size: 20),
+                        label: const Text('续费 / 升级套餐'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ],
           ),
         ),
@@ -116,6 +169,90 @@ class _HomeNodesState extends State<HomeNodes> {
           },
         ),
       ],
+    );
+  }
+}
+
+/// Card displayed when subscription is expired or pending.
+class _ExpiredRenewalCard extends StatelessWidget {
+  final String statusError;
+  final VoidCallback onRenew;
+
+  const _ExpiredRenewalCard({
+    required this.statusError,
+    required this.onRenew,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isExpired = statusError == 'SUBSCRIPTION_EXPIRED';
+    final isPending = statusError == 'SUBSCRIPTION_PENDING';
+
+    final Color statusColor = isExpired ? Colors.red : Colors.orange;
+    final String heading = isExpired ? '订阅已过期' : '等待订阅';
+    final String description = isExpired
+        ? '您的订阅已过期，所有节点暂时不可用。请续费后继续使用 VPN 服务。'
+        : '您尚未购买订阅，请前往官网选择套餐。';
+
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.5,
+      child: Center(
+        child: Card(
+          color: statusColor.withAlpha(15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: statusColor.withAlpha(80), width: 1.5),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isExpired ? Icons.timer_off : Icons.hourglass_empty,
+                  size: 64,
+                  color: statusColor.withAlpha(200),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  heading,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: statusColor,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  description,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey[300],
+                    fontSize: 14,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 28),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: onRenew,
+                    icon: const Icon(Icons.open_in_new, size: 20),
+                    label: Text(isExpired ? '点击续费' : '前往购买'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: statusColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
