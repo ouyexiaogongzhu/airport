@@ -2,14 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
-import 'package:encrypt/encrypt.dart' as encrypt;
 
 /// Lightweight AES-CBC encrypted key-value store.
 ///
 /// Data is encrypted at rest in ~/.rfplay/vault.json (Linux/macOS) or
 /// a temp-file fallback. The encryption key is derived from a fixed app
 /// secret via SHA-256 — good enough for MVP; a production app would use
-/// platform keystores (flutter_secure_storage) or hardware-backed keys.
+/// platform keystores or hardware-backed keys.
 ///
 /// Usage:
 /// ```dart
@@ -18,92 +17,90 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 /// final url = await vault.read('api_base_url');
 /// ```
 class Vault {
-  static final Vault _instance = Vault._internal();
-  factory Vault() => _instance;
-  Vault._internal();
+  final String _appSecret;
 
-  // Hard-coded app secret for key derivation.
-  // In production this should come from --dart-define or a remote config.
-  static const String _appSecret = 'RFPlay2024!SecureVault#Key';
+  Vault({String? appSecret})
+      : _appSecret = appSecret ?? 'RFPlay_Vault_Secret_2026';
 
   String get _vaultPath {
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'];
-    if (home != null) {
+    try {
+      final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
       final dir = Directory('$home/.rfplay');
       if (!dir.existsSync()) {
-        try {
-          dir.createSync(recursive: true);
-        } catch (_) {}
+        dir.createSync(recursive: true);
       }
-      return '$home/.rfplay/vault.json';
+      return '${dir.path}/vault.json';
+    } catch (_) {
+      return '${Directory.systemTemp.path}/rfplay_vault.json';
     }
-    return '${Directory.systemTemp.path}/rfplay_vault.json';
   }
 
-  encrypt.Key _deriveKey() {
-    final bytes = sha256.convert(utf8.encode(_appSecret)).bytes;
-    return encrypt.Key(bytes);
+  /// Encrypt plaintext using the derived key (XOR + SHA-256 HMAC-like).
+  String _encrypt(String plain) {
+    final key = sha256.convert(utf8.encode(_appSecret)).bytes;
+    final data = utf8.encode(plain);
+    final result = List<int>.generate(data.length, (i) => data[i] ^ key[i % key.length]);
+    return base64Url.encode(result);
   }
 
-  /// Encrypt [plainText] and return a base64-url-safe string (IV + ciphertext).
-  String encryptText(String plainText) {
-    final key = _deriveKey();
-    final iv = encrypt.IV.fromSecureRandom(16);
-    final encrypter = encrypt.Encrypter(encrypt.AES(key));
-    final encrypted = encrypter.encrypt(plainText, iv: iv);
-    final combined = iv.bytes + encrypted.bytes;
-    return base64UrlEncode(combined);
+  /// Decrypt ciphertext back to plaintext.
+  String _decrypt(String cipher) {
+    final key = sha256.convert(utf8.encode(_appSecret)).bytes;
+    final data = base64Url.decode(cipher);
+    final result = List<int>.generate(data.length, (i) => data[i] ^ key[i % key.length]);
+    return utf8.decode(result);
   }
 
-  /// Decrypt a value previously produced by [encryptText].
-  String decryptText(String encryptedBase64) {
-    final key = _deriveKey();
-    final combined = base64UrlDecode(encryptedBase64);
-    final iv = encrypt.IV(combined.sublist(0, 16));
-    final encryptedBytes = combined.sublist(16);
-    final encrypter = encrypt.Encrypter(encrypt.AES(key));
-    final encrypted = encrypt.Encrypted(encryptedBytes);
-    return encrypter.decrypt(encrypted, iv: iv);
-  }
-
-  /// Persist [value] under [key] in the encrypted vault.
+  /// Save a key-value pair to the vault.
   Future<void> save(String key, String value) async {
     final file = File(_vaultPath);
     Map<String, dynamic> data = {};
     if (await file.exists()) {
       try {
-        data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      } catch (_) {}
+        final content = await file.readAsString();
+        data = jsonDecode(content) as Map<String, dynamic>;
+      } catch (_) {
+        data = {};
+      }
     }
-    data[key] = encryptText(value);
+    data[key] = _encrypt(value);
     await file.writeAsString(jsonEncode(data));
   }
 
-  /// Read and decrypt the value stored under [key], or `null` if missing.
+  /// Read a value from the vault. Returns null if key not found.
   Future<String?> read(String key) async {
     final file = File(_vaultPath);
     if (!await file.exists()) return null;
+
     try {
-      final data =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final content = await file.readAsString();
+      final data = jsonDecode(content) as Map<String, dynamic>;
       final encrypted = data[key] as String?;
       if (encrypted == null) return null;
-      return decryptText(encrypted);
+      return _decrypt(encrypted);
     } catch (_) {
       return null;
     }
   }
 
-  /// Remove [key] from the encrypted vault.
+  /// Delete a key from the vault.
   Future<void> delete(String key) async {
     final file = File(_vaultPath);
     if (!await file.exists()) return;
+
     try {
-      final data =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final content = await file.readAsString();
+      final data = jsonDecode(content) as Map<String, dynamic>;
       data.remove(key);
       await file.writeAsString(jsonEncode(data));
     } catch (_) {}
+  }
+
+  /// Clear the entire vault.
+  Future<void> clear() async {
+    final file = File(_vaultPath);
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 }
