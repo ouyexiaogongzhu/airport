@@ -98,6 +98,16 @@ func main() {
 	traffic.Post("/report", handler.ReportTraffic)
 	traffic.Get("/stats", handler.GetTrafficStats)
 
+	// Product management (admin)
+	products := admin.Group("/products")
+	products.Post("/", handler.CreateProduct)
+	products.Get("/", handler.ListProducts)
+	products.Put("/:id", handler.UpdateProduct)
+	products.Delete("/:id", handler.DeleteProduct)
+
+	// Public product list (active only)
+	v1.Get("/products", handler.ListActiveProducts)
+
 	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -6,10 +6,19 @@ import (
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
 )
 
-// ListProducts returns all products
+// ListProducts returns all products ordered by id
 func ListProducts(c *fiber.Ctx) error {
 	var products []model.Product
-	if result := db.DB.Order("created_at DESC").Find(&products); result.Error != nil {
+	if result := db.DB.Order("id ASC").Find(&products); result.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list products"})
+	}
+	return c.JSON(fiber.Map{"products": products})
+}
+
+// ListActiveProducts returns only active products (public)
+func ListActiveProducts(c *fiber.Ctx) error {
+	var products []model.Product
+	if result := db.DB.Where("status = ?", "active").Order("id ASC").Find(&products); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list products"})
 	}
 	return c.JSON(fiber.Map{"products": products})
@@ -80,20 +89,21 @@ func UpdateProduct(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"product": product})
 }
 
-// DeleteProduct deletes a product
+// DeleteProduct archives a product (sets status to archived)
 func DeleteProduct(c *fiber.Ctx) error {
 	id, err := c.ParamsInt("id")
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid product id"})
 	}
 
-	result := db.DB.Delete(&model.Product{}, id)
-	if result.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete product"})
-	}
-	if result.RowsAffected == 0 {
+	var product model.Product
+	if result := db.DB.First(&product, id); result.Error != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "product not found"})
 	}
 
-	return c.JSON(fiber.Map{"message": "product deleted"})
+	if result := db.DB.Model(&product).Update("status", "archived"); result.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to archive product"})
+	}
+
+	return c.JSON(fiber.Map{"message": "product archived"})
 }
