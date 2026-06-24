@@ -1,12 +1,13 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/user.dart';
 import 'api_service.dart';
 
 class AuthService extends ChangeNotifier {
   final ApiService _api = ApiService();
-  static const String _tokenFile = 'rfplay_auth_token';
+  static const String _tokenKey = 'rfplay_auth_token';
+
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
   User? _currentUser;
   bool _isLoading = false;
@@ -17,39 +18,26 @@ class AuthService extends ChangeNotifier {
   bool get isLoggedIn => _currentUser != null;
   String? get error => _error;
 
-  String get _tokenPath {
-    // Store token in a temp file
-    final dir = Directory.systemTemp.path;
-    return '$dir/$_tokenFile';
-  }
-
   Future<String?> _loadToken() async {
     try {
-      final file = File(_tokenPath);
-      if (await file.exists()) {
-        return await file.readAsString();
-      }
+      return await _secureStorage.read(key: _tokenKey);
     } catch (_) {}
     return null;
   }
 
   Future<void> _saveToken(String token) async {
     try {
-      final file = File(_tokenPath);
-      await file.writeAsString(token);
+      await _secureStorage.write(key: _tokenKey, value: token);
     } catch (_) {}
   }
 
   Future<void> _deleteToken() async {
     try {
-      final file = File(_tokenPath);
-      if (await file.exists()) {
-        await file.delete();
-      }
+      await _secureStorage.delete(key: _tokenKey);
     } catch (_) {}
   }
 
-  /// Initialize: restore token from file
+  /// Initialize: restore token from secure storage
   Future<void> init() async {
     final savedToken = await _loadToken();
     if (savedToken != null && savedToken.isNotEmpty) {
@@ -92,6 +80,42 @@ class AuthService extends ChangeNotifier {
 
       // Persist token
       await _saveToken(token);
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Login via token import (rf_ or at_ token)
+  Future<bool> tokenLogin(String token) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final response = await _api.post('/auth/token-login', body: {
+        'token': token,
+      });
+
+      final jwtToken = response['token'] as String;
+      final userData = response['user'] as Map<String, dynamic>;
+
+      final user = User.fromJson({
+        ...userData,
+        'token': jwtToken,
+      });
+
+      _api.setToken(jwtToken);
+      _currentUser = user;
+
+      // Persist token
+      await _saveToken(jwtToken);
 
       _isLoading = false;
       notifyListeners();

@@ -9,6 +9,8 @@ import 'screens/register_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/order_history_screen.dart';
 import 'screens/traffic_screen.dart';
+import 'screens/account/account_subscription.dart';
+import 'screens/devices/device_list.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -135,6 +137,9 @@ class RFPlayApp extends StatelessWidget {
         '/main': (_) => const MainShell(),
         '/orders': (_) => const OrderHistoryScreen(),
         '/traffic': (_) => const TrafficScreen(),
+        '/devices': (_) => const DeviceList(),
+        '/account/subscription': (_) => const AccountSubscription(),
+        '/subscription/input': (_) => const AccountSubscription(),
       },
     );
   }

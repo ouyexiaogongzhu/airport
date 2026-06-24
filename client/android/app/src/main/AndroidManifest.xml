@@ -36,6 +36,9 @@
             android:value="2" />
     </application>
 
+    <!-- Camera (QR scan) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- VPN permission -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
     <uses-permission android:name="android.permission.INTERNET" />

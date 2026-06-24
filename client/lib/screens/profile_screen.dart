@@ -125,6 +125,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         const SizedBox(height: 32),
 
+        // My Devices
+        Card(
+          child: ListTile(
+            leading: Icon(Icons.devices, color: Theme.of(context).colorScheme.primary),
+            title: const Text('我的设备'),
+            subtitle: const Text('查看已连接的设备'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.pushNamed(context, '/devices'),
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // Subscription details
+        Card(
+          child: ListTile(
+            leading: Icon(Icons.subscriptions, color: Theme.of(context).colorScheme.primary),
+            title: const Text('订阅详情'),
+            subtitle: const Text('套餐、到期时间与流量信息'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.pushNamed(context, '/account/subscription'),
+          ),
+        ),
+        const SizedBox(height: 12),
+
         // Order history button
         SizedBox(
           width: double.infinity,
