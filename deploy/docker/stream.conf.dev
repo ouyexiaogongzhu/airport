@@ -1,0 +1,22 @@
+# RFPlay Airport — Nginx TCP Stream Proxy for Xray-core (Development)
+# Proxies VMess/VLESS (8443) and SOCKS5 (1099) to the xray container
+# HTTP only, no SSL
+# Uses variable-based proxy_pass + Docker DNS resolver
+
+resolver 127.0.0.11 valid=30s;
+
+server {
+    listen 8443;
+    set $xray_vless "xray:8443";
+    proxy_pass $xray_vless;
+    proxy_timeout 3600s;
+    proxy_connect_timeout 10s;
+}
+
+server {
+    listen 1099;
+    set $xray_socks "xray:1099";
+    proxy_pass $xray_socks;
+    proxy_timeout 3600s;
+    proxy_connect_timeout 10s;
+}

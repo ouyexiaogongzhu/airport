@@ -97,6 +97,9 @@ services:
       - "443"
       - "8443"
       - "1099"
+    ports:
+      - "1099:1099"
+      - "8443:8443"
     environment:
       - VERIFY_URL=http://manager:8080/api/v1
     networks:

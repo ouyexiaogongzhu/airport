@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFPlay Airport — Health Dashboard</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --blue: #3b82f6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .logo { color: var(--blue); }
+  .header-meta {
+    text-align: right;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .header-meta .last-check { display: block; margin-top: 2px; }
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .summary-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .summary-card .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .summary-card .value {
+    font-size: 1.75rem;
+    font-weight: 700;
+  }
+  .summary-card .value.up { color: var(--green); }
+  .summary-card .value.down { color: var(--red); }
+  .services {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .service-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: border-color 0.3s;
+  }
+  .service-card.up { border-left: 4px solid var(--green); }
+  .service-card.down { border-left: 4px solid var(--red); }
+  .service-card.degraded { border-left: 4px solid var(--yellow); }
+  .service-info { flex: 1; }
+  .service-name {
+    font-weight: 600;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .service-name .tag {
+    font-size: 0.65rem;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--border);
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .service-endpoint {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 2px;
+    font-family: "SF Mono", "Fira Code", monospace;
+  }
+  .service-meta {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 4px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .service-meta .uptime { color: var(--green); }
+  .service-meta .latency { color: var(--blue); }
+  .service-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 90px;
+    justify-content: flex-end;
+  }
+  .status-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    display: inline-block;
+    transition: background 0.3s;
+  }
+  .status-dot.up { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.4); }
+  .status-dot.down { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.4); }
+  .status-dot.degraded { background: var(--yellow); box-shadow: 0 0 8px rgba(234,179,8,0.4); }
+  .status-text {
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .status-text.up { color: var(--green); }
+  .status-text.down { color: var(--red); }
+  .status-text.degraded { color: var(--yellow); }
+  .refresh-info {
+    text-align: center;
+    margin-top: 24px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .refresh-info a {
+    color: var(--blue);
+    text-decoration: none;
+  }
+  .refresh-info a:hover { text-decoration: underline; }
+  .error-log {
+    margin-top: 16px;
+    background: #1a1a2e;
+    border: 1px solid var(--red);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 0.8rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: var(--red);
+    display: none;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .error-log.visible { display: block; }
+  @media (max-width: 640px) {
+    .summary { grid-template-columns: repeat(2, 1fr); }
+    .service-card { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .service-status { align-self: flex-end; }
+    header { flex-direction: column; text-align: center; gap: 8px; }
+    .header-meta { text-align: center; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1><span class="logo">◉</span> RFPlay Airport Health</h1>
+    <div class="header-meta">
+      <span id="lastCheck">Last check: —</span>
+      <span class="last-check" id="countdown">Next check in 30s</span>
+    </div>
+  </header>
+
+  <div class="summary">
+    <div class="summary-card">
+      <div class="label">Total</div>
+      <div class="value" id="totalCount">0</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">Healthy</div>
+      <div class="value up" id="healthyCount">0</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">Degraded</div>
+      <div class="value down" id="degradedCount">0</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">Unhealthy</div>
+      <div class="value down" id="unhealthyCount">0</div>
+    </div>
+  </div>
+
+  <div class="services" id="services">
+    <!-- Populated by JavaScript -->
+  </div>
+
+  <div class="error-log" id="errorLog"></div>
+
+  <div class="refresh-info">
+    Auto-refreshes every <strong>30</strong> seconds.
+    Last full check: <span id="lastFullTime">—</span>
+    &middot; <a href="#" onclick="location.reload();return false">Reload now</a>
+  </div>
+</div>
+
+<script>
+// ─── Service Definitions ─────────────────────────────────────────────
+const SERVICES = [
+  { id: 'manager',    name: 'Manager API',      endpoint: '/health',        url: 'http://localhost:8080',            tag: 'Backend',  port: 8080 },
+  { id: 'nginx',      name: 'Nginx Proxy',      endpoint: '/health',        url: 'http://localhost:80',              tag: 'Proxy',    port: 80 },
+  { id: 'xray-vless', name: 'Xray VMess/VLESS',  endpoint: '',               url: 'http://localhost:8443',            tag: 'Proxy',    port: 8443,  check: 'tcp' },
+  { id: 'xray-socks', name: 'Xray SOCKS5',       endpoint: '',               url: 'http://localhost:1099',            tag: 'Proxy',    port: 1099,  check: 'tcp' },
+  { id: 'daemon',     name: 'Node Daemon',       endpoint: '/health',        url: 'http://localhost:9090',            tag: 'Backend',  port: 9090 },
+];
+
+// ─── State ────────────────────────────────────────────────────────────
+const state = {};
+const startTime = Date.now();
+
+SERVICES.forEach(s => {
+  state[s.id] = { status: 'unknown', latency: 0, lastOk: null, detail: '' };
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+function elapsed(ms) {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return sec + 's';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ' + (sec % 60) + 's';
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return hrs + 'h ' + (min % 60) + 'm';
+  const days = Math.floor(hrs / 24);
+  return days + 'd ' + (hrs % 24) + 'h';
+}
+
+function fmtTime(d) {
+  return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3,'0');
+}
+
+// ─── Rendering ────────────────────────────────────────────────────────
+function render() {
+  const container = document.getElementById('services');
+  let total = 0, healthy = 0, degraded = 0, unhealthy = 0;
+
+  let html = '';
+  SERVICES.forEach(s => {
+    const st = state[s.id];
+    total++;
+    if (st.status === 'up') healthy++;
+    else if (st.status === 'degraded') degraded++;
+    else if (st.status === 'down') unhealthy++;
+
+    const statusClass = st.status === 'up' ? 'up' : (st.status === 'degraded' ? 'degraded' : 'down');
+    const statusLabel = st.status === 'up' ? 'Healthy' : (st.status === 'degraded' ? 'Degraded' : 'Unhealthy');
+    const uptimeStr = st.lastOk ? elapsed(Date.now() - st.lastOk) : '—';
+    const latencyStr = st.latency ? st.latency + 'ms' : '—';
+
+    html += `
+      <div class="service-card ${statusClass}">
+        <div class="service-info">
+          <div class="service-name">
+            ${s.name}
+            <span class="tag">${s.tag}</span>
+          </div>
+          <div class="service-endpoint">${s.url}${s.endpoint || ''}</div>
+          <div class="service-meta">
+            <span class="uptime">↑ ${uptimeStr}</span>
+            <span class="latency">⏱ ${latencyStr}</span>
+            ${st.detail ? '<span>' + st.detail + '</span>' : ''}
+          </div>
+        </div>
+        <div class="service-status">
+          <span class="status-dot ${statusClass}"></span>
+          <span class="status-text ${statusClass}">${statusLabel}</span>
+        </div>
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('healthyCount').textContent = healthy;
+  document.getElementById('degradedCount').textContent = degraded;
+  document.getElementById('unhealthyCount').textContent = unhealthy;
+  document.getElementById('lastCheck').textContent = 'Last check: ' + fmtTime(new Date());
+  document.getElementById('lastFullTime').textContent = fmtTime(new Date());
+}
+
+// ─── Health Checks ────────────────────────────────────────────────────
+async function checkService(svc) {
+  const url = svc.url + (svc.endpoint || '');
+  const start = performance.now();
+
+  try {
+    let ok = false;
+    let detail = '';
+
+    if (svc.check === 'tcp') {
+      // TCP port check via a simple fetch (will fail fast or connect)
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        const resp = await fetch(url, {
+          mode: 'no-cors',
+          signal: ctrl.signal,
+          cache: 'no-store'
+        });
+        clearTimeout(to);
+        // With no-cors, we get an opaque response — any response means the port is open
+        ok = true;
+        detail = 'port open';
+      } catch (e) {
+        clearTimeout(to);
+        // Connection refused means port closed; timeout means unreachable
+        if (e.name === 'AbortError') {
+          detail = 'timeout';
+        } else {
+          detail = e.message.includes('refused') ? 'port closed' : 'error';
+        }
+      }
+    } else {
+      const resp = await fetch(url, { cache: 'no-store' });
+      const elapsedMs = Math.round(performance.now() - start);
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        ok = true;
+        detail = data && data.status ? data.status : 'ok';
+        // Store the latency
+        state[svc.id].latency = elapsedMs;
+      } else {
+        detail = 'HTTP ' + resp.status;
+      }
+    }
+
+    if (ok) {
+      state[svc.id].status = 'up';
+      if (!state[svc.id].lastOk) state[svc.id].lastOk = Date.now();
+      state[svc.id].detail = svc.check === 'tcp' ? '' : detail;
+    } else {
+      if (state[svc.id].status === 'up') {
+        state[svc.id].status = 'degraded';
+      } else {
+        state[svc.id].status = 'down';
+      }
+      state[svc.id].detail = detail;
+    }
+  } catch (err) {
+    if (state[svc.id].status === 'up') {
+      state[svc.id].status = 'degraded';
+    } else {
+      state[svc.id].status = 'down';
+    }
+    state[svc.id].detail = err.message || 'fetch failed';
+  }
+
+  // Update lastOk for up services
+  if (state[svc.id].status !== 'up') {
+    // Don't clear lastOk — show uptime since last known good
+  }
+}
+
+async function runAllChecks() {
+  const log = document.getElementById('errorLog');
+  log.classList.remove('visible');
+  log.textContent = '';
+
+  const promises = SERVICES.map(s => checkService(s));
+  await Promise.allSettled(promises);
+
+  render();
+}
+
+// ─── Initial load + auto-refresh ─────────────────────────────────────
+let countdownValue = 30;
+let countdownInterval;
+
+function updateCountdown() {
+  document.getElementById('countdown').textContent = 'Next check in ' + countdownValue + 's';
+}
+
+function startAutoRefresh() {
+  if (countdownInterval) clearInterval(countdownInterval);
+  countdownValue = 30;
+  updateCountdown();
+  countdownInterval = setInterval(() => {
+    countdownValue--;
+    if (countdownValue <= 0) {
+      countdownValue = 30;
+      runAllChecks();
+    }
+    updateCountdown();
+  }, 1000);
+}
+
+// Run immediately, then start auto-refresh
+runAllChecks().then(() => startAutoRefresh());
+</script>
+</body>
+</html>

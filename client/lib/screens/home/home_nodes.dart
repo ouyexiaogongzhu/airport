@@ -186,8 +186,6 @@ class _ExpiredRenewalCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isExpired = statusError == 'SUBSCRIPTION_EXPIRED';
-    final isPending = statusError == 'SUBSCRIPTION_PENDING';
-
     final Color statusColor = isExpired ? Colors.red : Colors.orange;
     final String heading = isExpired ? '订阅已过期' : '等待订阅';
     final String description = isExpired

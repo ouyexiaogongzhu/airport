@@ -27,7 +27,8 @@ jobs:
           cache-dependency-path: manager/go.sum
       - run: go mod download
       - run: go build -v ./cmd/server/
-      - run: go test -v -count=1 -timeout 30s ./...
+      # Note: scripts/ dir contains standalone tools, not testable packages
+      - run: go test -v -count=1 -timeout 30s ./internal/...
 
   # Frontend: Portal + Admin
   frontend:
@@ -99,3 +100,57 @@ jobs:
           curl -sf http://localhost/ | grep -q DOCTYPE
           curl -sf http://localhost/admin/ | grep -q DOCTYPE
           docker compose down
+
+  # E2E: Full acceptance test against running Docker services
+  e2e:
+    name: E2E Test
+    needs: [docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Manager (for E2E)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.manager
+          load: true
+          tags: rfplay-manager:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build Nginx (for E2E)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.nginx
+          load: true
+          tags: rfplay-nginx:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start Docker services
+        run: |
+          docker compose up -d manager nginx
+          echo "Waiting for services to be healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost/health > /dev/null 2>&1; then
+              echo "Services ready after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Services did not become healthy within 30s"
+              docker compose logs manager
+              exit 1
+            fi
+            sleep 1
+          done
+      - name: Run E2E test suite
+        run: |
+          python3 deploy/test/e2e_test.py
+      - name: Debug logs on failure
+        if: failure()
+        run: |
+          docker compose logs manager --tail=50
+          docker compose logs nginx --tail=20
+      - name: Cleanup
+        if: always()
+        run: docker compose down

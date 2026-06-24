@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rfplay_client/models/subscription.dart';
 import 'package:rfplay_client/services/vpn_service.dart';
 import 'package:rfplay_client/widgets/node_card.dart';
-import 'package:rfplay_client/widgets/status_badge.dart';
 import 'package:rfplay_client/widgets/traffic_bar.dart';
 
 /// Helper to wrap a NodeCard in a MaterialApp.
