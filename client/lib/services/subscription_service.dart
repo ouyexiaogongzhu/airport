@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import '../models/subscription.dart';
 import 'api_service.dart';
 
@@ -16,12 +18,20 @@ class SubscriptionService extends ChangeNotifier {
   // Subscription status (parsed from 403 errors)
   String? _statusError; // 'SUBSCRIPTION_PENDING', 'SUBSCRIPTION_EXPIRED', or null
 
+  // Imported subscription (from manual URL / QR code)
+  List<VpnNode> _importedNodes = [];
+  bool _importing = false;
+  String? _importError;
+
   SubscriptionInfo? get subscription => _subscription;
   bool get isLoading => _isLoading;
   String? get portalUrl => _portalUrl;
   String? get renewalPath => _renewalPath;
   bool get configLoaded => _configLoaded;
   String? get statusError => _statusError;
+  List<VpnNode> get importedNodes => _importedNodes;
+  bool get importing => _importing;
+  String? get importError => _importError;
 
   /// Load client config (public, no auth needed)
   Future<void> loadConfig() async {
@@ -72,6 +82,108 @@ class SubscriptionService extends ChangeNotifier {
   /// Clear error
   void clearError() {
     _statusError = null;
+    notifyListeners();
+  }
+
+  /// Import subscription from a URL (manual paste or QR scan).
+  ///
+  /// Fetches the URL, decodes base64 response, and parses node URIs.
+  /// On success, [_importedNodes] is populated and [importing] = false.
+  /// On error, [importError] is set.
+  Future<bool> importFromUrl(String url) async {
+    _importing = true;
+    _importError = null;
+    notifyListeners();
+
+    try {
+      final response = await http
+          .get(Uri.parse(url), headers: {'Accept': 'text/plain'})
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) {
+        _importError = '服务器返回 ${response.statusCode}';
+        _importing = false;
+        notifyListeners();
+        return false;
+      }
+
+      final body = response.body.trim();
+      return _parseSubscriptionData(body);
+    } catch (e) {
+      _importError = '导入失败: ${e.toString()}';
+      _importing = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Import subscription from decoded text (QR scanned text that is the URL itself).
+  Future<bool> importFromLink(String link) async {
+    if (link.startsWith('http://') || link.startsWith('https://')) {
+      return importFromUrl(link);
+    }
+    // Maybe it's already decoded subscription data
+    return _parseSubscriptionData(link);
+  }
+
+  /// Parse raw subscription data (base64-decoded or plain text with node URIs).
+  bool _parseSubscriptionData(String body) {
+    String decoded;
+
+    // Try base64 decode first (standard subscription format)
+    try {
+      decoded = utf8.decode(base64.decode(body));
+    } catch (_) {
+      // Not base64 — use raw body
+      decoded = body;
+    }
+
+    // Parse node URIs: one per line, or comma-separated, or JSON array
+    final List<String> uris = [];
+
+    // Try JSON array
+    if (decoded.trimLeft().startsWith('[')) {
+      try {
+        final parsed = jsonDecode(decoded) as List;
+        for (final e in parsed) {
+          if (e is String && e.isNotEmpty) uris.add(e);
+        }
+      } catch (_) {
+        // Fall through
+      }
+    }
+
+    // Try line-by-line
+    if (uris.isEmpty) {
+      for (final line in decoded.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.isNotEmpty) uris.add(trimmed);
+      }
+    }
+
+    if (uris.isEmpty) {
+      _importError = '未找到有效的节点信息';
+      _importing = false;
+      notifyListeners();
+      return false;
+    }
+
+    _importedNodes = uris
+        .asMap()
+        .entries
+        .map((e) => VpnNode.fromUri(e.value, e.key))
+        .toList();
+    _importError = null;
+    _importing = false;
+    notifyListeners();
+    return true;
+  }
+
+  /// Clear imported nodes
+  void clearImport() {
+    _importedNodes = [];
+    _importError = null;
+    _importing = false;
     notifyListeners();
   }
 

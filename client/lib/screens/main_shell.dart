@@ -1,27 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
-import 'products_screen.dart';
-import 'vpn_screen.dart';
+import 'subscription/input_page.dart';
 import 'profile_screen.dart';
 
-class MainShell extends StatefulWidget {
-  const MainShell({super.key});
+/// Main shell with bottom navigation bar.
+///
+/// Uses GoRouter's [StatefulShellRoute.indexedStack] for persistent tab state.
+class MainShell extends StatelessWidget {
+  final StatefulNavigationShell navigationShell;
 
-  @override
-  State<MainShell> createState() => _MainShellState();
-}
-
-class _MainShellState extends State<MainShell> {
-  int _currentIndex = 0;
-
-  final List<Widget> _screens = const [
-    DashboardScreen(),
-    ProductsScreen(),
-    VpnScreen(),
-    ProfileScreen(),
-  ];
+  const MainShell({super.key, required this.navigationShell});
 
   @override
   Widget build(BuildContext context) {
@@ -29,43 +20,36 @@ class _MainShellState extends State<MainShell> {
     final auth = context.watch<AuthService>();
     if (!auth.isLoggedIn) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.pushReplacementNamed(context, '/login');
+        context.go('/login');
       });
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
+      body: navigationShell,
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
+        selectedIndex: navigationShell.currentIndex,
         onDestinationSelected: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
+          navigationShell.goBranch(
+            index,
+            initialLocation: index == navigationShell.currentIndex,
+          );
         },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard),
-            label: '仪表盘',
+            label: '首页',
           ),
           NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined),
-            selectedIcon: Icon(Icons.inventory_2),
-            label: '产品',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.vpn_lock_outlined),
-            selectedIcon: Icon(Icons.vpn_lock),
-            label: 'VPN',
+            icon: Icon(Icons.cloud_download_outlined),
+            selectedIcon: Icon(Icons.cloud_download),
+            label: '订阅',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
-            label: '我的',
+            label: '设置',
           ),
         ],
       ),

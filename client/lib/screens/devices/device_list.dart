@@ -60,9 +60,17 @@ class DeviceList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('设备管理'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
         Text(
           '设备管理',
           style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -160,7 +168,8 @@ class DeviceList extends StatelessWidget {
             ),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 }

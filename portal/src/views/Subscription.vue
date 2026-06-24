@@ -1,48 +1,38 @@
 <template>
-  <div class="page account-page">
+  <div class="page subscription-page">
     <nav class="topbar">
       <span class="brand">RFPlay</span>
       <div class="nav-links">
         <router-link to="/dashboard">Dashboard</router-link>
-        <router-link to="/plans">Plans</router-link>
-        <router-link to="/account">Account</router-link>
+        <router-link to="/products">Plans</router-link>
         <router-link to="/subscription">Subscription</router-link>
-        <router-link to="/account/guide">Setup Guide</router-link>
+        <router-link to="/account">Account</router-link>
         <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
       </div>
       <span class="user-badge">{{ auth.username }}</span>
     </nav>
 
     <main class="content">
-      <h2>Account</h2>
+      <h2>Subscription</h2>
       <p class="subtitle">Manage your subscription and client token.</p>
 
-      <div v-if="loading" class="loading">Loading account info…</div>
+      <div v-if="loading" class="loading">Loading subscription info…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
 
-      <!-- Subscription Status -->
-      <section class="card-section">
-        <h3>Subscription</h3>
-        <div class="sub-info">
+      <!-- Subscription Status Card -->
+      <section v-if="profile.subscription_status" class="card-section">
+        <div class="section-header">
+          <h3>Subscription Status</h3>
+          <span :class="['status-badge', statusClass]">{{ profile.subscription_status }}</span>
+        </div>
+        <div class="info-grid">
           <div class="info-row">
-            <span class="label">Status</span>
-            <span :class="['status-badge', statusClass]">{{ profile.subscription_status || '—' }}</span>
-          </div>
-          <div class="info-row">
-            <span class="label">Plan</span>
+            <span class="label">Tier</span>
             <span class="value">{{ profile.subscription_tier || '—' }}</span>
           </div>
           <div class="info-row">
             <span class="label">Traffic Used</span>
-            <span class="value">{{ formatBytes(profile.traffic_used_bytes) }}</span>
-          </div>
-          <div class="info-row">
-            <span class="label">Traffic Limit</span>
-            <span class="value">{{ formatBytes(profile.traffic_limit_bytes) }}</span>
-          </div>
-          <div class="info-row">
-            <span class="label">Traffic Remaining</span>
-            <span class="value">{{ formatTrafficRemaining() }}</span>
+            <span class="value">{{ formatBytes(profile.traffic_used_bytes) }} / {{ formatBytes(profile.traffic_limit_bytes) }}</span>
           </div>
           <div v-if="profile.traffic_limit_bytes > 0" class="progress-row">
             <div class="progress-bar">
@@ -84,7 +74,7 @@
           </div>
           <div v-if="showQr && subscriptionUrl" class="qr-area">
             <QrCode :url="subscriptionUrl" />
-            <p class="qr-hint">Scan with V2rayNG or import URL</p>
+            <p class="qr-hint">Scan with V2rayNG or Shadowrocket</p>
           </div>
         </div>
         <div v-if="!tokenData && !tokenLoading" class="no-token">
@@ -98,11 +88,11 @@
           <p class="danger-hint">Resetting will invalidate the current token. All devices will need to re-import.</p>
         </div>
 
-        <!-- Regenerate confirm modal -->
+        <!-- Confirm modal -->
         <div v-if="showConfirm" class="modal-overlay" @click.self="showConfirm = false">
           <div class="modal">
             <h4>Confirm Token Reset</h4>
-            <p>Are you sure? After resetting, all existing connections using this token will stop working immediately. You will need to update every device with the new token.</p>
+            <p>After resetting, all existing connections using this token will stop immediately. You must update every device with the new token.</p>
             <div class="modal-actions">
               <button class="btn-outline" @click="showConfirm = false">Cancel</button>
               <button class="btn-danger" @click="regenerateToken">Confirm Reset</button>
@@ -110,7 +100,7 @@
           </div>
         </div>
 
-        <!-- Regenerate result -->
+        <!-- New token result -->
         <div v-if="newToken" class="new-token-banner">
           <h4>New Token Generated</h4>
           <p class="warning">Save this now — it will only be shown once!</p>
@@ -119,21 +109,26 @@
         </div>
       </section>
 
-      <!-- Node List -->
+      <!-- Available Nodes -->
       <section class="card-section">
         <h3>Available Nodes</h3>
         <div v-if="nodesLoading" class="loading">Loading nodes…</div>
         <div v-if="nodesError" class="error-msg">{{ nodesError }}</div>
-        <div v-if="nodes.length > 0" class="node-list">
-          <div v-for="(node, i) in nodes" :key="i" class="node-item">
-            <span class="node-icon">🔗</span>
-            <span class="node-name">{{ node }}</span>
+        <div v-if="nodes.length" class="node-grid">
+          <div v-for="(node, i) in nodes" :key="i" class="node-chip">
+            <span class="node-icon">📡</span>
+            <span>{{ node }}</span>
           </div>
         </div>
-        <div v-if="nodes.length === 0 && !nodesLoading && !nodesError" class="no-data">
-          No nodes available yet. Purchase a plan to get access.
+        <div v-if="!nodes.length && !nodesLoading && !nodesError" class="empty">
+          <p>No nodes available.</p>
         </div>
       </section>
+
+      <!-- Setup Guide -->
+      <div class="guide-link">
+        <router-link to="/account/guide" class="btn-outline">📖 Import Setup Guide</router-link>
+      </div>
     </main>
   </div>
 </template>
@@ -146,7 +141,7 @@ import QrCode from '../components/QrCode.vue'
 
 const auth = useAuthStore()
 
-// Profile (from /api/v1/user/profile)
+// Profile
 const profile = ref<any>({})
 const loading = ref(true)
 const error = ref('')
@@ -157,6 +152,8 @@ const fullToken = ref('')
 const showFullToken = ref(false)
 const tokenLoading = ref(false)
 const tokenError = ref('')
+const copied = ref(false)
+const showQr = ref(false)
 
 // Regenerate
 const showConfirm = ref(false)
@@ -164,14 +161,10 @@ const regenerating = ref(false)
 const newToken = ref('')
 const newCopied = ref(false)
 
-// Node list
+// Nodes
 const nodes = ref<string[]>([])
 const nodesLoading = ref(false)
 const nodesError = ref('')
-
-// QR
-const showQr = ref(false)
-const copied = ref(false)
 
 const statusClass = computed(() => {
   const s = profile.value.subscription_status || ''
@@ -202,20 +195,12 @@ function formatBytes(bytes: number | undefined | null): string {
   return `${b.toFixed(1)} ${units[i]}`
 }
 
-function formatTrafficRemaining(): string {
-  const limit = profile.value.traffic_limit_bytes || 0
-  const used = profile.value.traffic_used_bytes || 0
-  const rem = Math.max(0, limit - used)
-  return formatBytes(rem)
-}
-
 function formatExpiry(ts: number | undefined | null): string {
   if (!ts || ts <= 0) return '—'
   const d = new Date(ts * 1000)
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-// Fetch profile (subscription info)
 async function fetchProfile() {
   loading.value = true
   error.value = ''
@@ -229,7 +214,6 @@ async function fetchProfile() {
   }
 }
 
-// Fetch client token
 async function fetchToken() {
   tokenLoading.value = true
   tokenError.value = ''
@@ -238,7 +222,6 @@ async function fetchToken() {
   try {
     const res = await api.get('/web/client-token')
     tokenData.value = res.data
-    fullToken.value = '' // Full token only available after regenerate or from profile
   } catch (e: any) {
     tokenError.value = e.response?.data?.error || 'Failed to load token'
     tokenData.value = null
@@ -247,26 +230,22 @@ async function fetchToken() {
   }
 }
 
-// Toggle showing full token
 function toggleTokenVisibility() {
   if (showFullToken.value) {
     showFullToken.value = false
     return
   }
-  // If we don't have full token, try to get from profile
   if (profile.value.client_token) {
     fullToken.value = profile.value.client_token
     showFullToken.value = true
   }
 }
 
-// Copy masked token
 async function copyToken() {
   if (!tokenData.value?.token) return
   try {
     await navigator.clipboard.writeText(tokenData.value.token)
   } catch {
-    // Fallback for non-HTTPS
     const ta = document.createElement('textarea')
     ta.value = tokenData.value.token
     document.body.appendChild(ta)
@@ -278,21 +257,17 @@ async function copyToken() {
   setTimeout(() => { copied.value = false }, 2000)
 }
 
-// Confirm regenerate
 function confirmRegenerate() {
   showConfirm.value = true
 }
 
-// Regenerate token
 async function regenerateToken() {
   regenerating.value = true
   showConfirm.value = false
   try {
     const res = await api.post('/web/client-token/regenerate')
     newToken.value = res.data.token
-    // Refresh masked token display
     await fetchToken()
-    // Clear fullToken since it's been regenerated
     fullToken.value = ''
   } catch (e: any) {
     tokenError.value = e.response?.data?.error || 'Failed to regenerate token'
@@ -301,7 +276,6 @@ async function regenerateToken() {
   }
 }
 
-// Copy new token
 async function copyNewToken() {
   if (!newToken.value) return
   try {
@@ -317,7 +291,6 @@ async function copyNewToken() {
   newCopied.value = true
 }
 
-// Fetch node list
 async function fetchNodes() {
   nodesLoading.value = true
   nodesError.value = ''
@@ -346,10 +319,9 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.account-page {
+.subscription-page {
   min-height: 100vh;
   background: #1a1a2e;
-  color: #e0e0e0;
 }
 .topbar {
   display: flex;
@@ -359,129 +331,122 @@ onMounted(() => {
   border-bottom: 1px solid #0f3460;
   gap: 2rem;
 }
-.brand { font-weight: 700; color: #e94560; font-size: 1.2rem; }
-.nav-links { display: flex; gap: 1.25rem; flex: 1; }
-.nav-links a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.nav-links a:hover, .nav-links a.router-link-active { color: #e94560; }
-.user-badge { background: rgba(233,69,96,0.15); color: #e94560; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-.content { max-width: 800px; margin: 0 auto; padding: 2rem; }
-h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
-.subtitle { color: #a0a0b0; margin: 0.25rem 0 1.5rem; font-size: 0.9rem; }
-.loading { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
-.error-msg { color: #ff6b6b; background: rgba(255,107,107,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
-
-/* Card sections */
-.card-section {
-  background: #16213e;
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
+.brand {
+  font-weight: 700;
+  color: #1a73e8;
+  font-size: 1.2rem;
 }
-.card-section h3 { margin: 0 0 1rem; font-size: 1rem; color: #f0f0f0; }
-.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-.section-header h3 { margin: 0; }
-
-/* Subscription info */
-.sub-info { display: grid; gap: 0.75rem; }
-.info-row { display: flex; justify-content: space-between; align-items: center; }
-.info-row .label { color: #a0a0b0; font-size: 0.85rem; }
-.info-row .value { color: #e0e0e0; font-size: 0.9rem; font-weight: 500; }
-.status-badge {
-  display: inline-block;
-  padding: 0.2rem 0.7rem;
-  border-radius: 12px;
+.nav-links { display: flex; gap: 1.25rem; flex: 1; }
+.nav-links a {
+  color: #a0aec0;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.nav-links a:hover, .nav-links a.router-link-active { color: #1a73e8; }
+.user-badge {
+  background: #1a73e8;
+  color: white;
+  padding: 0.3rem 0.8rem;
+  border-radius: 20px;
   font-size: 0.8rem;
   font-weight: 600;
-  text-transform: capitalize;
 }
-.status-badge.active { background: rgba(76,175,80,0.2); color: #81c784; }
-.status-badge.pending { background: rgba(255,193,7,0.2); color: #ffd54f; }
-.status-badge.expired { background: rgba(244,67,54,0.2); color: #e57373; }
-
-/* Progress bar */
-.progress-row { display: flex; align-items: center; gap: 0.75rem; }
-.progress-bar {
-  flex: 1;
-  height: 8px;
-  background: #0f3460;
-  border-radius: 4px;
-  overflow: hidden;
+.content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem;
 }
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #e94560, #ff6b6b);
-  border-radius: 4px;
-  transition: width 0.3s ease;
-}
-.progress-label { color: #a0a0b0; font-size: 0.8rem; min-width: 2.5rem; text-align: right; }
+h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
+.subtitle { color: #a0aec0; margin: 0.25rem 0 2rem; }
 
-/* Token area */
-.token-area { margin-bottom: 1.5rem; }
-.token-display { margin-bottom: 0.75rem; }
-.token-text {
-  display: block;
-  background: #0f3460;
-  padding: 0.75rem 1rem;
-  border-radius: 8px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 0.9rem;
-  color: #e0e0e0;
-  word-break: break-all;
-  user-select: all;
-}
-.token-text.full { background: #1b5e20; }
-.token-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-
-/* QR */
-.qr-area { margin-top: 1rem; padding: 1rem; background: #0f3460; border-radius: 8px; }
-.qr-hint { text-align: center; color: #a0a0b0; font-size: 0.8rem; margin: 0.5rem 0 0; }
-
-/* No token */
-.no-token { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
-
-/* Token danger zone */
-.token-danger { border-top: 1px solid #0f3460; padding-top: 1rem; }
-.danger-hint { color: #a0a0b0; font-size: 0.8rem; margin: 0.5rem 0 0; }
-
-/* Buttons */
-.btn-small {
-  padding: 0.3rem 0.7rem;
-  background: #0f3460;
-  border: 1px solid #1a5276;
-  border-radius: 6px;
-  color: #e0e0e0;
-  cursor: pointer;
-  font-size: 0.8rem;
-  transition: all 0.2s;
-}
-.btn-small:hover { background: #1a5276; }
-.btn-outline {
-  padding: 0.4rem 0.9rem;
-  background: transparent;
+.card-section {
+  background: #16213e;
   border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #e0e0e0;
-  cursor: pointer;
-  font-size: 0.85rem;
-  transition: all 0.2s;
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 1.25rem;
 }
-.btn-outline:hover { border-color: #e94560; color: #e94560; }
-.btn-danger {
-  padding: 0.5rem 1rem;
-  background: rgba(244,67,54,0.2);
-  border: 1px solid #e57373;
-  border-radius: 6px;
-  color: #e57373;
-  cursor: pointer;
-  font-size: 0.85rem;
-  transition: all 0.2s;
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
 }
-.btn-danger:hover { background: rgba(244,67,54,0.3); }
+.section-header h3 { margin: 0; font-size: 1rem; color: #e2e8f0; }
 
-/* Modal */
+.status-badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.status-badge.active { background: #1b4332; color: #68d391; }
+.status-badge.pending { background: #7b5e1e; color: #f6e05e; }
+.status-badge.expired { background: #4a1c1c; color: #fc8181; }
+
+.info-grid { display: flex; flex-direction: column; gap: 0.75rem; }
+.info-row { display: flex; justify-content: space-between; align-items: center; }
+.info-row .label { color: #a0aec0; font-size: 0.85rem; }
+.info-row .value { color: #e2e8f0; font-weight: 500; }
+
+.progress-row { display: flex; align-items: center; gap: 0.75rem; }
+.progress-bar { flex: 1; height: 6px; background: #0f3460; border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: #1a73e8; border-radius: 3px; transition: width 0.3s ease; }
+.progress-label { font-size: 0.75rem; color: #a0aec0; }
+
+.token-area { margin-bottom: 1rem; }
+.token-display {
+  background: #0f3460;
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  word-break: break-all;
+}
+.token-text { font-family: monospace; font-size: 0.85rem; color: #68d391; }
+.token-text.full { display: block; padding: 0.5rem; background: #1a1a2e; border-radius: 4px; margin-top: 0.5rem; }
+.token-actions { display: flex; gap: 0.5rem; }
+.qr-area {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #0f3460;
+  border-radius: 8px;
+  text-align: center;
+}
+.qr-hint { color: #a0aec0; font-size: 0.8rem; margin-top: 0.5rem; }
+.no-token { color: #a0aec0; margin-bottom: 1rem; }
+.token-danger { border-top: 1px solid #0f3460; padding-top: 1rem; }
+.danger-hint { color: #a0aec0; font-size: 0.75rem; margin: 0.5rem 0 0; }
+
+.new-token-banner {
+  border: 1px solid #68d391;
+  background: #1b4332;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+.new-token-banner h4 { margin: 0 0 0.25rem; color: #68d391; }
+.warning { color: #f6e05e; font-size: 0.8rem; margin: 0 0 0.5rem; }
+
+.node-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.node-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #0f3460;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+}
+.node-icon { font-size: 1rem; }
+
+.guide-link { text-align: center; padding: 1rem; }
+
 .modal-overlay {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0; left: 0; width: 100%; height: 100%;
   background: rgba(0,0,0,0.6);
   display: flex;
   align-items: center;
@@ -490,40 +455,49 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 }
 .modal {
   background: #16213e;
-  border-radius: 12px;
-  padding: 2rem;
-  max-width: 480px;
-  width: 90%;
   border: 1px solid #0f3460;
+  border-radius: 10px;
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 90%;
 }
-.modal h4 { margin: 0 0 0.75rem; color: #e57373; font-size: 1.1rem; }
-.modal p { color: #a0a0b0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 1.5rem; }
-.modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
+.modal h4 { margin: 0 0 0.75rem; color: #e2e8f0; }
+.modal p { color: #a0aec0; font-size: 0.9rem; }
+.modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.25rem; }
 
-/* New token banner */
-.new-token-banner {
-  background: #1b5e20;
-  border-radius: 8px;
-  padding: 1.25rem;
-  margin-top: 1rem;
-}
-.new-token-banner h4 { margin: 0 0 0.25rem; color: #81c784; font-size: 1rem; }
-.new-token-banner .warning { color: #ffd54f; font-size: 0.85rem; margin: 0 0 0.75rem; }
-.new-token-banner .btn-outline { margin-top: 0.75rem; border-color: #81c784; color: #81c784; }
-.new-token-banner .btn-outline:hover { border-color: #a5d6a7; color: #a5d6a7; }
+.loading { color: #a0aec0; padding: 1rem 0; text-align: center; }
+.error-msg { color: #fc8181; padding: 0.5rem; background: #4a1c1c; border-radius: 6px; margin-bottom: 1rem; }
+.empty { color: #a0aec0; text-align: center; padding: 1rem; }
 
-/* Node list */
-.node-list { display: grid; gap: 0.5rem; }
-.node-item {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 0.75rem;
-  background: #0f3460;
-  border-radius: 8px;
-  font-size: 0.9rem;
+.btn-outline {
+  background: transparent;
+  border: 1px solid #0f3460;
+  color: #a0aec0;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
 }
-.node-icon { font-size: 1rem; }
-.node-name { color: #e0e0e0; }
-.no-data { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
+.btn-outline:hover { border-color: #1a73e8; color: #1a73e8; }
+.btn-small {
+  background: #1a73e8;
+  border: none;
+  color: white;
+  padding: 0.35rem 0.7rem;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.btn-small:disabled { opacity: 0.5; }
+.btn-danger {
+  background: #c53030;
+  border: none;
+  color: white;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.btn-danger:disabled { opacity: 0.5; }
 </style>

@@ -7,12 +7,15 @@ import '../utils/traffic_helper.dart';
 import '../widgets/traffic_bar.dart';
 import '../widgets/traffic_chart.dart';
 
-/// Real-time traffic usage dashboard with a 7-day bar chart.
+/// Time range options for the traffic chart.
+enum TrafficTimeRange { today, week, month }
+
+/// Real-time traffic usage dashboard with configurable time range charts.
 ///
 /// Provides:
 ///   - Total traffic used / limit with [TrafficBar]
 ///   - Today's usage, session usage (when VPN is connected), remaining days
-///   - 7-day daily traffic bar chart via [TrafficChart]
+///   - Configurable time range bar chart via [TrafficChart] (今日/本周/本月)
 ///   - Pull-to-refresh
 class TrafficScreen extends StatefulWidget {
   const TrafficScreen({super.key});
@@ -31,11 +34,14 @@ class _TrafficScreenState extends State<TrafficScreen> {
   /// Session usage (only tracked while VPN is connected).
   int _sessionBytes = 0;
 
-  /// 7-day daily data: list of (date, bytes).
+  /// Daily data: list of (date, bytes) for the selected time range.
   List<(DateTime, int)> _dailyData = [];
 
   /// Whether daily data has been initialised.
   bool _initialised = false;
+
+  /// Current time range selection.
+  TrafficTimeRange _selectedRange = TrafficTimeRange.week;
 
   @override
   void didChangeDependencies() {
@@ -46,7 +52,8 @@ class _TrafficScreenState extends State<TrafficScreen> {
     }
   }
 
-  /// Generate realistic daily traffic data based on the subscription.
+  /// Generate realistic daily traffic data based on the subscription
+  /// and the selected time range.
   void _generateData() {
     final subService = context.read<SubscriptionService>();
     final sub = subService.subscription;
@@ -58,11 +65,36 @@ class _TrafficScreenState extends State<TrafficScreen> {
     _dailyData = generateDailyTraffic(
       today: DateTime.now(),
       totalUsedBytes: totalUsed > 0 ? totalUsed : 500 * 1024 * 1024, // fallback 500 MB
+      days: _daysForRange(_selectedRange),
     );
 
     // "Today" usage is the last entry in the daily series
     if (_dailyData.isNotEmpty) {
       _todayBytes = _dailyData.last.$2;
+    }
+  }
+
+  /// Number of days to show for the selected time range.
+  int _daysForRange(TrafficTimeRange range) {
+    switch (range) {
+      case TrafficTimeRange.today:
+        return 1;
+      case TrafficTimeRange.week:
+        return 7;
+      case TrafficTimeRange.month:
+        return 30;
+    }
+  }
+
+  /// Chart section title for the selected range.
+  String _chartTitle() {
+    switch (_selectedRange) {
+      case TrafficTimeRange.today:
+        return '今日流量分布';
+      case TrafficTimeRange.week:
+        return '近 7 天流量';
+      case TrafficTimeRange.month:
+        return '近 30 天流量';
     }
   }
 
@@ -82,6 +114,17 @@ class _TrafficScreenState extends State<TrafficScreen> {
     final expireDt = sub.expireDateTime;
     if (expireDt == null) return -1;
     return expireDt.difference(DateTime.now()).inDays.clamp(0, 9999);
+  }
+
+  /// Format a list of bytes values with high precision for small values,
+  /// adapting to the data range.
+  String _formatChartValue(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(3)} GB';
   }
 
   @override
@@ -147,6 +190,10 @@ class _TrafficScreenState extends State<TrafficScreen> {
                 _buildStatsGrid(context, sub, vpn),
                 const SizedBox(height: 16),
 
+                // --- Time range selector ---
+                _buildTimeRangeSelector(context),
+                const SizedBox(height: 12),
+
                 // --- Chart section ---
                 Card(
                   child: Padding(
@@ -159,7 +206,7 @@ class _TrafficScreenState extends State<TrafficScreen> {
                             const Icon(Icons.trending_up, color: Colors.cyanAccent, size: 20),
                             const SizedBox(width: 8),
                             Text(
-                              '近 7 天流量',
+                              _chartTitle(),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -168,14 +215,20 @@ class _TrafficScreenState extends State<TrafficScreen> {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        TrafficChart(
-                          data: _dailyData.map((e) => e.$2).toList(),
-                          labels: _dailyData.map((e) => dayLabel(e.$1)).toList(),
-                          height: 220,
-                        ),
+                        // For single-day view, show detailed breakdown
+                        if (_selectedRange == TrafficTimeRange.today)
+                          ..._buildTodayDetail()
+                        else
+                          TrafficChart(
+                            data: _dailyData.map((e) => e.$2).toList(),
+                            labels: _dailyData.map((e) => dayLabel(e.$1)).toList(),
+                            height: 220,
+                          ),
                         const SizedBox(height: 8),
                         Text(
-                          '每日流量使用情况（绿色=正常，黄色=偏高，红色=即将超限）',
+                          _selectedRange == TrafficTimeRange.today
+                              ? '今日每时段流量分布（模拟数据）'
+                              : '每日流量使用情况（绿色=正常，黄色=偏高，红色=即将超限）',
                           style: TextStyle(
                             color: Colors.grey[500],
                             fontSize: 11,
@@ -201,11 +254,117 @@ class _TrafficScreenState extends State<TrafficScreen> {
     );
   }
 
+  /// Build time range segmented selector.
+  Widget _buildTimeRangeSelector(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(Icons.date_range, size: 18, color: Colors.grey[400]),
+            const SizedBox(width: 8),
+            Text(
+              '时间范围',
+              style: TextStyle(color: Colors.grey[400], fontSize: 13),
+            ),
+            const Spacer(),
+            SegmentedButton<TrafficTimeRange>(
+              segments: const [
+                ButtonSegment(
+                  value: TrafficTimeRange.today,
+                  label: Text('今日', style: TextStyle(fontSize: 12)),
+                ),
+                ButtonSegment(
+                  value: TrafficTimeRange.week,
+                  label: Text('本周', style: TextStyle(fontSize: 12)),
+                ),
+                ButtonSegment(
+                  value: TrafficTimeRange.month,
+                  label: Text('本月', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+              selected: {_selectedRange},
+              onSelectionChanged: (Set<TrafficTimeRange> selection) {
+                setState(() {
+                  _selectedRange = selection.first;
+                  _generateData();
+                });
+              },
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Build detailed breakdown for today's view.
+  List<Widget> _buildTodayDetail() {
+    final hourBytes = _dailyData.isNotEmpty ? _dailyData.last.$2 : 0;
+    // Generate hourly distribution from today's total
+    final hourlyData = <int>[];
+    final now = DateTime.now();
+    final currentHour = now.hour;
+    final seed = hourBytes.isEven ? 7 : 13;
+
+    for (int h = 0; h <= currentHour; h++) {
+      final fraction = (seed * (h + 1) * 3) % 100;
+      final bytes = (hourBytes * fraction / 2000).round().clamp(0, hourBytes);
+      hourlyData.add(bytes > 0 ? bytes : hourBytes ~/ 24);
+    }
+
+    return [
+      SizedBox(
+        height: 180,
+        child: TrafficChart(
+          data: hourlyData,
+          labels: hourlyData.asMap().entries.map((e) => '${e.key}时').toList(),
+          height: 180,
+        ),
+      ),
+      const SizedBox(height: 8),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildTodayStat('累计使用', formatBytes(hourBytes), Colors.cyanAccent),
+          _buildTodayStat('最大时段', _formatChartValue(hourlyData.reduce((a, b) => a > b ? a : b)), Colors.orangeAccent),
+          _buildTodayStat('平均时段', _formatChartValue(hourlyData.isEmpty ? 0 : hourlyData.reduce((a, b) => a + b) ~/ hourlyData.length), Colors.blueAccent),
+        ],
+      ),
+    ];
+  }
+
+  Widget _buildTodayStat(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(color: Colors.grey[400], fontSize: 10),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Build the main traffic usage bar card.
   Widget _buildTrafficBarCard(BuildContext context, SubscriptionInfo? sub) {
     final usedBytes = sub != null
         ? (_trafficLimitBytes - sub.trafficRemainingBytes).clamp(0, _trafficLimitBytes)
         : 0;
+    final realTotal = sub != null
+        ? (sub.trafficRemainingBytes + usedBytes)
+        : _trafficLimitBytes;
     final remainingGb = (sub?.trafficRemainingBytes ?? 0) / (1024 * 1024 * 1024);
 
     return Card(
@@ -250,11 +409,32 @@ class _TrafficScreenState extends State<TrafficScreen> {
             const SizedBox(height: 14),
             TrafficBar(
               usedBytes: usedBytes,
-              totalBytes: _trafficLimitBytes,
+              totalBytes: realTotal,
               key: ValueKey('traffic_$usedBytes'),
               label: remainingGb >= 0
                   ? '剩余 ${formatGb(sub?.trafficRemainingBytes ?? 0)} GB'
                   : null,
+            ),
+            const SizedBox(height: 8),
+            // Additional precision row
+            Row(
+              children: [
+                Text(
+                  '已用 ${formatBytes(usedBytes)}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[500],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '/ 总计 ${formatBytes(realTotal)}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
             ),
           ],
         ),

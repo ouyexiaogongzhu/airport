@@ -70,14 +70,15 @@ String dayLabel(DateTime dt) {
 List<(DateTime, int)> generateDailyTraffic({
   required DateTime today,
   required int totalUsedBytes,
+  int days = 7,
 }) {
   final results = <(DateTime, int)>[];
   // Rough daily average from total used
-  final avg = (totalUsedBytes / 7).round();
+  final avg = (totalUsedBytes / days).round();
   // We'll use a pseudo-random distribution based on totalUsedBytes
   final seed = totalUsedBytes.isEven ? 1 : -1;
 
-  for (int i = 6; i >= 0; i--) {
+  for (int i = days - 1; i >= 0; i--) {
     final date = today.subtract(Duration(days: i));
     // Vary around the average with a deterministic spread
     final variation = ((seed * (i + 1) * 37) % 101 - 50); // -50..+50 percent
