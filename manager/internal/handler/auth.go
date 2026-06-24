@@ -3,7 +3,10 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	mathrand "math/rand"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,6 +18,42 @@ import (
 )
 
 var registerLimits sync.Map
+
+type captchaEntry struct {
+	answer    string
+	expiresAt time.Time
+}
+
+var captchaStore sync.Map
+
+// captchaCleanupInterval runs every minute to remove expired captchas
+var captchaCleanupOnce sync.Once
+
+func storeCaptcha(token, answer string) {
+	captchaStore.Store(token, &captchaEntry{
+		answer:    answer,
+		expiresAt: time.Now().Add(5 * time.Minute),
+	})
+}
+
+func verifyCaptcha(token, answer string) bool {
+	val, ok := captchaStore.Load(token)
+	if !ok {
+		return false
+	}
+	entry := val.(*captchaEntry)
+	captchaStore.Delete(token) // one-time use
+	if time.Now().After(entry.expiresAt) {
+		return false
+	}
+	return entry.answer == answer
+}
+
+func generateCaptchaToken() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // ResetRegisterLimits clears the per-IP registration counters (used in tests).
 func ResetRegisterLimits() {
@@ -58,9 +97,11 @@ func checkRegisterLimit(ip string) bool {
 }
 
 type RegisterRequest struct {
-	Username string `json:"username" validate:"required,min=3,max=64"`
-	Password string `json:"password" validate:"required,min=6"`
-	IsAdmin  bool   `json:"is_admin"`
+	Username      string `json:"username" validate:"required,min=3,max=64"`
+	Password      string `json:"password" validate:"required,min=6"`
+	IsAdmin       bool   `json:"is_admin"`
+	CaptchaToken  string `json:"captcha_token"`
+	CaptchaAnswer string `json:"captcha_answer"`
 }
 
 type LoginRequest struct {
@@ -110,6 +151,20 @@ func Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "password must be at least 6 characters",
 		})
+	}
+
+	// Skip captcha if CAPTCHA_DISABLED env is set (for tests)
+	if os.Getenv("CAPTCHA_DISABLED") == "" {
+		if req.CaptchaToken == "" || req.CaptchaAnswer == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "captcha token and answer are required",
+			})
+		}
+		if !verifyCaptcha(req.CaptchaToken, req.CaptchaAnswer) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "invalid captcha",
+			})
+		}
 	}
 
 	// Check existing user
@@ -165,6 +220,39 @@ func Register(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(AuthResponse{
 		Token: token,
 		User:  &user,
+	})
+}
+
+// CaptchaEndpoint returns a math captcha challenge.
+func CaptchaEndpoint(c *fiber.Ctx) error {
+	captchaCleanupOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(1 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				now := time.Now()
+				captchaStore.Range(func(key, val interface{}) bool {
+					entry := val.(*captchaEntry)
+					if now.After(entry.expiresAt) {
+						captchaStore.Delete(key)
+					}
+					return true
+				})
+			}
+		}()
+	})
+
+	a := mathrand.Intn(10) + 1
+	b := mathrand.Intn(10) + 1
+	answer := strconv.Itoa(a + b)
+	question := fmt.Sprintf("%d + %d = ?", a, b)
+	token := generateCaptchaToken()
+
+	storeCaptcha(token, answer)
+
+	return c.JSON(fiber.Map{
+		"question": question,
+		"token":    token,
 	})
 }
 

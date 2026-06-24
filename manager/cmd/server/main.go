@@ -49,6 +49,7 @@ func main() {
 
 	// API v1 routes
 	v1 := app.Group("/api/v1")
+	v1.Get("/captcha", handler.CaptchaEndpoint)
 
 	// Public routes (rate limited: 10 req/s per IP)
 	public := v1.Group("/public", middleware.RateLimit(middleware.RateGroupPublic))
