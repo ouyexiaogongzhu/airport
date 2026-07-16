@@ -11,17 +11,14 @@ Proxy service platform for **rfplay.uk**.
 
 ## Key Decisions (Summary)
 
+> Full spec: [airport_system_design.md §24](airport_system_design.md#24-additional-recommendations-suggested-not-yet-decided)
+
 | Area | Decision |
 | :--- | :--- |
 | **官网/Admin 登录** | httpOnly cookie + CSRF；**禁止** localStorage JWT |
 | **Flutter 登录** | JWT Bearer + `X-Client: flutter` + secure storage |
-| **Token 导入** | `rf_`（官网用户）/ `at_`（Admin 发放，免注册） |
-| **`at_` 规则** | immutable；renew = 作废+发新；`max_devices=0` 不限设备 |
 | **节点认证** | 连接时 `POST /api/node/verify-token`；sync **无** user_list |
-| **CF-WS 节点** | Nginx 伪装站 + WS 反代；Origin PEM；CF IP 防火墙 |
-| **REALITY 节点** | 直连；同 online verify |
 | **支付** | BEpusdt + Payoneer；仅官网；webhook → `api.rfplay.uk` |
-| **邮件** | Resend/Brevo 发信；CF Email Routing 收信转 Gmail |
 
 Full spec: [airport_system_design.md](airport_system_design.md)
 
@@ -35,10 +32,10 @@ airport-system/
 ├── daemon/              # Node agent（verify + sync + Loki）
 ├── client/              # Flutter VPN app
 ├── xray-core/           # Fork of XTLS/Xray-core
-├── airport_system_design.md
-├── implementation_plan.md
-├── task.md
-└── README.md
+├── shared/              # Portal & Admin 共用代码 (types, api, utils)
+├── deploy/              # 部署脚本
+├── .env.example files   # 各服务环境变量模板
+└── docs/                # airport_system_design.md, PLAN.md, task.md
 ```
 
 ### Cloudflare Pages
@@ -57,6 +54,16 @@ Portal/Admin: `axios.withCredentials = true` + CSRF header
 * [Architecture & API](airport_system_design.md) — 系统架构设计
 * [Implementation plan](implementation_plan.md) — （归档）旧 Sprint 计划
 * [Task checklist](task.md) — （归档）旧任务清单
+
+## Environment Variables
+
+Template files (copy to `.env` and fill in real values):
+
+* `manager.env.example` — Manager API server
+* `portal.env.example` — Portal (Vite)
+* `admin.env.example` — Admin Dashboard (Vite)
+
+See [Appendix B](airport_system_design.md#appendix-b-environment-variables) for the full variable reference.
 
 ## DNS (rfplay.uk)
 

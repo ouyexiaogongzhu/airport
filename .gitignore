@@ -1,11 +1,26 @@
 # Go
 manager/data/
 *.exe
+*.test
 
 # Node / Vue
 node_modules/
 dist/
 *.local
+
+# Build output
+portal/dist/
+admin/dist/
+xray-core/
+
+# Secrets & runtime
+.env
+.env.*
+!*.env.example
+*.pem
+*.key
+manager/data/*.db
+manager/data/*.db-*
 
 # Flutter
 client/build/
