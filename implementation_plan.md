@@ -1,28 +1,86 @@
-# Implementation Plan
-
-> ⚠️ **此文档已归档。** 当前交付计划请参见 **[PLAN.md](PLAN.md)**（Phase 0-5）。
+# Implementation Plan: Airport Proxy System (PoC & MVP)
 
 ---
 
-## 历史
+## 1. Goal Description
 
-本文档记录了 RFPlay Airport 项目初期的 Sprint 0-4 实施计划（2026-06 前），已被 [PLAN.md](PLAN.md) 中的 Phase 0-5 交付计划取代。
+* **Manager API** (`api.rfplay.uk`): Go Fiber `:443` + Origin PEM, CORS, webhooks, online verify.
+* **User Portal** (`www.rfplay.uk`): Vue 3 CF Pages — cookie + CSRF auth, register, pay.
+* **Admin Dashboard** (`admin.rfplay.uk`): Vue 3 CF Pages — cookie + CSRF, token 发放, ops.
+* **Daemon + Xray-core**: online verify, sync traffic, CF-WS Nginx decoy.
+* **Flutter**: Bearer JWT, Token 导入, VPN.
 
-### 关键变更
+---
 
-| 旧结构 | 新结构 |
-|--------|--------|
-| Sprint 0: 环境搭建 | Phase 0: **订阅系统**（核心缺失） |
-| Sprint 1: Manager Core | Phase 1: 支付集成 |
-| Sprint 2: Portal+Admin 前端 | Phase 2: 安全加固 |
-| Sprint 3: Flutter 客户端 | Phase 3: Flutter 客户端（**MVP+**） |
-| Sprint 4: Daemon+Xray | Phase 4: E2E 验收测试 |
-| — | Phase 5: 生产部署 |
+## 2. Decided Specifications
 
-### 变更原因
+> Full details in [`airport_system_design.md`](airport_system_design.md) §24 — Decided Specifications Summary.
 
-1. **MVP 范围收紧**: Flutter 客户端从首发移到 MVP+，用户先通过第三方客户端使用
-2. **订阅系统优先级提升**: 机场核心功能（买套餐→拿链接→连接）未实现，列为 Phase 0
-3. **安全/支付/部署自成 Phase**: 不再混在 Sprint 中，独立验收
+---
 
-详见 [PLAN.md](PLAN.md)。
+## 3. Repository Structure
+
+> See [`airport_system_design.md`](airport_system_design.md) §25.2 and [`PLAN.md`](PLAN.md) §2 for the full monorepo layout.
+
+---
+
+## 4. Manager (Phase 3a)
+
+* Remove `go:embed`
+* CORS `AllowCredentials` + CSRF middleware
+* Cookie session for `/api/web/*`; Bearer for `/api/client/*` + Flutter login
+* `GET /api/auth/csrf`, `POST /api/auth/logout`, `POST /api/auth/refresh`
+* Dual login: browser Set-Cookie vs `X-Client: flutter` JSON
+* `POST /api/node/verify-token`; slim `/api/node/sync` (traffic + config only)
+* `issued_tokens`: batch, immutable, `/renew` (revoke + new `at_`)
+* Payment callbacks; Resend email on register
+* Env: `PORTAL_ORIGIN`, `ADMIN_ORIGIN`, `TLS_CERT_FILE`, `RESEND_API_KEY`
+
+---
+
+## 5. Cloudflare Pages
+
+### Portal (`portal/`)
+* Build: `npm ci && npm run build` → `dist`
+* Env: `VITE_API_BASE_URL=https://api.rfplay.uk`
+* Auth: `withCredentials` + `X-CSRF-Token`; mount时 `GET /api/auth/csrf`
+* Domain: `www.rfplay.uk`
+
+### Admin (`admin/`)
+* Same pattern; cookies: `admin_session`, `admin_csrf`
+* Domain: `admin.rfplay.uk`
+
+### API (`api.rfplay.uk`)
+* CF proxied → Manager `:443`
+* Full (Strict) + Origin CA
+
+---
+
+## 6. Execution Plan
+
+| Phase | Deliverable |
+| :--- | :--- |
+| **1** | Clone Xray-core |
+| **2** | Xray: verify via Daemon, rate limit, P2P audit, logs |
+| **3a** | Manager API |
+| **3b** | Portal Vue → `www` |
+| **3c** | Admin Vue → `admin` |
+| **4** | Daemon + CF-WS Nginx + REALITY nodes |
+| **5** | Flutter client |
+| **6** | E2E: pay → connect → multi-device verify |
+
+---
+
+## 7. Verification
+
+| Test | Expected |
+| :--- | :--- |
+| `www` login | Set-Cookie; body `{ user }` only; no localStorage JWT |
+| `www` POST order | CSRF required; cookie auth |
+| `admin` login | `admin_session` cookie; CSRF on mutations |
+| Flutter login | `X-Client: flutter` → Bearer in body |
+| Node connect | verify-token to Manager; no local HMAC secret |
+| Node compromised | No user_list leak from sync |
+| `at_` renew | Old token revoked; new token required in Flutter |
+| Webhook | BEpusdt callback on `api.rfplay.uk` |
+| Wrong CORS origin | Blocked |

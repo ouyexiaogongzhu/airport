@@ -516,7 +516,7 @@ The Flutter client dynamically generates a local Xray config JSON:
 
 ---
 
-## 3. Database Schema Design (SQLite)
+## 3A. Database Schema Design (SQLite)
 
 ```sql
 -- Users and Subscription info
@@ -1104,6 +1104,30 @@ sequenceDiagram
     Note over Web: User opens Flutter app to connect VPN
 ```
 
+### 4.8 Order Status State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : POST /api/web/orders
+    pending --> paid : webhook callback (status=2 / payment.completed)
+    pending --> failed : webhook callback (status=3 / expired)
+    pending --> failed : 30 min timeout (cron)
+    paid --> refunded : Admin manual refund
+    failed --> [*]
+    refunded --> [*]
+```
+
+| From → To | Trigger | Idempotent? |
+|:---|:---|:---|
+| `pending` → `paid` | BEpusdt status=2 or Payoneer `payment.completed` | ✅ duplicate callback ignored |
+| `pending` → `failed` | BEpusdt status=3 or order timeout (30 min) | ✅ |
+| `paid` → `refunded` | Admin dashboard manual action | ✅ |
+
+**Notes**:
+- `pending` → `paid` triggers §4.5 auto-activation (subscription update).
+- `failed` orders are terminal; user must create a new order.
+- `refunded` does **not** auto-reverse subscription; Admin must manually adjust user status.
+
 ---
 
 ## 5. Per-User Rate Limiting (In-Core Token Bucket)
@@ -1232,7 +1256,7 @@ On revoke/expiry/suspend: next connection **`verify-token` rejects immediately**
 
 ## 8. Cloudflare DNS Integration
 
-### 7.1 Create DNS Record (CF-WS Nodes Only)
+### 8.1 Create DNS Record (CF-WS Nodes Only)
 * **URL**: `POST https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records`
 * **Payload**:
   ```json
@@ -1509,7 +1533,7 @@ Flutter 所有 API 请求 base = `api_base_url`；续费按钮打开 `portal_url
 | **Protocol** | VLESS (WS + REALITY dual-mode) |
 | **Transport (CF nodes)** | WebSocket over TLS (WSS) via domain name |
 | **Transport (REALITY nodes)** | TCP + REALITY + uTLS fingerprint + dynamic port |
-| **Token Format** | 68-byte binary Option B — see §19 |
+| **Token Format** | 68-byte binary Option B — see §22 |
 | **HMAC Rotation** | Every 5 hours; dual-secret overlap **30 minutes** |
 | **Rate Limiting** | In-core Go token bucket per user session |
 | **Subscription Format** | Private JSON (self-built Flutter client only) |
@@ -1538,9 +1562,9 @@ Flutter 所有 API 请求 base = `api_base_url`；续费按钮打开 `portal_url
 | **PoC Database** | SQLite; migrate to PostgreSQL post-MVP when scaling |
 | **P2P Policy** | **Audit only** — detect and log, never block (§13) |
 | **Certificate Renewal** | **Manual**; Origin CA auto-renewal deferred (lowest priority, §14) |
-| **Xray Log Interface** | Push-primary → public Loki; §15 |
-| **GeoIP/GeoSite Updates** | Manager-hosted; monthly check against v2fly sources (§16) |
-| **CF Analytics Cross-Check** | Weekly batch reconciliation (§17) |
+| **Xray Log Interface** | Push-primary → public Loki; §18 |
+| **GeoIP/GeoSite Updates** | Manager-hosted; monthly check against v2fly sources (§19) |
+| **CF Analytics Cross-Check** | Weekly batch reconciliation (§20) |
 
 ---
 
@@ -1689,7 +1713,7 @@ for ip in $(curl -s https://www.cloudflare.com/ips-v4); do ufw allow from $ip to
 
 ---
 
-## 14A. Transactional Email (Custom Domain)
+## 15. Transactional Email (Custom Domain)
 
 **Use case**: 注册验证码、邮箱验证链接、登录 magic link、密码重置（官网）；**不**用 Gmail 个人 `@gmail.com` 作为发件域名。
 
@@ -1718,7 +1742,7 @@ Flutter **`at_` / magic login token** 仍走 App 内 Token 导入，**不**邮�
 
 ---
 
-## 14B. Multi-Node & Multi-Device Token Flow
+## 16. Multi-Node & Multi-Device Token Flow
 
 **Question**: 用户登录后，多台 Xray 节点如何获取该用户的连接 token？多设备能否同时连不同节点？
 
@@ -1759,7 +1783,7 @@ sequenceDiagram
 
 ---
 
-## 14C. User Traffic Analytics
+## 17. User Traffic Analytics
 
 **Decided**: **Manager DB（节点上报）为主数据源**；Cloudflare Analytics **仅作 CF-WS 节点对账**；Loki **作明细/审计**。
 
@@ -1767,7 +1791,7 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- |
 | **Primary** | Daemon `traffic_reports` → `/api/node/sync` → `users.traffic_used_bytes` + `traffic_logs` | ✅ | **所有节点**（CF-WS + REALITY） |
 | **Admin 图表** | Manager 聚合 `traffic_logs` by `user_id` / `node_id` / day | ✅ | MVP Admin Dashboard |
-| **CF cross-check** | CF GraphQL Analytics API（§17） | ❌（仅节点级） | CF-WS 节点带宽 vs 节点上报，weekly |
+| **CF cross-check** | CF GraphQL Analytics API（§20） | ❌（仅节点级） | CF-WS 节点带宽 vs 节点上报，weekly |
 | **Detail / audit** | Loki access logs（dest_domain, bytes, IP） | ✅ drill-down | 滥用分析、P2P audit |
 
 **Why not CF-only for user traffic**: Cloudflare 看不到 REALITY 直连流量，也无法按 `user_id` 拆分（无 dynamic token 上下文）。
@@ -1779,9 +1803,9 @@ sequenceDiagram
 
 ---
 
-## 15. Xray Log Push Interface (Loki)
+## 18. Xray Log Push Interface (Loki)
 
-### 15.1 Architecture
+### 18.1 Architecture
 
 **Decided**: Daemon **push-only** to **publicly exposed Loki** push endpoint. No Manager→Node reverse tunnel.
 
@@ -1797,7 +1821,7 @@ flowchart LR
 
 If Manager→Node Pull is needed later: Daemon maintains outbound WebSocket to Manager (reverse tunnel); deferred post-MVP.
 
-### 15.2 Log Fields — Decided (Plaintext)
+### 18.2 Log Fields — Decided (Plaintext)
 
 | Field | Storage | Source |
 | :--- | :--- | :--- |
@@ -1807,16 +1831,16 @@ If Manager→Node Pull is needed later: Daemon maintains outbound WebSocket to M
 | `client_src_ip` | Plaintext | REALITY: inbound remote addr |
 | `cf_connecting_ip` | Plaintext | CF-WS: `CF-Connecting-IP` header (both IPs recorded when available) |
 
-### 15.3 Sampling & Retention
+### 18.3 Sampling & Retention
 
 | Type | Sampling |
 | :--- | :--- |
 | `access` | Adaptive (10% at >1000/s, 50% at >200/s) |
 | `error`, `audit` | Full retention, never sampled |
 
-Loki retention: 30 days hot. For big-data analytics (see §18), export to cold storage before expiry.
+Loki retention: 30 days hot. For big-data analytics (see §21), export to cold storage before expiry.
 
-### 15.4 Loki Public Exposure Security
+### 18.4 Loki Public Exposure Security
 
 * Push endpoint: HTTPS + per-node Bearer token（Admin 配置，存 `nodes` 表；**不**经 sync 下发 secret）。
 * IP allowlist optional (secondary defense).
@@ -1824,7 +1848,7 @@ Loki retention: 30 days hot. For big-data analytics (see §18), export to cold s
 
 ---
 
-## 16. GeoIP / GeoSite Update Strategy (Recommended)
+## 19. GeoIP / GeoSite Update Strategy (Recommended)
 
 * **Hosting**: Manager serves `geoip.dat` / `geosite.dat` at `/assets/` (already in subscription JSON).
 * **Update cadence**: check [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community) releases **monthly**; rebuild `.dat` files.
@@ -1833,7 +1857,7 @@ Loki retention: 30 days hot. For big-data analytics (see §18), export to cold s
 
 ---
 
-## 17. Cloudflare Analytics Cross-Validation (Recommended)
+## 20. Cloudflare Analytics Cross-Validation (Recommended)
 
 Compare node-reported traffic vs Cloudflare zone analytics for CF-WS nodes:
 
@@ -1848,7 +1872,7 @@ Compare node-reported traffic vs Cloudflare zone analytics for CF-WS nodes:
 
 ---
 
-## 18. Big Data Analytics Preparation (Recommended)
+## 21. Big Data Analytics Preparation (Recommended)
 
 Plaintext logs in Loki are suitable for future analytics if structured consistently from day one:
 
@@ -1861,9 +1885,9 @@ Plaintext logs in Loki are suitable for future analytics if structured consisten
 
 ---
 
-## 19. Dynamic Token Binary Format (68 Bytes) — **Decided: Option B**
+## 22. Dynamic Token Binary Format (68 Bytes) — **Decided: Option B**
 
-### 19.1 Layout
+### 22.1 Layout
 
 | Offset | Size | Field | Description |
 | :--- | :--- | :--- | :--- |
@@ -1877,7 +1901,7 @@ Total: **68 bytes**. Transport encoding: **Base64URL** (no padding) in WS header
 
 Default token TTL: **300 seconds** (5 min), enforced as `issued_at + 300 >= now()`.
 
-### 19.2 Issuance (Manager `/api/auth/token`)
+### 22.2 Issuance (Manager `/api/auth/token`)
 
 ```go
 func IssueToken(userID uuid.UUID, deviceFP [16]byte, secret []byte) []byte {
@@ -1893,7 +1917,7 @@ func IssueToken(userID uuid.UUID, deviceFP [16]byte, secret []byte) []byte {
 }
 ```
 
-### 19.3 Verification (Manager-only — nodes call `/api/node/verify-token`)
+### 22.3 Verification (Manager-only — nodes call `/api/node/verify-token`)
 
 **Decided**: HMAC 验证 **仅在 Manager** 执行。Xray inbound 收到 token 后调用 Daemon → Manager；**节点不存储 HMAC secret**。
 
@@ -1911,13 +1935,47 @@ func VerifyTokenOnManager(token []byte, secrets [][]byte) (*TokenPayload, error)
 }
 ```
 
+**Nonce Storage (Decided)**: in-memory concurrent map with TTL-based eviction.
+
+```go
+type NonceStore struct {
+    mu    sync.RWMutex
+    seen  map[[8]byte]time.Time  // nonce → expiry
+    ttl   time.Duration          // = tokenTTL (300s)
+}
+
+func (s *NonceStore) Seen(nonce [8]byte) bool {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    // Evict expired entries periodically (every 60s or on insert)
+    if time.Now().After(s.nextEvict) {
+        for k, exp := range s.seen {
+            if time.Now().After(exp) { delete(s.seen, k) }
+        }
+        s.nextEvict = time.Now().Add(60 * time.Second)
+    }
+    if exp, ok := s.seen[nonce]; ok && time.Now().Before(exp) {
+        return true  // replay detected
+    }
+    s.seen[nonce] = time.Now().Add(s.ttl)
+    return false
+}
+```
+
+| Concern | Answer |
+|:---|:---|
+| **Storage** | In-memory (`map`); not persisted to DB |
+| **Restart behavior** | Nonce set resets on Manager restart → short replay window (≤5 min, bounded by token TTL) |
+| **Memory bound** | At most ~`verify_rate * tokenTTL` entries; at 100 req/s × 300s = 30K entries × 16 bytes ≈ 480 KB |
+| **Why not DB?** | Verify-token is hot-path; in-memory avoids SQLite write contention; token TTL already limits window |
+
 Daemon 本地 **仅缓存 verify 结果**（≤60s），不缓存 secret。
 
-### 19.4 HMAC Dual-Secret Overlap
+### 22.4 HMAC Dual-Secret Overlap
 
 **30 minutes**. **Manager only** (issuance + verify-token). Nodes no longer receive secrets via sync.
 
-### 19.5 REALITY Transport — VLESS Addon (Phase 2 Implementation Detail)
+### 22.5 REALITY Transport — VLESS Addon (Phase 2 Implementation Detail)
 
 CF-WS carries the 68-byte token as Base64URL in the WS header — straightforward.
 
@@ -1925,7 +1983,7 @@ REALITY uses raw TCP without WS headers. The 68 bytes ride inside the **VLESS pr
 
 ---
 
-## 20. PoC Database Note
+## 23. PoC Database Note
 
 **SQLite** for PoC/MVP: single-file, zero-config, embedded in Manager binary directory. Sufficient for < 10K users and single Manager instance.
 
@@ -1935,7 +1993,7 @@ This is a **deployment scale decision**, not a feature difference. All SQL in th
 
 ---
 
-## 21. Additional Recommendations (Suggested, Not Yet Decided)
+## 24. Additional Recommendations (Suggested, Not Yet Decided)
 
 | # | Area | Recommendation |
 | :--- | :--- | :--- |
@@ -1945,16 +2003,122 @@ This is a **deployment scale decision**, not a feature difference. All SQL in th
 | 4 | **Subscription** | ~~到期前 3/1 天提醒~~ → **已纳入 §3.3（7/3/1 天）** |
 | 5 | **Subscription** | 到期后 **24h 宽限期**（`grace`）— deferred |
 | 6 | **Orders** | 订单历史：`GET /api/web/orders` |
-| 7 | **Security** | Resend/Brevo 邮件验证（§14A）；注册 rate limit 仍建议 |
+| 7 | **Security** | Resend/Brevo 邮件验证（§15）；注册 rate limit 仍建议 |
 | 8 | **Devices** | 删设备后 verify 拒绝；dynamic token 5min 自然过期 |
 | 9 | **Analytics** | 支付漏斗写入 Loki（按 provider 分维度） |
 | 10 | **Admin** | 订单列表 + 手动退款（`refunded`） |
 
 ---
 
-## 22. GitHub & Deployment (rfplay.uk)
+## Appendix A: API Error Codes
 
-### 22.1 Domain Map
+> Unified error code reference for Manager API responses. All error responses follow the format:
+> ```json
+> { "error": "ERROR_CODE", "message": "Human-readable description" }
+> ```
+
+### Auth Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `INVALID_CREDENTIALS` | 401 | Wrong username/password | Portal, Admin, Flutter |
+| `INVALID_CLIENT_TOKEN` | 401 | `rf_` or `at_` token not found or hash mismatch | Flutter token-login |
+| `CSRF_INVALID` | 403 | `X-CSRF-Token` header missing or mismatched | Portal, Admin |
+| `SESSION_EXPIRED` | 401 | Session cookie JWT expired | Portal, Admin |
+| `REFRESH_INVALID` | 401 | Refresh cookie invalid or revoked | Portal, Admin |
+
+### Subscription Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `SUBSCRIPTION_PENDING` | 403 | User registered but never paid | Flutter, Portal |
+| `SUBSCRIPTION_EXPIRED` | 403 | `expire_time < now()` | Flutter, Portal |
+| `SUBSCRIPTION_SUSPENDED` | 403 | Traffic exhausted (`one_time` mode) | Flutter |
+| `TRAFFIC_EXCEEDED` | 403 | `traffic_used_bytes >= traffic_limit_bytes` | Node verify-token |
+
+### Device Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `DEVICE_LIMIT_EXCEEDED` | 403 | New device but `devices >= max_devices` | Flutter `/api/auth/token` |
+| `DEVICE_NOT_FOUND` | 404 | Delete non-existent device | Flutter, Portal |
+
+### Token Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `TOKEN_EXPIRED` | 403 | Dynamic token `issued_at + 300s < now()` | Node verify-token |
+| `TOKEN_REPLAY` | 403 | Nonce already seen | Node verify-token |
+| `TOKEN_BAD_SIG` | 403 | HMAC verification failed | Node verify-token |
+| `TOKEN_INVALID` | 400 | Token wrong length (not 68 bytes) | Node verify-token |
+| `TOKEN_REVOKED` | 403 | `at_` token status = `revoked` | Flutter token-login |
+
+### Node Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `NODE_TOKEN_INVALID` | 401 | `X-Node-Token` header missing or wrong | Daemon sync/verify |
+| `NODE_NOT_FOUND` | 404 | `node_id` not in `nodes` table | Daemon sync |
+
+### Payment Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `ORDER_NOT_FOUND` | 404 | Order ID doesn't exist or belongs to other user | Portal poll |
+| `PAYMENT_SIGNATURE_INVALID` | 400 | Webhook signature verification failed | BEpusdt, Payoneer |
+| `PLAN_NOT_FOUND` | 404 | `plan_id` doesn't exist or disabled | Portal checkout |
+| `PLAN_DISABLED` | 400 | Plan `enabled = 0` | Portal checkout |
+
+### Admin Errors
+
+| Code | HTTP | Trigger | Used by |
+|:---|:---|:---|:---|
+| `ADMIN_FORBIDDEN` | 403 | Non-admin user accessing `/api/admin/*` | Admin |
+| `TOKEN_IMMUTABLE` | 400 | Attempting to PATCH `at_` fields (not allowed) | Admin |
+| `BATCH_LIMIT_EXCEEDED` | 400 | Batch count > 1000 | Admin |
+
+---
+
+## Appendix B: Environment Variables
+
+> Template files: `manager.env.example`, `portal.env.example`, `admin.env.example`
+
+### Manager (`manager/`)
+
+| Variable | Required | Default | Description |
+|:---|:---|:---|:---|
+| `LISTEN_ADDR` | Yes | `:443` | Listen address |
+| `TLS_CERT_FILE` | Prod | — | Origin PEM cert path |
+| `TLS_KEY_FILE` | Prod | — | Origin PEM key path |
+| `PORTAL_ORIGIN` | Yes | — | `https://www.rfplay.uk` |
+| `ADMIN_ORIGIN` | Yes | — | `https://admin.rfplay.uk` |
+| `API_PUBLIC_URL` | Yes | — | `https://api.rfplay.uk` |
+| `DB_PATH` | No | `./data/airport.db` | SQLite file path |
+| `HMAC_SECRET_CURRENT` | Yes | — | Current HMAC key (hex 32) |
+| `HMAC_SECRET_PREVIOUS` | No | — | Previous key during rotation |
+| `RESEND_API_KEY` | No | — | Resend API key for emails |
+| `MAIL_FROM` | No | `noreply@rfplay.uk` | Sender address |
+| `BEPUSDT_HOST` | No | — | BEpusdt instance URL |
+| `BEPUSDT_AUTH_TOKEN` | No | — | BEpusdt auth token |
+| `PAYONEER_API_KEY` | No | — | Payoneer API key |
+| `PAYONEER_MERCHANT_ID` | No | — | Payoneer merchant ID |
+| `PAYONEER_WEBHOOK_SECRET` | No | — | Payoneer webhook signing secret |
+| `CF_API_TOKEN` | No | — | Cloudflare API token (DNS management) |
+| `CF_ZONE_ID` | No | — | Cloudflare Zone ID |
+| `LOKI_PUSH_URL` | No | — | Loki push endpoint |
+| `LOKI_PUSH_TOKEN` | No | — | Loki Bearer token |
+
+### Portal & Admin (`portal/`, `admin/`)
+
+| Variable | Required | Default | Description |
+|:---|:---|:---|:---|
+| `VITE_API_BASE_URL` | Yes | — | `https://api.rfplay.uk` |
+
+---
+
+## 25. GitHub & Deployment (rfplay.uk)
+
+### 25.1 Domain Map
 
 | Hostname | Role |
 | :--- | :--- |
@@ -1963,7 +2127,7 @@ This is a **deployment scale decision**, not a feature difference. All SQL in th
 | `api.rfplay.uk` | Manager API |
 | `node-*.rfplay.uk` | CF-WS proxy nodes |
 
-### 22.2 One Repo or Three?
+### 25.2 One Repo or Three?
 
 **推荐：一个 GitHub Monorepo**，不要拆成 3 个仓库。
 
@@ -1974,14 +2138,14 @@ This is a **deployment scale decision**, not a feature difference. All SQL in th
 
 「三端」指 **三个部署目标**（官网 Pages、Admin Pages、API 服务器），不是三个 Git 仓库。
 
-### 22.3 GitHub Push Checklist
+### 25.3 GitHub Push Checklist
 
 - [ ] `git init` + `.gitignore`（见 README）
 - [ ] 创建 GitHub 私有仓库 `rfplay-airport`（或 `airport-system`）
 - [ ] 首次提交：docs + README（当前状态）
 - [ ] 开发过程中按目录增量提交；**不要**提交 `.env`、密钥、SQLite 生产库
 
-### 22.4 Cloudflare Setup (rfplay.uk)
+### 25.4 Cloudflare Setup (rfplay.uk)
 
 - [ ] Zone `rfplay.uk` 接入 Cloudflare
 - [ ] CF Pages 项目 `rfplay-portal` → root `portal/` → `www.rfplay.uk`
@@ -1990,7 +2154,7 @@ This is a **deployment scale decision**, not a feature difference. All SQL in th
 - [ ] （可选）`admin.rfplay.uk` 加 Cloudflare Access
 - [ ] Origin CA 证书手动配置 CF-WS 节点
 
-### 22.5 Remaining Work (Master Checklist)
+### 25.5 Remaining Work (Master Checklist)
 
 **A. 规划 ✅** — 架构、API、支付、Token、域名、安全模型已闭合
 

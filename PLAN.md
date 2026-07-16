@@ -1,230 +1,396 @@
-# RFPlay Airport — 产品交付计划
+# RFPlay Airport System — 开发规划
 
-> **原则**: MVP 优先，用户通过第三方客户端（Shadowrocket/V2rayNG/Clash）使用服务。
-> **并行**: **所有 worker agent 必须同时参与，不能闲置。** 无依赖的 Phase 可同时推进。
-> **范围**: Flutter 客户端（Phase 3）定为 MVP+，但 Phase 0-2 中 char_bot 参与模拟层开发。
-> **QR 码策略**: 前端 JS 生成（`qrcode.js`），不依赖后端 image 库。
-> **VPN 连接**: Phase 0-2 用 UI 模拟动画/状态切换，Phase 3 再做真 VPN 集成。
-> **指令**: 总指挥 ubuntu_game_bot 发 "开始" 后，各 agent 自主执行，不再询问。
+> 开发组长视角 | 参考: `airport_system_design.md` (1953行), `implementation_plan.md`, `task.md`
+> 
+> 设计文档已定义全部 API 合约、DB Schema、Token 格式。本规划**不重复**设计细节，
+> 仅做任务分解、并行策略、团队分工。实现时直接引用 `airport_system_design.md` §章节号。
 
 ---
 
-## Phase 0 — 订阅系统（核心缺失 · 3天→1.5天）
+## 1. 团队分工
 
-**目标**: 用户买套餐 → 拿到订阅链接 → 导入客户端 → 连接
+| 角色 | 负责人 | Pipeline | 核心产出 |
+|:---|:---|:---|:---|
+| **后端** | @mac5_developer_backend_bot | A | Manager API (Go), Daemon, Xray-core fork, CF-WS 部署 |
+| **前端** | @mac5_developer_frontend_bot | B | Portal Vue 3 → www.rfplay.uk, Admin Vue 3 → admin.rfplay.uk |
+| **移动端** | @mac5_developer_mobile_bot | C | Flutter Client → App Store |
+| **QA** | @mac5_developer_qa_bot | D | 测试策略、回归、安全审计、E2E 验收 |
+| **组长** | vincent | 全局 | 基础设施、Git 仓库、Code Review、部署、协调 |
 
-### Day 1 — 三路并行
+---
+
+## 2. Monorepo 目录骨架
 
 ```
-Day 1 ──┬── combat_bot → Manager API 订阅端点
-         │    • 订阅 Token 生成/重置
-         │    • GET /api/v1/subscription/:token (V2ray base64)
-         │    • GET /api/v1/subscription/:token/clash
-         │    • 流量用量 header（已用/总/到期）
-         │    • 节点配置编码（VMess/VLESS/SS URI）
-         │
-         ├── ui_bot → Portal 订阅页 + QR 码
-         │    • /subscription 页面（显示链接 + QR 码 — 前端 qrcode.js）
-         │    • 使用引导 tab（Shadowrocket / V2rayNG / Clash / Sing-box）
-         │    • 重置订阅按钮 + 确认弹窗
-         │    • 仪表盘流量显示（已用/总/到期/节点数）
-         │
-         └── char_bot → Flutter 订阅导入 + 节点展示（模拟层）
-              • 订阅链接输入页（手动输入 / 扫码导入）
-              • 解析 subscription base64 响应 → 节点列表
-              • 节点卡片展示（延迟图标; 流量标签; 到期日）
-              • VPN 连接按钮 UI 模拟（loading动画 → 已连接/已断开状态切换）
-              • QR 码扫码（调用 camera 扫描 Portal 订阅 QR）
-```
-
-#### combat_bot 任务清单
-
-| # | 任务 | 文件路径 | 说明 |
-|---|------|---------|------|
-| 1 | User 模型加 subscription 字段 | `manager/internal/model/user.go` | client_token, subscription_status/tier, traffic_limit/used, expire_time |
-| 2 | 注册时自动生成 rf_ token | `manager/internal/handler/auth.go` | crypto/rand 32hex → "rf_" + hex |
-| 3 | `POST /api/v1/auth/token-login` | `manager/internal/handler/auth.go` | rf_/at_ token 换 JWT (设计文档 §4.2) |
-| 4 | `GET /api/v1/web/client-token` | `manager/internal/handler/subscription.go` | 返回 masked rf_ (设计文档 §4.3) |
-| 5 | `POST /api/v1/web/client-token/regenerate` | `manager/internal/handler/subscription.go` | 重置 rf_, 旧失效 (设计文档 §4.3) |
-| 6 | `GET /api/v1/client/config` | `manager/internal/handler/subscription.go` | 公共 bootstrap (设计文档 §4.4) |
-| 7 | `GET /api/v1/client/subscription` | `manager/internal/handler/subscription.go` | Flutter Xray JSON (设计文档 §4.4) |
-| 8 | `GET /api/v1/client/links/:token` | `manager/internal/handler/subscription.go` | V2ray base64 (设计文档 §4.4.1) |
-| 9 | `GET /api/v1/client/links/:token/clash` | `manager/internal/handler/subscription.go` | Clash YAML (设计文档 §4.4.1) |
-| 10 | `GET /api/v1/client/links/:token/singbox` | `manager/internal/handler/subscription.go` | Sing-box JSON (设计文档 §4.4.1) |
-| 11 | `GET /api/v1/client/links/:token/qrcode` | `manager/internal/handler/subscription.go` | QR 码 PNG (设计文档 §4.4.1) |
-| 12 | 已有用户批量生成 rf_ token | `manager/internal/db/migration.go` | SELECT id FROM users → INSERT client_token |
-
-#### ui_bot 任务清单
-
-| # | 任务 | 文件路径 | 说明 |
-|---|------|---------|------|
-| 1 | 订阅页 `/subscription` | `portal/src/views/Subscription.vue` | 显示订阅链接（可复制）+ QR 码（前端 qrcode.js） |
-| 2 | 使用引导 | `portal/src/components/SetupGuide.vue` | 分 tab 图文步骤（Shadowrocket/V2rayNG/Clash/Sing-box） |
-| 3 | 重置订阅 | `portal/src/components/ResetSubscription.vue` | 按钮 + 确认弹窗，调用 API |
-| 4 | 仪表盘集成 | `portal/src/views/Dashboard.vue` | 已用/总流量 + 到期时间 + 可用节点数 |
-
-#### char_bot 任务清单
-
-| # | 任务 | 文件路径 | 说明 |
-|---|------|---------|------|
-| 1 | 订阅链接输入页 | `client/lib/screens/subscription/input_page.dart` | 手动输入 URL + 粘贴检测；扫码按钮入口 |
-| 2 | Subscription 数据模型 | `client/lib/models/subscription.dart` | token, nodes[], traffic_used, traffic_total, expire_at |
-| 3 | API service mock/real | `client/lib/services/subscription_service.dart` | 解析 subscription base64 → 节点列表；本地 mock JSON 先行 |
-| 4 | 节点列表页 | `client/lib/screens/home/node_list_page.dart` | 节点卡片列表：名称/延迟图标/流量标签/到期日 |
-| 5 | VPN 按钮 UI 模拟 | `client/lib/widgets/vpn_button.dart` | 圆形按钮: 未连接(灰) → 连接中(旋转) → 已连接(绿)/已断开(红)；纯 UI，无真正 VPN |
-| 6 | QR 码扫码 | `client/lib/screens/subscription/qr_scanner_page.dart` | camera 扫描 → 解析链接 → 调用导入流程 |
-| 7 | 导航骨架 | `client/lib/main.dart` | GoRouter 配置：home → subscription input → node list → settings；底部导航栏 |
-
-### Day 2 — 联调收尾
-
-| 检查点 | 方式 | 负责 |
-|--------|------|------|
-| 订阅链接 curl 验证 | 输出格式正确，base64 可解码 | combat_bot |
-| Clash YAML 格式 | `yq` 或 Clash 解析 | ubuntu_game_bot |
-| 重置后旧链接失效 | 返回 404 | combat_bot |
-| 超量返回限制 header | `X-UltraUsage-Limit: exceeded` | combat_bot |
-| Portal 订阅页 + QR 码 | 前端打开验证，扫码可识别 | ui_bot |
-| Flutter 扫码导入 | camera 扫 QR → 解析 → 显示节点列表 | char_bot |
-| Flutter VPN 按钮模拟 | 点击 → loading → 状态切换无崩溃 | char_bot |
-| Admin 操作正常 | Admin 打开验证 | ubuntu_game_bot |
-| 注册→订阅 token 自动生成 | 全流程走通 | ubuntu_game_bot |
-
----
-
-## Phase 1 — 支付集成（2天）
-
-| 任务 | 说明 | Agent |
-|------|------|-------|
-| 选一个真实支付渠道 | Alipay 沙箱 / Stripe 测试模式 | combat_bot |
-| 支付回调接口 | 异步通知 → 自动开通套餐 | combat_bot |
-| Portal 支付页 | 扫码支付 / 跳转支付 | ui_bot |
-| Flutter 续费入口 | 从节点列表跳转 Portal 支付页（WebView/外跳） | char_bot |
-| Admin 订单管理 | 查看支付记录/订单状态 | ubuntu_game_bot |
-
----
-
-## Phase 2 — 安全加固（1天）
-
-| 优先级 | 任务 | Agent |
-|--------|------|-------|
-| 🔴 | 注册限流 + 验证码（数学/Recaptcha） | combat_bot |
-| 🔴 | 去掉硬编码测试账号，改用 seed 脚本 | combat_bot |
-| 🟡 | HTTPS 自签证书（开发环境） | ubuntu_game_bot |
-| 🟡 | Rate limiting middleware（全 API） | combat_bot |
-| 🟢 | CORS 白名单 | combat_bot |
-| 🟢 | Flutter 配置加密（flutter_string_encrypt） | char_bot |
-
----
-
-## Phase 3 — Flutter 客户端完整版（MVP+ · ~7天）
-
-> **范围**: 真 VPN 集成 + 全面功能
-
-| 阶段 | 任务 | 说明 |
-|------|------|------|
-| 3.1 | 订阅导入 → 解析配置 → 节点列表 | Phase 0 已有，切真实 API |
-| 3.2 | Android VpnService 通道 | tun 设备读写，iptables 规则 |
-| 3.3 | 节点测速 | ICMP ping + TCP connect 延迟 |
-| 3.4 | 连接/断开/切节点 UI 联动 | VPN 按钮实装，状态实时同步 |
-| 3.5 | 真实流量统计 + 图表 | 读取系统流量 / Xray API |
-| 3.6 | iOS NETunnelProvider | 需 Mac 编译环境（deferred） |
-
----
-
-## Phase 4 — E2E 验收测试（2天）
-
-| 场景 | 步骤 | 预期 |
-|------|------|------|
-| **用户全流程** | 注册 → 登录 → 选套餐 → 支付 → 拿订阅链接 → 导入客户端 → 连接成功 | ✅ |
-| **管理员全流程** | 登录 Admin → 添加节点 → 管理用户 → 创建产品 → 看统计 | ✅ |
-| **节点同步** | Manager 增节点 → Daemon 自动同步 → 用户订阅可见 | ✅ |
-| **限速/超量** | 用超流量 → 自动断流 → 续费恢复 | ✅ |
-| **安全** | 未登录访问/SQL注入/XSS | ✅ |
-
----
-
-## Phase 5 — 生产部署（1天）
-
-| 任务 |
-|------|
-| Docker Compose (Manager + Daemon + Nginx + PostgreSQL) |
-| Let's Encrypt 自动 HTTPS |
-| 域名 + CDN 分发 |
-| 服务健康监控 + 告警 |
-| 数据库定时备份 |
-
----
-
-## ⏱ 时间线
-
-```
-Phase 0 — 订阅系统        ████████░░  3天  (三路并行 → 1.5天)
-  ├─ combat_bot: 订阅 API 端点
-  ├─ ui_bot:     订阅页 + QR 码
-  └─ char_bot:   Flutter 订阅导入 + 节点展示 + VPN 模拟
-
-Phase 1 — 支付集成        ████░░░░░░  2天
-Phase 2 — 安全加固        ██░░░░░░░░  1天
-Phase 3 — Flutter 完整版  ██████████  ~7天 (MVP+)
-Phase 4 — E2E 验收        ████░░░░░░  2天
-Phase 5 — 生产部署        ██░░░░░░░░  1天
-                      ──────────────
-MVP (含 Phase 0-2)         ≈ 6天
-Full (含 Phase 3)          ≈ 13天
+airport-system/                        # GitHub: vincent/airport-system (私有)
+├── PLAN.md                            # ← 本文件
+├── README.md                          # 已有
+├── airport_system_design.md           # 已有 — 核心设计文档
+├── implementation_plan.md             # 已有
+├── task.md                            # 已有
+├── .gitignore                         # 已有
+├── .github/
+│   └── workflows/                     # CI (可选)
+│       ├── portal.yml                 #   Portal 自动部署到 CF Pages
+│       └── admin.yml                  #   Admin 自动部署到 CF Pages
+│
+├── manager/                           # Go Fiber API → api.rfplay.uk
+│   ├── go.mod
+│   ├── main.go
+│   ├── cmd/
+│   │   └── init-admin/               # --init-admin CLI (§4.6)
+│   ├── internal/
+│   │   ├── config/                    # 配置加载
+│   │   ├── db/                        # SQLite schema + migrations
+│   │   ├── middleware/                 # CORS, CSRF, Auth (cookie vs Bearer)
+│   │   ├── handler/                    # HTTP handlers
+│   │   │   ├── auth.go                # §4.2 — login/register/validate/token-login
+│   │   │   ├── web.go                 # §4.3 — Portal API (plans/orders/account)
+│   │   │   ├── admin.go               # §4.6 — Admin API (users/tokens/plans/nodes)
+│   │   │   ├── client.go              # §4.4 — Flutter API (config/subscription)
+│   │   │   ├── node.go                # §4.1 — Daemon sync + verify-token
+│   │   │   └── payment.go             # §4.5 — Payment callbacks
+│   │   ├── model/                     # DB models + queries
+│   │   ├── token/                     # §22 — 68-byte dynamic token
+│   │   ├── payment/                   # §4.7 — BEpusdt + Payoneer providers
+│   │   └── cron/                      # §7 — auto-disable expired users
+│   └── data/                          # SQLite DB (gitignored)
+│
+├── portal/                            # Vue 3 → www.rfplay.uk (CF Pages)
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── public/_redirects              # SPA fallback
+│   └── src/
+│       ├── main.ts
+│       ├── App.vue
+│       ├── api/                       # axios instance (withCredentials + CSRF)
+│       ├── views/
+│       │   ├── Home.vue               # /
+│       │   ├── Login.vue              # /login
+│       │   ├── Register.vue           # /register
+│       │   ├── Plans.vue              # /plans
+│       │   ├── Checkout.vue           # /checkout/:plan_id
+│       │   ├── Pay.vue                # /pay/:order_id (poll)
+│       │   ├── PayResult.vue          # /pay/result
+│       │   └── Account.vue            # /account + /account/devices
+│       └── components/
+│
+├── admin/                             # Vue 3 → admin.rfplay.uk (CF Pages)
+│   ├── package.json                   # 独立构建
+│   ├── vite.config.ts
+│   ├── public/_redirects
+│   └── src/
+│       ├── main.ts
+│       ├── App.vue
+│       ├── api/                       # axios (admin_session + CSRF)
+│       └── views/
+│           ├── Login.vue
+│           ├── Dashboard.vue
+│           ├── Nodes.vue              # Node CRUD + CF DNS
+│           ├── Users.vue              # 用户管理
+│           ├── Tokens.vue             # at_ 发放/批次/吊销/续期
+│           ├── Plans.vue              # 套餐 CRUD
+│           ├── Orders.vue             # 订单列表
+│           └── Settings.vue           # CF API Token, HMAC, etc.
+│
+├── daemon/                            # Node agent (Go)
+│   ├── go.mod
+│   ├── main.go                        # 60s sync loop (§9)
+│   └── internal/
+│       ├── verify/                    # verify-token client + 60s cache
+│       ├── sync/                      # traffic report + config pull
+│       └── loki/                      # log push (§18)
+│
+├── client/                            # Flutter
+│   ├── pubspec.yaml
+│   └── lib/
+│       ├── main.dart
+│       ├── models/
+│       ├── services/
+│       │   ├── api_service.dart       # X-Client: flutter + Bearer
+│       │   ├── auth_service.dart      # §3.2 — login / token-login / secure storage
+│       │   ├── subscription_service.dart
+│       │   └── vpn_service.dart       # §3.5 — Xray config gen + VPN
+│       ├── screens/
+│       │   ├── login/
+│       │   ├── home/
+│       │   ├── account/
+│       │   └── devices/
+│       └── widgets/
+│
+├── shared/                            # Portal & Admin 共用代码
+│   ├── types/                         # TypeScript 类型定义 (API response, error codes)
+│   ├── api/                           # axios 实例、CSRF 拦截器、withCredentials 配置
+│   └── utils/                         # 通用工具函数 (cookie 读取、格式化等)
+│
+├── shared/                            # Portal & Admin 共用代码
+│   ├── types/                         # TypeScript 类型定义 (API response, error codes)
+│   ├── api/                           # axios 实例、CSRF 拦截器、withCredentials 配置
+│   └── utils/                         # 通用工具函数 (cookie 读取、格式化等)
+│
+└── deploy/                            # 部署脚本
+    ├── manager/                       # Manager systemd service + CF IP firewall
+    ├── node-cf-ws/                    # Nginx 伪装站 + WS 反代 (§14.5)
+    └── node-reality/                  # REALITY 配置模板
 ```
 
 ---
 
-## Agent 职责分派
+## 3. 并行流水线
 
-| Agent | Phase | 核心路径 | 说明 |
-|-------|-------|----------|------|
-| **combat_bot** | 0, 1, 2 | `manager/`, `daemon/`, `xray-core/`, `deploy/` | Go 后端 |
-| **ui_bot** | 0, 1 | `portal/`, `admin/` | Vue3 前端 |
-| **char_bot** | 0, 1, 2, 3 | `client/` | Flutter（Phase 0-2 模拟层，Phase 3 完整 VPN） |
-| **ubuntu_game_bot** (总指挥) | 0-5 | 全局 | Admin 面板 + 集成测试 + 调度 |
+### Pipeline A：后端（Backend Bot）— 全周期独立
+
+```
+Sprint 1 ────────────────────────────────────── Sprint 2-3 ────────────────── Sprint 4
+┌─────────────────────────┐   ┌──────────────────────────────────────┐   ┌──────────┐
+│ S1.0  Git init + 骨架    │   │ S2.1 Xray inbound verify 回调        │   │ 联调 +   │
+│ S1.1  Xray-core clone    │   │ S2.2 Xray rate limiter + 流量统计   │   │ 部署上线  │
+│ S1.2  Manager 骨架+TLS   │   │ S2.3 Xray P2P audit + Loki push     │   │          │
+│ S1.3  Manager 认证体系    │   │ S2.6 Manager 剩余 API + 支付回调     │   │          │
+│ S1.4  Manager 节点 API   │   │ S2.7 Daemon 开发                     │   │          │
+│       (verify+sync)      │   │ S3.5 CF-WS 节点部署脚本              │   │          │
+└─────────────────────────┘   └──────────────────────────────────────┘   └──────────┘
+```
+
+- **Sprint 1**：Manager Core（认证 + 节点 API）→ 前端可以对接实时 API
+- **Sprint 2**：Xray-core 改造（这是最复杂的模块）+ 剩余 Manager API + Daemon
+- Xray-core fork 与 Manager API 可并行开发（不同目录、独立 Go module）
+
+### Pipeline B：前端（Frontend Bot）— 与后端并行
+
+```
+Sprint 1 ─────────────────────────────── Sprint 2 ─────────────────── Sprint 4
+┌──────────────────────────┐   ┌──────────────────────────────┐   ┌──────────┐
+│ S1.5 Portal Vue 骨架     │   │ S2.4 Portal 全功能           │   │ CF Pages │
+│  (login/register/plans)  │   │  (checkout/pay/account/dev)  │   │ 部署      │
+│  对接实时 Manager API     │   │  对接实时 API               │   │          │
+│                          │   │                              │   │          │
+│ S1.6 Admin Vue 骨架      │   │ S2.5 Admin 全功能            │   │          │
+│  (login + users 列表)    │   │  (nodes/users/tokens/orders) │   │          │
+└──────────────────────────┘   └──────────────────────────────┘   └──────────┘
+```
+
+- Sprint 1 用 **实时 Manager API** 对接（Pipeline A 同时产出）
+- 前端不堵后端 — S1.3 (auth) 完成后 Portal/Admin login 就可接上
+- SPA 路由、_redirects、withCredentials + CSRF 拦截器一次配好
+- **`shared/` 目录**：Portal 和 Admin 的 axios 实例、CSRF 拦截器、TypeScript 类型定义（API response、error codes）统一放在 `shared/`，两边 import 避免重复代码
+
+### Pipeline C：移动端（Mobile Bot）— Mock 先行
+
+```
+Sprint 1 ─────────────────────────────── Sprint 3 ─────────────────── Sprint 4
+┌──────────────────────────┐   ┌──────────────────────────────┐   ┌──────────┐
+│ S3.0 Flutter SDK + 骨架   │   │ S3.1 Flutter 登录模块        │   │ 联调     │
+│  (API service, routing)  │   │  (账号/Token/ZJ导入)          │   │          │
+│  本地 mock 起手           │   │  对接实时 API                │   │          │
+│                          │   │                              │   │          │
+│                          │   │ S3.2 主界面+节点列表+续费     │   │          │
+│                          │   │ S3.3 设备管理                │   │          │
+│                          │   │ S3.4 VPN 集成               │   │          │
+└──────────────────────────┘   └──────────────────────────────┘   └──────────┘
+```
+
+- Sprint 1 用本地 mock data（硬编码 JSON）搭 Flutter 全部 UI
+- Sprint 3 Manager API 稳定后切到实时 API
+- **不阻塞其它 Pipeline**
+
+### Pipeline D：QA — 从第一天介入
+
+```
+Sprint 1 ────────────── Sprint 2 ────────────── Sprint 3 ──────────── Sprint 4
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌────────────────┐
+│ 测试策略      │    │ API 回归测试  │    │ Xray 集成    │    │ 全链路 E2E     │
+│ 测试环境搭建   │    │ Frontend     │    │ Flutter 测试  │    │ 安全审计       │
+│ API 测试脚本  │    │ 功能测试      │    │ 节点部署验证   │    │ 上线 checklist │
+└──────────────┘    └──────────────┘    └──────────────┘    └────────────────┘
+```
 
 ---
 
-## 并行执行矩阵
+## 4. Sprint 排期
+
+### Sprint 1：基础设施 + 核心后端（A+B+D 并行）
+
+**目标**：Manager 认证体系跑通，前端骨架可登录，Flutter 骨架搭建
+
+| ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
+|:---|:---|:---|:---|:---|:---|
+| 1.0 | Git 仓库初始化 + monorepo 目录骨架 + GitHub push | 组长 | — | §25 | S |
+| 1.1 | 安装 Flutter SDK + `flutter create client/` | 组长 | 1.0 | §3 | S |
+| 1.2 | Xray-core 克隆 + 验证 Go build | Backend | 1.0 | task.md Phase 1 | S |
+| 1.3 | Manager Go 项目 init + SQLite schema + TLS :443 + CF IP middleware | Backend | 1.0 | §3 DB schema, §14 | M |
+| 1.4 | Manager MCPCookie + CSRF 中间件 (portal + admin 双套) | Backend | 1.3 | §4.2.1, §10.12 | M |
+| 1.5 | Manager 双模式 login (cookie + Bearer) + logout/refresh/validate | Backend | 1.4 | §4.2.1, §4.2.2 | M |
+| 1.6 | Managerverify-token + sync API（无 user_list） | Backend | 1.3 | §4.1, §4.1.1 | M |
+| 1.7 | Portal Vue 骨架 + axios WithCredentials + login/register 页 + Plans | Frontend | 1.5 | §10.4, §2.2 | M |
+| 1.8 | Admin Vue 骨架 + admin_session login + Users 列表页 | Frontend | 1.5 | §10.5, §10.6 | M |
+| 1.9 | Flutter 骨架 + API Service + routing + mock data 模式 | Mobile | 1.1 | §3 | M |
+| 1.10 | QA 测试策略文档 + 测试环境搭建 + API 测试脚本 (curl) | QA | 1.3 | full spec | M |
+
+**并行分析**：
 
 ```
-Phase 0 ──┬── combat_bot (订阅API) ──┐
-           ├── ui_bot (Portal订阅页) ──┼── Day 1 三路并行
-           └── char_bot (Flutter订阅导入+模拟) ┘
-                                           ↓ Day 2 联调
-Phase 1 ──┬── combat_bot (支付) ───┐
-           ├── ui_bot (支付页) ──────┼── 并行
-           └── char_bot (续费入口) ──┘
-                                           ↓
-Phase 2 ──┬── combat_bot (安全加固) ──┐
-           └── char_bot (配置加密) ────┘ 并行
-                                           ↓
-Phase 3 ── char_bot (Flutter 完整VPN) ── (后续迭代)
-                                           ↓
-Phase 4 ── ubuntu_game_bot (E2E 验收) + 全 agent 修 bug
-                                           ↓
-Phase 5 ── ubuntu_game_bot (生产部署)
+Week 1                Week 2                Week 3
+├─┤1.0 组长 init─────┤
+  ├─┤1.2 Xray clone──┤
+  ├─┤1.3 Manager─────┤
+  │                    ├─┤1.4 CSRF──────┤
+  │                    │                 ├─┤1.5 Auth───────┤
+  │                    └─┤1.6 Node API──┤
+  ├─┤1.1 Flutter install─┤1.9 Flutter mock──────┤
+  ├─┤1.10 QA test plan─────────────────────────┤
+  │                    ├─┤1.7 Portal────────────┤
+  │                    ├─┤1.8 Admin─────────────┤
 ```
+
+**实际并发**：
+- Backend 可同时跑：1.3（Manager 骨架）+ 1.2（Xray clone）— 不同目录
+- Frontend 1.7 + 1.8 需要等 1.5（auth API）或先用 mock → 建议 mock 先行，等 1.5 完成后再切 real API
+- Mobile 1.9 完全独立（mock data）
+- 组长 1.0 完成后可并行做其它事
+
+### Sprint 2：完整功能 + Xray 改造（A+B+C+D 四线全开）
+
+**目标**：Portal/Admin 全功能就绪，Xray verify 回调跑通，Daemon MVP
+
+| ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
+|:---|:---|:---|:---|:---|:---|
+| 2.1 | Manager 支付流程：plans/orders/payment callback + BEpusdt + Payoneer | Backend | 1.5 | §4.3, §4.5, §4.7 | L |
+| 2.2 | Managerrf\_/at\_ token-login + issued\_tokens immutable CRUD | Backend | 1.5 | §3.1.1, §3.2 | M |
+| 2.3 | ManagerResend/Brevo 注册验证邮件 | Backend | 1.5 | §15 | S |
+| 2.4 | Managerclient config + subscription + traffic aggregation | Backend | 1.5 | §4.4, §6.3 | M |
+| 2.5 | Manager 自到期 cron + Admin API（users/nodes/plans CRUD） | Backend | 1.5 | §7, §4.6 | M |
+| 2.6 | Xray-core：inbound verify 回调 → Daemon /internal/verify | Backend | 1.2 | §4.1.1, Phase 2 | L |
+| 2.7 | Xray-core：rate limiter (Go token bucket per session) | Backend | 2.6 | §5 | M |
+| 2.8 | Xray-core：P2P audit + traffic stats + Loki push hooks | Backend | 2.6 | §13, §18 | M |
+| 2.9 | Portal 全功能：checkout, pay poll, account, token copy/regenerate, devices | Frontend | 1.7, 2.1-2.2 | §2.2, §3.2 | L |
+| 2.10 | Admin 全功能：nodes CRUD + CF DNS, users, tokens batch/renew, orders, charts | Frontend | 1.8, 2.5 | §10.11 | L |
+| 2.11 | Daemon：verify-token client + 60s cache + sync loop + dynamic port | Backend | 1.6 | §9, §4.1 | M |
+| 2.12 | Flutter login + token 导入 + secure storage | Mobile | 1.9 | §3.2 | M |
+| 2.13 | QA API 回归 + Portal/Admin 功能测试 | QA | 2.9, 2.10 | full spec | M |
+
+**注意**：
+- 2.6-2.8 (Xray-core) 是最大技术风险点。建议 **后端优先** 2.1-2.5（Manager 完整 API）再攻 Xray
+- 2.11 (Daemon) 可与 Xray 改造并行 — Daemon 先写 HTTP client 层，等 verify-token 就绪再联调
+- Frontend + Mobile 主要依赖 Manager API（2.1-2.5），不依赖 Xray
+
+### Sprint 3：Flutter 完成 + 节点部署（A+C 为主）
+
+**目标**：Flutter 全流程可连接，CF-WS/REALITY 节点部署就绪
+
+| ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
+|:---|:---|:---|:---|:---|:---|
+| 3.1 | Flutter 主界面：节点列表 + 连接状态 + 续费入口 | Mobile | 2.12 | §3.3 | M |
+| 3.2 | Flutter 设备管理 + 到期提醒 | Mobile | 2.12 | §3.4 | M |
+| 3.3 | Flutter VPN 集成：Xray config 生成 + VPN service | Mobile | 2.12 | §3.5 | L |
+| 3.4 | Daemon 完整：Loki push + CF IP firewall | Backend | 2.11 | §18, §14.4 | S |
+| 3.5 | CF-WS Nginx 伪装站部署脚本 | Backend | 1.2 | §14.5 | M |
+| 3.6 | REALITY 节点部署脚本 | Backend | 1.2 | §14 | S |
+| 3.7 | Manager 生产部署 + systemd service | Backend | 2.1-2.5 | §14.2 | S |
+| 3.8 | QA Flutter 验证 + 节点部署验证 | QA | 3.1-3.6 | full spec | M |
+
+### Sprint 4：集成 + 上线
+
+**目标**：全链路 E2E，生产环境就绪
+
+| ID | 任务 | Owner | 依赖 | 设计文档参考 | 预估 |
+|:---|:---|:---|:---|:---|:---|
+| 4.1 | 官网购套餐 → webhook → Flutter 连接 E2E | 全员 | all | §6 | L |
+| 4.2 | 多设备连不同节点 + online verify | 全员 | 3.3, 1.6 | §16 | M |
+| 4.3 | 流量计费 + 设备上限 + 到期自动禁用 | QA+Backend | 2.5, 2.11 | §6, §7 | M |
+| 4.4 | CF Pages 生产部署（portal + admin） | Frontend | 2.9, 2.10 | §10.4, §10.5 | S |
+| 4.5 | 安全审计：CORS/CSRF/XSS/Cookie/IP firewall | QA | all | §10.9 | M |
+| 4.6 | Loki + Grafana 监控就绪 | Backend | 3.4 | §18 | M |
+| 4.7 | 上线前 checklist 执行 | 组长 | all | §25.5 | S |
 
 ---
 
-## 任务分发格式
+## 5. 依赖矩阵（什么可以并行）
 
-总指挥分发任务时使用以下 dispatch 命令：
-
-```bash
-hermes chat --profile ubuntu_game_<agent> -q "Phase X: [标题]
-
-任务清单:
-1. [精确描述，含文件路径/API路径]
-2. ...
-3. ...
-
-约束: ...
-完成后 git add + commit 并回复完成状态" --quiet
 ```
+                    1.0  1.1  1.2  1.3  1.4  1.5  1.6  1.7  1.8  1.9  2.1  2.2  2.3  2.4  2.5  2.6  2.7  2.8  2.9  2.10 2.11 2.12 3.1  3.2  3.3
+Backend:
+ 1.0 Git init          X
+ 1.1 Flutter install        X
+ 1.2 Xray clone                   X
+ 1.3 Manager skeleton                    X
+ 1.4 CSRF middleware                           X
+ 1.5 Auth API                                        X
+ 1.6 Node API                                                                                     X*
+ 2.1 Payment                                                              X
+ 2.2 Token login                                                              X
+ 2.3 Email                                                                          X
+ 2.4 Client API                                                                           X
+ 2.5 Admin API                                                                                    X
+ 2.6 Xray verify                                                                                        X
+ 2.7 Xray rate limit                                                                                         X
+ 2.8 Xray audit                                                                                                  X
+ 2.11 Daemon                                                                                                      X
+                                        ^^^ 1.3 ~ 1.6 是 Manager Core 不能并行 ^^^
+
+Frontend:
+ 1.7 Portal skeleton                          o   o                                              ← 等 1.5 auth 或 mock
+ 1.8 Admin skeleton                            o   o                                              ← 等 1.5 auth 或 mock
+ 2.9 Portal full                                                                  o               ← 等 2.1-2.2
+ 2.10 Admin full                                                                      o           ← 等 2.5
+
+Mobile:
+ 1.9 Flutter mock          X                                                                      ← 完全独立
+ 2.12 Flutter login                                                                                       X
+ 3.1 Flutter main                                                                                                X
+ 3.2 Flutter devices                                                                                                  X
+ 3.3 Flutter VPN                                                                                                               X
+
+QA:
+ 1.10 Test plan                      o                                       ← 等 1.3
+ 2.13 API regression                                                                   o    o     ← 等 2.9-2.10
+ 3.8 Flutter / node tests                                                                                         X
+ 4.1-4.3 E2E                                                                                                                  全依赖
+```
+
+**X** = 可以立刻开始 | **o** = 有外部依赖 | **空格** = 依赖上级完成
 
 ---
 
-*最后更新: 2026-06-24 (v3 — 移除 Phase 3.3 Xray 内核嵌入 FFI，架构确认：服务端 Xray Docker + 客户端 VpnService 隧道)*
+## 6. 技术风险点 & 缓解策略
+
+| 风险 | 等级 | 缓解策略 |
+|:---|:---|:---|
+| **Xray-core fork 改造** (Phase 2) | 🔴 高 | 后端优先完成 Manager API（Sprint 1），如果 Xray 改造超出预期，Manager + Daemon + Frontend 仍可独立上线，Xray 延后迭代 |
+| **Flutter VPN 集成** | 🟡 中 | Mobile 先用 mock config 跑通 UI + 业务逻辑；VPN 集成作为 Sprint 3 独立任务 |
+| **支付回调联调** (BEpusdt/Payoneer) | 🟡 中 | Webhook 在开发环境用 ngrok 暴露 localhost 测试；本地用 mock webhook 脚本 |
+| **Manager 单点** | 🟢 低 | MVP 单实例 SQLite 够用；PostgreSQL deferred |
+
+---
+
+## 7. 你需要提供的信息汇总
+
+### 开始开发前需要
+
+- [ ] **GitHub Token / SSH Key** — 用于 `git init && push`
+- [ ] **仓库名**（建议 `airport-system` 或 `rfplay-airport`）
+- [ ] **GitHub 用户名或组织名**
+
+### Sprint 1 结束时需要
+
+- [ ] **VPS IP + SSH 信息** — Manager 生产部署
+- [ ] **Cloudflare API Token**（Pages + DNS 权限）+ **Zone ID**
+- [ ] **rfplay.uk 已 Cloudflare 托管确认**
+- [ ] **BEpusdt 实例地址 + Auth Token**（如有）
+- [ ] **Payoneer API Key + Merchant ID**（如有）
+- [ ] **Resend/Brevo API Key**（如有）
+
+---
+
+## 8. 产出物总览
+
+| Sprint | 可演示的成果 |
+|:---|:---|
+| **Sprint 1** | Portal 登录/注册页可填、Admin 登录页可填、Flutter 骨架有 UI、Manager API 认证全链路 curl 可调通 |
+| **Sprint 2** | Portal 可下单支付、Admin 可管理节点/用户/Token、Xray 改造验证回调跑通 |
+| **Sprint 3** | Flutter App 可连节点（mock/real）、CF-WS 节点部署脚本可跑通、Manager 生产部署 |
+| **Sprint 4** | 官网买套餐 → Flutter 连接 → 流量计费 → 到期提醒，全链路 E2E 验证通过，生产环境就绪 |
+
+---
+
+*本文档由组长维护，各 bot 根据本文档 + `airport_system_design.md` §章节号进行开发。*
