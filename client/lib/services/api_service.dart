@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -56,20 +57,27 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> get(String path, {Map<String, String>? queryParams}) async {
-    try {
-      var uri = Uri.parse('$baseUrl$path');
-      if (queryParams != null && queryParams.isNotEmpty) {
-        uri = uri.replace(queryParameters: queryParams);
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        var uri = Uri.parse('$baseUrl$path');
+        if (queryParams != null && queryParams.isNotEmpty) {
+          uri = uri.replace(queryParameters: queryParams);
+        }
+        final response = await http.get(uri, headers: _headers).timeout(_timeout);
+        return _handleResponse(response);
+      } on SocketException {
+        if (attempt == 0) continue; // retry once
+        throw ApiException('网络连接失败，请检查网络');
+      } on TimeoutException {
+        if (attempt == 0) continue; // retry once
+        throw ApiException('请求超时，请稍后重试');
+      } on HttpException {
+        throw ApiException('服务器错误');
+      } on FormatException {
+        throw ApiException('数据格式错误');
       }
-      final response = await http.get(uri, headers: _headers).timeout(_timeout);
-      return _handleResponse(response);
-    } on SocketException {
-      throw ApiException('网络连接失败，请检查网络');
-    } on HttpException {
-      throw ApiException('服务器错误');
-    } on FormatException {
-      throw ApiException('数据格式错误');
     }
+    throw ApiException('请求失败');
   }
 
   Future<Map<String, dynamic>> post(String path, {Map<String, dynamic>? body}) async {
@@ -132,6 +140,8 @@ class ApiService {
       return body;
     } else if (response.statusCode == 401) {
       _token = null;
+      // TODO(auth): Broadcast a logout event (e.g., via EventBus or Provider)
+      // so the UI can navigate to the login screen automatically.
       throw ApiException('未授权，请重新登录');
     } else if (response.statusCode == 403) {
       final msg = body['error'] as String? ?? '没有权限';

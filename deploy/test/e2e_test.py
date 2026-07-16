@@ -157,7 +157,7 @@ step(1.2, "Captcha fetched", len(ct) > 0, f"token={ct[:12]}...")
 # 1.3 Login as admin (register is rate-limited with 60s cooldown; admin is pre-seeded)
 print("\n--- 1.3 Admin Login (User Flow Test) ---")
 code, res = req("POST", api("/public/login"),
-    {"username": "admin", "password": "admin123"})
+    {"username": "b", "password": "1"})
 if code == 200:
     USER_TOKEN = res.get("token", "")
     step(1.3, "Admin login success", len(USER_TOKEN) > 10,
@@ -193,7 +193,7 @@ else:
 # First login as admin and create a product if none active
 print("\n--- [Setup] Admin login for product creation ---")
 code, res = req("POST", api("/public/login"),
-    {"username": "admin", "password": "admin123"})
+    {"username": "b", "password": "1"})
 ADMIN_TOKEN = res.get("token", "") if code == 200 else ""
 if ADMIN_TOKEN:
     step("1.8a", "Admin logged in for setup", True, "admin_token obtained")
@@ -296,7 +296,7 @@ print("=" * 60)
 # 2.1 Admin login (built-in admin: password "admin123")
 print("\n--- 2.1 Admin Login ---")
 code, res = req("POST", api("/public/login"),
-    {"username": "admin", "password": "admin123"})
+    {"username": "b", "password": "1"})
 if code == 200:
     ADMIN_TOKEN = res.get("token", "")
     step(2.1, "Admin login", len(ADMIN_TOKEN) > 10, f"token={ADMIN_TOKEN[:20]}...")
@@ -473,19 +473,35 @@ if ADMIN_TOKEN:
 else:
     step(2.16, "User list", False, "no admin token")
 
+# Pick a non-admin user ID from the list for CRUD tests
+TARGET_USER_ID = 0
+if ADMIN_TOKEN and users:
+    for u in users:
+        if u.get("role") == "user" and u.get("id") and u["id"] > 0:
+            # Skip testuser (reserved system user), pick first real user
+            if u["id"] >= 9:
+                TARGET_USER_ID = u["id"]
+                break
+    if not TARGET_USER_ID:
+        # Fallback: use the first non-admin user
+        for u in users:
+            if u.get("role") == "user" and u.get("id") and u["id"] > 0:
+                TARGET_USER_ID = u["id"]
+                break
+
 # 2.17 Get single user
 print("\n--- 2.17 Get User By ID ---")
-if ADMIN_TOKEN:
-    code, res = req("GET", api("/admin/users/1"), token=ADMIN_TOKEN)
-    step(2.17, "User detail", code == 200 and res.get("id") == 1,
+if ADMIN_TOKEN and TARGET_USER_ID:
+    code, res = req("GET", api(f"/admin/users/{TARGET_USER_ID}"), token=ADMIN_TOKEN)
+    step(2.17, "User detail", code == 200 and res.get("id") == TARGET_USER_ID,
          f"username={res.get('username')}, role={res.get('role')}")
 else:
-    step(2.17, "User detail", False, "no admin token")
+    step(2.17, "User detail", False, "no admin token or no target user")
 
-# 2.18 Update user token (admin) - regenerate token for user 2
+# 2.18 Update user token (admin) - regenerate token for target user
 print("\n--- 2.18 Update User Token ---")
-if ADMIN_TOKEN:
-    code, res = req("PUT", api("/admin/users/2"),
+if ADMIN_TOKEN and TARGET_USER_ID:
+    code, res = req("PUT", api(f"/admin/users/{TARGET_USER_ID}"),
         {"client_token": ""},  # empty string -> auto-generates new rf_ token
         token=ADMIN_TOKEN)
     if code == 200:
@@ -495,18 +511,18 @@ if ADMIN_TOKEN:
     else:
         step(2.18, "User token update", False, f"HTTP {code}")
 else:
-    step(2.18, "User token update", False, "no admin token")
+    step(2.18, "User token update", False, "no admin token or no target user")
 
 # 2.19 Update user status (admin)
 print("\n--- 2.19 Update User Status ---")
-if ADMIN_TOKEN:
-    code, res = req("PUT", api("/admin/users/2"),
+if ADMIN_TOKEN and TARGET_USER_ID:
+    code, res = req("PUT", api(f"/admin/users/{TARGET_USER_ID}"),
         {"status": "active"},
         token=ADMIN_TOKEN)
     step(2.19, "User status updated", code == 200 and res.get("status") == "active",
          f"status={res.get('status')}")
 else:
-    step(2.19, "User status update", False, "no admin token")
+    step(2.19, "User status update", False, "no admin token or no target user")
 
 # 2.20 Get non-existent user -> 404
 print("\n--- 2.20 Non-existent User -> 404 ---")
@@ -518,14 +534,30 @@ else:
 
 # ----- Traffic (Admin) -----
 
-# 2.21 Traffic report
+# 2.21 Traffic report — create a temporary node for the test
 print("\n--- 2.21 Traffic Report ---")
+TRAFFIC_NODE_ID = 0
 if ADMIN_TOKEN:
-    code, res = req("POST", api("/admin/traffic/report"),
-        {"node_id": 1, "user_id": 1,
-         "upload_bytes": 1024, "download_bytes": 2048},
+    # Create a temp node for traffic test
+    code, nres = req("POST", api("/admin/nodes"),
+        {"name": "Traffic-Test-Node", "type": "v2ray",
+         "address": "10.0.0.1", "port": 8443,
+         "protocol": "vless", "user_id": TARGET_USER_ID or 1},
         token=ADMIN_TOKEN)
-    step(2.21, "Traffic report", code in (200, 201), f"HTTP {code}")
+    if code in (200, 201):
+        TRAFFIC_NODE_ID = nres.get("id", 0)
+    # Report traffic for the temp node
+    if TRAFFIC_NODE_ID > 0 and TARGET_USER_ID:
+        code, res = req("POST", api("/admin/traffic/report"),
+            {"node_id": TRAFFIC_NODE_ID, "user_id": TARGET_USER_ID,
+             "upload_bytes": 1024, "download_bytes": 2048},
+            token=ADMIN_TOKEN)
+        step(2.21, "Traffic report", code in (200, 201), f"HTTP {code}")
+    else:
+        step(2.21, "Traffic report", False, f"no node_id={TRAFFIC_NODE_ID} or user_id={TARGET_USER_ID}")
+    # Cleanup temp node
+    if TRAFFIC_NODE_ID > 0:
+        req("DELETE", api(f"/admin/nodes/{TRAFFIC_NODE_ID}"), token=ADMIN_TOKEN)
 else:
     step(2.21, "Traffic report", False, "no admin token")
 
@@ -626,20 +658,21 @@ print("    TokenLogin via client_token")
 print("=" * 60)
 
 # 4.1 Get client_token for a non-admin user (from admin API)
-print("\n--- 4.1 Get Client Token (user 2) ---")
+print("\n--- 4.1 Get Client Token ---")
 code, res = req("POST", api("/public/login"),
-    {"username": "admin", "password": "admin123"})
+    {"username": "b", "password": "1"})
 if code == 200:
     admin_jwt = res.get("token", "")
-    # Get user 2's client_token (non-admin user, token was regenerated in step 2.18)
-    code2, res2 = req("GET", api("/admin/users/2"), token=admin_jwt)
+    # Get target user's client_token (non-admin user)
+    target_id = TARGET_USER_ID if TARGET_USER_ID else 9  # fallback to id=9
+    code2, res2 = req("GET", api(f"/admin/users/{target_id}"), token=admin_jwt)
     if code2 == 200:
         client_token = res2.get("client_token", "")
-        step(4.1, "Client token for user 2", len(client_token) > 0,
+        step(4.1, f"Client token for user {target_id}", len(client_token) > 0,
              f"token={client_token[:20]}...")
     else:
         client_token = ""
-        step(4.1, "Get user 2 client token", False, f"HTTP {code2}")
+        step(4.1, f"Get user {target_id} client token", False, f"HTTP {code2}")
 else:
     client_token = ""
     step(4.1, "Admin login", False, f"HTTP {code}")

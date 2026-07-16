@@ -1,65 +1,45 @@
 <template>
   <div class="page products-page">
-    <aside class="sidebar">
-      <h2 class="brand">RFPlay Admin</h2>
-      <nav>
-        <router-link to="/dashboard" class="nav-item">📊 Dashboard</router-link>
-        <router-link to="/users" class="nav-item">👥 Users</router-link>
-        <router-link to="/products" class="nav-item">📦 Products</router-link>
-        <router-link to="/orders" class="nav-item">🛒 Orders</router-link>
-        <router-link to="/nodes" class="nav-item">🖥️ Nodes</router-link>
-        <router-link to="/tokens" class="nav-item">🔑 Tokens</router-link>
-        <router-link to="/settings" class="nav-item">⚙️ Settings</router-link>
-        <router-link to="/plans" class="nav-item">📋 Plans</router-link>
-      </nav>
-      <div class="sidebar-footer">
-        <span class="badge">{{ auth.username }}</span>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')" class="logout">Logout</a>
+    <header class="topbar">
+      <h2>Products</h2>
+      <div class="topbar-right">
+        <button class="btn-sm" @click="loadProducts">🔄 Refresh</button>
+        <button class="btn-primary" @click="openAddModal">+ Add Product</button>
       </div>
-    </aside>
+    </header>
 
-    <main class="main">
-      <header class="topbar">
-        <h2>Products</h2>
-        <div class="topbar-right">
-          <button class="btn-sm" @click="loadProducts">🔄 Refresh</button>
-          <button class="btn-primary" @click="openAddModal">+ Add Product</button>
-        </div>
-      </header>
+    <div v-if="loading" class="loading">Loading products…</div>
+    <div v-if="error" class="error-msg">{{ error }}</div>
 
-      <div v-if="loading" class="loading">Loading products…</div>
-      <div v-if="error" class="error-msg">{{ error }}</div>
-
-      <div v-if="!loading" class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Price</th>
-              <th>Stock</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in products" :key="p.id">
-              <td>{{ p.id }}</td>
-              <td><strong>{{ p.name }}</strong></td>
-              <td><span class="tag">{{ p.type }}</span></td>
-              <td>${{ p.price.toFixed(2) }}</td>
-              <td>{{ p.stock }}</td>
-              <td><span :class="['status', p.status]">{{ p.status }}</span></td>
-              <td class="actions-cell">
-                <button class="btn-tiny" @click="openEditModal(p)">✏️ Edit</button>
-                <button class="btn-tiny danger" @click="archiveProduct(p)">📦 Archive</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </main>
+    <div v-if="!loading" class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Price</th>
+            <th>Stock</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in products" :key="p.id">
+            <td>{{ p.id }}</td>
+            <td><strong>{{ p.name }}</strong></td>
+            <td><span class="tag">{{ p.type }}</span></td>
+            <td>${{ p.price.toFixed(2) }}</td>
+            <td>{{ p.stock }}</td>
+            <td><span :class="['status', p.status]">{{ p.status }}</span></td>
+            <td class="actions-cell">
+              <button class="btn-tiny" @click="openEditModal(p)">✏️ Edit</button>
+              <button class="btn-tiny danger" @click="archiveProduct(p)">📦 Archive</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <!-- Add/Edit Modal -->
     <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
@@ -104,10 +84,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
-
-const auth = useAuthStore()
 
 interface Product {
   id: number
@@ -202,6 +179,7 @@ async function archiveProduct(p: Product) {
   if (!confirm(`Archive product "${p.name}"?`)) return
   try {
     await api.put(`/admin/products/${p.id}`, { status: 'inactive' })
+    // TODO: Direct mutation of reactive array item — should re-fetch from server instead
     p.status = 'inactive'
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to archive product'
@@ -212,18 +190,6 @@ onMounted(loadProducts)
 </script>
 
 <style scoped>
-.products-page { display: flex; min-height: 100vh; background: #12141a; color: #e0e0e0; }
-.sidebar { width: 220px; background: #1a1d23; padding: 1.5rem 0; display: flex; flex-direction: column; border-right: 1px solid #2a2d35; }
-.brand { color: #4a9eff; font-size: 1.1rem; padding: 0 1.25rem; margin: 0 0 2rem; }
-.nav-item { color: #888; text-decoration: none; padding: 0.7rem 1.25rem; font-size: 0.9rem; transition: 0.15s; display: block; }
-.nav-item:hover, .nav-item.router-link-active { color: #fff; background: #2a2d35; }
-.sidebar-footer { padding: 1rem 1.25rem; border-top: 1px solid #2a2d35; }
-.badge { display: block; color: #aaa; font-size: 0.8rem; margin-bottom: 0.5rem; }
-.logout { color: #ff6b6b; text-decoration: none; font-size: 0.85rem; }
-.main { flex: 1; display: flex; flex-direction: column; }
-.topbar { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 2rem; border-bottom: 1px solid #2a2d35; }
-.topbar h2 { margin: 0; font-size: 1.3rem; color: #fff; }
-.topbar-right { display: flex; gap: 0.75rem; align-items: center; }
 .btn-sm { padding: 0.45rem 0.9rem; border: 1px solid #4a9eff; border-radius: 6px; background: transparent; color: #4a9eff; cursor: pointer; font-size: 0.85rem; }
 .btn-sm:hover { background: #4a9eff22; }
 .btn-primary { padding: 0.45rem 0.9rem; background: #4a9eff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }

@@ -35,7 +35,10 @@ func Init(dataDir string) {
 		log.Fatalf("failed to connect database: %v", err)
 	}
 
-	// Auto migrate
+	// Auto migrate.
+	// TODO: Replace AutoMigrate with a proper migration tool (e.g. golang-migrate/migrate)
+	// for production use, to support versioned, reversible schema changes.
+
 	if err := DB.AutoMigrate(
 		&model.User{},
 		&model.Order{},
@@ -63,7 +66,14 @@ func Init(dataDir string) {
 	var count int64
 	DB.Model(&model.User{}).Count(&count)
 	if count == 0 {
-		adminHash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
+		// Generate random admin password
+		passBytes := make([]byte, 16)
+		if _, err := rand.Read(passBytes); err != nil {
+			log.Fatalf("failed to generate admin password: %v", err)
+		}
+		adminPass := hex.EncodeToString(passBytes)
+
+		adminHash, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
 		if err != nil {
 			log.Fatalf("failed to hash admin password: %v", err)
 		}
@@ -83,7 +93,22 @@ func Init(dataDir string) {
 			admin.ClientToken = "rf_" + hex.EncodeToString(tokenBytes)
 			DB.Model(&admin).Update("client_token", admin.ClientToken)
 		}
-		log.Printf("[SECURITY] Auto-created admin user: username=%s role=%s", admin.Username, admin.Role)
+		log.Printf("========================================")
+		log.Printf("Admin user created successfully!")
+		log.Printf("  Username: admin")
+		if len(adminPass) > 4 {
+			log.Printf("  Password: %s****", adminPass[:4])
+		} else {
+			log.Printf("  Password: ****")
+		}
+		log.Printf("  Full password written to: %s/.admin_password", dataDir)
+		log.Printf("  PLEASE CHANGE THIS PASSWORD IMMEDIATELY")
+		log.Printf("========================================")
+		// Write full password to file for one-time retrieval
+		pwFile := filepath.Join(dataDir, ".admin_password")
+		if err := os.WriteFile(pwFile, []byte(adminPass), 0600); err != nil {
+			log.Printf("WARNING: failed to write admin password file: %v", err)
+		}
 	}
 
 	log.Printf("database initialized at %s", dbPath)

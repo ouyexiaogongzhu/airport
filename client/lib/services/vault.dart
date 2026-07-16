@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 
 /// Lightweight AES-CBC encrypted key-value store.
 ///
@@ -9,6 +10,10 @@ import 'package:crypto/crypto.dart';
 /// a temp-file fallback. The encryption key is derived from a fixed app
 /// secret via SHA-256 — good enough for MVP; a production app would use
 /// platform keystores or hardware-backed keys.
+///
+/// SECURITY WARNING: This vault uses a hardcoded secret and weak XOR
+/// encryption. Do NOT store sensitive credentials here in production.
+/// Migrate to `flutter_secure_storage` or platform-native keychain APIs.
 ///
 /// Usage:
 /// ```dart
@@ -19,8 +24,17 @@ import 'package:crypto/crypto.dart';
 class Vault {
   final String _appSecret;
 
+  // TODO(security): Remove hardcoded secret. Use a per-device key derived
+  // from platform secure storage or a key derivation service.
   Vault({String? appSecret})
-      : _appSecret = appSecret ?? 'RFPlay_Vault_Secret_2026';
+      : _appSecret = appSecret ?? 'RFPlay_Vault_Secret_2026' {
+    if (_appSecret == 'RFPlay_Vault_Secret_2026') {
+      stderr.writeln(
+        '[Vault] WARNING: Using default hardcoded encryption secret. '
+        'This is NOT secure for production use.',
+      );
+    }
+  }
 
   String get _vaultPath {
     try {
@@ -30,7 +44,8 @@ class Vault {
         dir.createSync(recursive: true);
       }
       return '${dir.path}/vault.json';
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Vault] Failed to resolve vault path: $e');
       return '${Directory.systemTemp.path}/rfplay_vault.json';
     }
   }
@@ -59,7 +74,8 @@ class Vault {
       try {
         final content = await file.readAsString();
         data = jsonDecode(content) as Map<String, dynamic>;
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[Vault] Failed to parse vault file, resetting: $e');
         data = {};
       }
     }
@@ -78,7 +94,8 @@ class Vault {
       final encrypted = data[key] as String?;
       if (encrypted == null) return null;
       return _decrypt(encrypted);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Vault] Failed to read key "$key": $e');
       return null;
     }
   }
@@ -93,7 +110,9 @@ class Vault {
       final data = jsonDecode(content) as Map<String, dynamic>;
       data.remove(key);
       await file.writeAsString(jsonEncode(data));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Vault] Failed to delete key "$key": $e');
+    }
   }
 
   /// Clear the entire vault.

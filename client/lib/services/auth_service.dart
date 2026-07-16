@@ -1,13 +1,22 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, ChangeNotifier;
 import '../models/user.dart';
 import 'api_service.dart';
 
 /// Simple file-based storage path for auth token.
 ///
 /// Uses the home directory on Linux/macOS, system temp as fallback.
+/// On web, returns a dummy path (file storage is not available).
+///
+/// SECURITY: For production, replace file-based token storage with
+/// `flutter_secure_storage` (Keychain on iOS, Keystore on Android,
+/// libsecret on Linux).
 String get _defaultTokenPath {
+  if (kIsWeb) {
+    // Web platform: file storage not available; token stays in memory only.
+    return '/tmp/rfplay_auth_token_web';
+  }
   final home = Platform.environment['HOME'] ??
       Platform.environment['USERPROFILE'];
   if (home != null) {
@@ -15,7 +24,9 @@ String get _defaultTokenPath {
     if (!dir.existsSync()) {
       try {
         dir.createSync(recursive: true);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[AuthService] Failed to create .rfplay dir: $e');
+      }
     }
     return '$home/.rfplay/auth_token';
   }
@@ -47,14 +58,29 @@ class AuthService extends ChangeNotifier {
       if (await file.exists()) {
         return await file.readAsString();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[AuthService] Failed to load token: $e');
+    }
     return null;
   }
 
+  /// SECURITY: Writes token to disk in plaintext. For production, migrate
+  /// to `flutter_secure_storage` which uses platform-native secure enclaves.
   Future<void> _saveToken(String token) async {
     try {
-      await File(_tokenPath).writeAsString(token);
-    } catch (_) {}
+      final file = File(_tokenPath);
+      await file.writeAsString(token);
+      // Restrict file permissions to owner-only (Linux/macOS).
+      if (!kIsWeb && !Platform.isWindows) {
+        try {
+          await Process.run('chmod', ['600', _tokenPath]);
+        } catch (e) {
+          debugPrint('[AuthService] Failed to chmod token file: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('[AuthService] Failed to save token: $e');
+    }
   }
 
   Future<void> _deleteToken() async {
@@ -63,7 +89,9 @@ class AuthService extends ChangeNotifier {
       if (await file.exists()) {
         await file.delete();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[AuthService] Failed to delete token: $e');
+    }
   }
 
   /// Initialize: restore token from file storage
@@ -128,7 +156,7 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await _api.post('/auth/token-login', body: {
+      final response = await _api.post('/public/token-login', body: {
         'token': token,
       });
 

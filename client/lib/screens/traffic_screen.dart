@@ -26,6 +26,8 @@ class TrafficScreen extends StatefulWidget {
 
 class _TrafficScreenState extends State<TrafficScreen> {
   /// Estimated total traffic limit (100 GB).
+  // TODO(M7): Traffic estimate is hardcoded at 100 GB. Fetch the actual plan
+  // limit from the API or subscription config instead.
   static const int _trafficLimitBytes = 100 * 1024 * 1024 * 1024;
 
   /// Simulated "today" usage — in production this comes from the API.
@@ -129,7 +131,11 @@ class _TrafficScreenState extends State<TrafficScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer2<SubscriptionService, VpnService>(
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('流量统计'),
+      ),
+      body: Consumer2<SubscriptionService, VpnService>(
       builder: (context, subService, vpn, _) {
         final sub = subService.subscription;
         final statusError = subService.statusError;
@@ -251,6 +257,7 @@ class _TrafficScreenState extends State<TrafficScreen> {
           ),
         );
       },
+      )
     );
   }
 

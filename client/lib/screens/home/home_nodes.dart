@@ -43,6 +43,8 @@ class _HomeNodesState extends State<HomeNodes> {
     );
   }
 
+  // BUG: Ping always targets 8.8.8.8:53 instead of the actual node address.
+  // Should use node.host / node.port to measure real latency to each node.
   Future<void> _pingNode(VpnService vpn, VpnNode node) async {
     await vpn.pingNode(node.name, '8.8.8.8', 53);
   }

@@ -1,7 +1,11 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -12,7 +16,7 @@ import (
 )
 
 const gbBytes = 1073741824
-const subscriptionDays = 30 * 86400
+const subscriptionDurationSeconds = 30 * 86400
 
 type orderWithProduct struct {
 	model.Order
@@ -20,6 +24,7 @@ type orderWithProduct struct {
 }
 
 // CreateOrder creates a new order for the authenticated user.
+// TODO: Propagate request context via c.Context() for GORM queries.
 func CreateOrder(c *fiber.Ctx) error {
 	userID, ok := c.Locals("user_id").(uint)
 	if !ok {
@@ -54,12 +59,6 @@ func CreateOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	if product.Stock <= 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "product out of stock",
-		})
-	}
-
 	providerName := req.Provider
 	if providerName == "" {
 		providerName = "mock"
@@ -79,7 +78,28 @@ func CreateOrder(c *fiber.Ctx) error {
 		Status:    "pending",
 		Provider:  providerName,
 	}
-	if result := db.DB.Create(&order); result.Error != nil {
+
+	// Create order and decrement stock atomically
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		// Lock the product row and check stock
+		var lockedProduct model.Product
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&lockedProduct, req.ProductID).Error; err != nil {
+			return err
+		}
+		if lockedProduct.Stock <= 0 {
+			return fmt.Errorf("out of stock")
+		}
+		if err := tx.Create(&order).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Product{}).Where("id = ? AND stock > 0", req.ProductID).
+			Update("stock", gorm.Expr("stock - 1")).Error
+	}); err != nil {
+		if err.Error() == "out of stock" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "product out of stock",
+			})
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to create order",
 		})
@@ -108,20 +128,13 @@ func CreateOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	if result := db.DB.Model(&model.Product{}).Where("id = ?", req.ProductID).
-		Update("stock", gorm.Expr("stock - 1")); result.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to update product stock",
-		})
-	}
-
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"order":       order,
 		"payment_url": order.PaymentURL,
 	})
 }
 
-// ListOrders returns all orders for the authenticated user.
+// ListOrders returns all orders for the authenticated user with pagination.
 func ListOrders(c *fiber.Ctx) error {
 	userID, ok := c.Locals("user_id").(uint)
 	if !ok {
@@ -130,14 +143,24 @@ func ListOrders(c *fiber.Ctx) error {
 		})
 	}
 
+	offset, limit := parsePagination(c)
+
+	var total int64
+	db.DB.Model(&model.Order{}).Where("user_id = ?", userID).Count(&total)
+
 	var orders []model.Order
-	if result := db.DB.Where("user_id = ?", userID).Order("created_at DESC").Find(&orders); result.Error != nil {
+	if result := db.DB.Where("user_id = ?", userID).Order("created_at DESC").Offset(offset).Limit(limit).Find(&orders); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to list orders",
 		})
 	}
 
-	return c.JSON(orders)
+	return c.JSON(fiber.Map{
+		"data":     orders,
+		"total":    total,
+		"page":     offset/limit + 1,
+		"per_page": limit,
+	})
 }
 
 // GetOrder returns a single order for the authenticated user.
@@ -208,12 +231,6 @@ func PaymentCallback(c *fiber.Ctx) error {
 	}
 
 	if result.Status == "paid" && order.Status == "pending" {
-		if err := db.DB.Model(&order).Update("status", "paid").Error; err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "failed to update order",
-			})
-		}
-
 		var user model.User
 		if dbResult := db.DB.First(&user, order.UserID); dbResult.Error != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -228,7 +245,12 @@ func PaymentCallback(c *fiber.Ctx) error {
 			})
 		}
 
-		if err := activateSubscription(&user, &product, order.Amount); err != nil {
+		if err := db.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
+				return err
+			}
+			return activateSubscriptionTx(tx, &user, &product, order.Amount)
+		}); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "failed to activate subscription",
 			})
@@ -238,18 +260,26 @@ func PaymentCallback(c *fiber.Ctx) error {
 	}
 
 	if result.Status == "failed" || result.Status == "expired" {
-		db.DB.Model(&order).Update("status", result.Status)
+		if err := db.DB.Model(&order).Update("status", result.Status).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to update order status",
+			})
+		}
 	}
 
 	return c.SendString("ok")
 }
 
 func activateSubscription(user *model.User, product *model.Product, amount float64) error {
+	return activateSubscriptionTx(db.DB, user, product, amount)
+}
+
+func activateSubscriptionTx(tx *gorm.DB, user *model.User, product *model.Product, amount float64) error {
 	now := time.Now().Unix()
 	trafficLimit := int64(amount * gbBytes)
 
 	if user.SubscriptionStatus == "active" {
-		return db.DB.Model(user).Update("expire_time", user.ExpireTime+subscriptionDays).Error
+		return tx.Model(user).Update("expire_time", user.ExpireTime+subscriptionDurationSeconds).Error
 	}
 
 	updates := map[string]interface{}{
@@ -259,22 +289,32 @@ func activateSubscription(user *model.User, product *model.Product, amount float
 		"rate_limit_bps":       int64(0),
 		"traffic_used_bytes":   int64(0),
 		"traffic_period_start": now,
-		"expire_time":          now + subscriptionDays,
+		"expire_time":          now + subscriptionDurationSeconds,
 	}
 
-	return db.DB.Model(user).Updates(updates).Error
+	return tx.Model(user).Updates(updates).Error
 }
 
-// AdminListOrders returns all orders with product details.
+// AdminListOrders returns all orders with product details and pagination.
 func AdminListOrders(c *fiber.Ctx) error {
+	offset, limit := parsePagination(c)
+
+	var total int64
+	db.DB.Model(&model.Order{}).Count(&total)
+
 	var orders []orderWithProduct
-	if result := db.DB.Preload("Product").Order("created_at DESC").Find(&orders); result.Error != nil {
+	if result := db.DB.Preload("Product").Order("created_at DESC").Offset(offset).Limit(limit).Find(&orders); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to list orders",
 		})
 	}
 
-	return c.JSON(orders)
+	return c.JSON(fiber.Map{
+		"data":     orders,
+		"total":    total,
+		"page":     offset/limit + 1,
+		"per_page": limit,
+	})
 }
 
 // AdminGetOrder returns a single order with product details.
@@ -342,8 +382,13 @@ type MockPayCallbackRequest struct {
 	Status  string `json:"status" validate:"required"` // paid, cancelled
 }
 
-// MockPayCallback simulates a payment gateway callback.
+// MockPayCallback simulates a payment gateway callback. Only available in dev/test.
 func MockPayCallback(c *fiber.Ctx) error {
+	if os.Getenv("MOCK_PAY_ENABLED") == "" && os.Getenv("APP_ENV") == "production" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "mock payment callback is disabled in production",
+		})
+	}
 	req := new(MockPayCallbackRequest)
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -372,13 +417,24 @@ func MockPayCallback(c *fiber.Ctx) error {
 
 	switch req.Status {
 	case "paid":
-		db.DB.Model(&order).Update("status", "paid")
-
-		db.DB.Model(&model.Product{}).Where("id = ?", order.ProductID).
-			Update("stock", gorm.Expr("stock - 1"))
-
-		db.DB.Model(&model.User{}).Where("id = ?", order.UserID).
-			Update("balance", gorm.Expr("balance + ?", order.Amount))
+		if err := db.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.Product{}).Where("id = ? AND stock > 0", order.ProductID).
+				Update("stock", gorm.Expr("stock - 1")).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.User{}).Where("id = ?", order.UserID).
+				Update("balance", gorm.Expr("balance + ?", order.Amount)).Error; err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to process payment",
+			})
+		}
 
 		return c.JSON(fiber.Map{
 			"message": "payment successful",
@@ -386,7 +442,11 @@ func MockPayCallback(c *fiber.Ctx) error {
 		})
 
 	case "cancelled":
-		db.DB.Model(&order).Update("status", "cancelled")
+		if err := db.DB.Model(&order).Update("status", "cancelled").Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to cancel order",
+			})
+		}
 		return c.JSON(fiber.Map{
 			"message": "payment cancelled",
 			"order":   order,

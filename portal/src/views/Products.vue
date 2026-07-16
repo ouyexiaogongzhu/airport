@@ -19,6 +19,12 @@
       <div v-if="loading" class="loading">Loading plans…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
 
+      <!-- Renewal banner for existing subscribers -->
+      <div v-if="hasActiveSub" class="renew-banner">
+        <span class="renew-icon">🔄</span>
+        <span>You have an active subscription. Purchasing a plan will <strong>extend</strong> your current subscription period.</span>
+      </div>
+
       <div v-if="plans.length" class="plan-grid">
         <div v-for="p in plans" :key="p.id" class="plan-card">
           <div class="plan-header">
@@ -40,7 +46,9 @@
             </div>
             <div v-if="p.description" class="feature-desc">{{ p.description }}</div>
           </div>
-          <button class="btn buy-btn" @click="goCheckout(p)">Purchase</button>
+          <button class="btn buy-btn" @click="goCheckout(p)">
+            {{ hasActiveSub ? 'Renew / Extend' : 'Purchase' }}
+          </button>
         </div>
       </div>
 
@@ -52,10 +60,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index.js'
+import api from '../api/index'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -75,21 +83,40 @@ const plans = ref<Plan[]>([])
 const loading = ref(true)
 const error = ref('')
 
+// Subscription info for renewal banner
+const profile = ref<any>({})
+const profileLoading = ref(true)
+
+const hasActiveSub = computed(() => {
+  return profile.value.subscription_status === 'active'
+})
+
+async function fetchProfile() {
+  try {
+    const res = await api.get('/user/profile')
+    profile.value = res.data
+  } catch {
+    // Non-critical — just won't show renewal banner
+  } finally {
+    profileLoading.value = false
+  }
+}
+
 async function fetchPlans() {
   loading.value = true
   error.value = ''
   try {
     // Try authenticated first, fall back to public
-    const res = await api.get('/web/plans')
-    plans.value = Array.isArray(res.data) ? res.data : (res.data.plans || [])
+    const res = await api.get('/products')
+    plans.value = Array.isArray(res.data) ? res.data : (res.data.products || [])
   } catch (e: any) {
     if (!e.response || e.response.status === 401) {
       // Public endpoint — try without auth
       try {
-        const res = await api.get('/web/plans', {
+        const res = await api.get('/products', {
           headers: { Authorization: '' }
         })
-        plans.value = Array.isArray(res.data) ? res.data : (res.data.plans || [])
+        plans.value = Array.isArray(res.data) ? res.data : (res.data.products || [])
       } catch (e2: any) {
         error.value = e2.response?.data?.error || 'Failed to load plans'
       }
@@ -134,7 +161,10 @@ function goCheckout(p: Plan) {
   router.push(`/checkout/${p.id}`)
 }
 
-onMounted(fetchPlans)
+onMounted(() => {
+  fetchPlans()
+  fetchProfile()
+})
 </script>
 
 <style scoped>
@@ -162,6 +192,22 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .loading { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
 .error-msg { color: #ff6b6b; background: rgba(255,107,107,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
 .empty { color: #a0a0b0; text-align: center; padding: 3rem 0; font-size: 0.9rem; }
+
+/* Renewal banner */
+.renew-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: linear-gradient(135deg, #1b4332, #16213e);
+  border: 1px solid #68d391;
+  border-radius: 10px;
+  padding: 0.85rem 1.25rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  color: #e0e0e0;
+}
+.renew-icon { font-size: 1.2rem; }
+.renew-banner strong { color: #68d391; }
 
 .plan-grid {
   display: grid;

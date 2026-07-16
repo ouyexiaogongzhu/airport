@@ -1,3 +1,5 @@
+// TODO(L1): Implement operator == and hashCode on VpnNode and SubscriptionInfo
+// for value-based equality. Consider using package:equatable.
 class VpnNode {
   final String name;
   final String uri;

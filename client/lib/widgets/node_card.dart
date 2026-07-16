@@ -175,7 +175,7 @@ class NodeCard extends StatelessWidget {
                     // Ping button
                     if (onPing != null)
                       IconButton(
-                        icon: Icon(
+                        icon: const Icon(
                           Icons.speed,
                           size: 18,
                           color: Colors.grey,
@@ -189,7 +189,7 @@ class NodeCard extends StatelessWidget {
                     // Copy button
                     if (onCopy != null)
                       IconButton(
-                        icon: Icon(
+                        icon: const Icon(
                           Icons.copy,
                           size: 18,
                           color: Colors.grey,

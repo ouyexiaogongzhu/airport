@@ -32,13 +32,14 @@ services:
     volumes:
       - certbot-www:/var/www/certbot
       - certbot-conf:/etc/letsencrypt
+      - ./deploy/ssl:/etc/nginx/ssl:ro
     networks:
       - rfplay-net
     depends_on:
       - manager
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      test: ["CMD", "curl", "-skf", "https://localhost/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -61,6 +62,11 @@ services:
     networks:
       - rfplay-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 15s
@@ -86,6 +92,12 @@ services:
       manager:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   # ─── Xray-core (optional — enable with --profile full) ───
   xray:
@@ -97,6 +109,9 @@ services:
       - "443"
       - "8443"
       - "1099"
+    # TODO(M4): In production, bind ports to 127.0.0.1 to avoid exposing
+    # Xray directly to the internet. Use nginx stream proxy instead.
+    # Example: "127.0.0.1:1099:1099" and "127.0.0.1:8443:8443"
     ports:
       - "1099:1099"
       - "8443:8443"

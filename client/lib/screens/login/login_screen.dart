@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../services/auth_service.dart';
 import '../../widgets/loading_overlay.dart';
 
+// DUPLICATE: This file and screens/login_screen.dart both define a
+// LoginScreen. The router in main.dart imports the flat layout version
+// (screens/login_screen.dart), NOT this TabBar version. This file is
+// unused — consider removing it or consolidating into one screen.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -12,6 +17,9 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
+  // TODO: Load portal URL from remote config or SubscriptionService
+  static const _kPortalRegisterUrl = 'https://www.rfplay.uk/register';
+
   late final TabController _tabController;
 
   // Account login controllers
@@ -143,8 +151,11 @@ class _LoginScreenState extends State<LoginScreen>
                   ),
                   const SizedBox(height: 16),
                   TextButton(
-                    onPressed: () {
-                      Navigator.pushNamed(context, '/register');
+                    onPressed: () async {
+                      await launchUrl(
+                        Uri.parse(_kPortalRegisterUrl),
+                        mode: LaunchMode.externalApplication,
+                      );
                     },
                     child: const Text('没有账号？立即注册'),
                   ),

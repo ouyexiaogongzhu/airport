@@ -1,24 +1,5 @@
 <template>
-  <div class="page settings-page">
-    <aside class="sidebar">
-      <h2 class="brand">RFPlay Admin</h2>
-      <nav>
-        <router-link to="/dashboard" class="nav-item">📊 Dashboard</router-link>
-        <router-link to="/users" class="nav-item">👥 Users</router-link>
-        <router-link to="/products" class="nav-item">📦 Products</router-link>
-        <router-link to="/orders" class="nav-item">🛒 Orders</router-link>
-        <router-link to="/nodes" class="nav-item">🖥️ Nodes</router-link>
-        <router-link to="/tokens" class="nav-item">🔑 Tokens</router-link>
-        <router-link to="/settings" class="nav-item">⚙️ Settings</router-link>
-        <router-link to="/plans" class="nav-item">📋 Plans</router-link>
-      </nav>
-      <div class="sidebar-footer">
-        <span class="badge">{{ auth.username }}</span>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')" class="logout">Logout</a>
-      </div>
-    </aside>
-
-    <main class="main">
+  <div class="settings-page">
       <header class="topbar">
         <h2>Settings</h2>
         <div class="topbar-right">
@@ -201,16 +182,12 @@
           </div>
         </div>
       </div>
-    </main>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
-
-const auth = useAuthStore()
 
 interface Tab { key: string; label: string; icon: string }
 
@@ -253,6 +230,7 @@ interface SecurityConfig {
 
 const general = reactive({
   apiBase: import.meta.env.VITE_API_BASE_URL || '/api/v1',
+  // TODO: Read apiVersion from env or package.json instead of hardcoding
   apiVersion: 'v1.0.0',
   appVersion: '0.0.1',
 })
@@ -369,18 +347,7 @@ onMounted(loadAll)
 </script>
 
 <style scoped>
-.settings-page { display: flex; min-height: 100vh; background: #12141a; color: #e0e0e0; }
-.sidebar { width: 220px; background: #1a1d23; padding: 1.5rem 0; display: flex; flex-direction: column; border-right: 1px solid #2a2d35; }
-.brand { color: #4a9eff; font-size: 1.1rem; padding: 0 1.25rem; margin: 0 0 2rem; }
-.nav-item { color: #888; text-decoration: none; padding: 0.7rem 1.25rem; font-size: 0.9rem; transition: 0.15s; display: block; }
-.nav-item:hover, .nav-item.router-link-active { color: #fff; background: #2a2d35; }
-.sidebar-footer { padding: 1rem 1.25rem; border-top: 1px solid #2a2d35; }
-.badge { display: block; color: #aaa; font-size: 0.8rem; margin-bottom: 0.5rem; }
-.logout { color: #ff6b6b; text-decoration: none; font-size: 0.85rem; }
-.main { flex: 1; display: flex; flex-direction: column; }
-.topbar { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 2rem; border-bottom: 1px solid #2a2d35; }
-.topbar h2 { margin: 0; font-size: 1.3rem; color: #fff; }
-.topbar-right { display: flex; gap: 0.75rem; align-items: center; }
+.settings-page { min-height: 100vh; background: #12141a; color: #e0e0e0; }
 .btn-sm { padding: 0.45rem 0.9rem; border: 1px solid #4a9eff; border-radius: 6px; background: transparent; color: #4a9eff; cursor: pointer; font-size: 0.85rem; }
 .btn-sm:hover { background: #4a9eff22; }
 .loading { padding: 3rem; text-align: center; color: #888; }

@@ -41,7 +41,7 @@ async function handleLogin() {
   const res = await auth.login(username.value, password.value)
   loading.value = false
   if (res.success) {
-    router.push('/dashboard')
+    router.push('/admin/dashboard')
   } else {
     error.value = res.error || 'Login failed'
   }

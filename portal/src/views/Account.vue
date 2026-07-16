@@ -99,7 +99,7 @@
         </div>
 
         <!-- Regenerate confirm modal -->
-        <div v-if="showConfirm" class="modal-overlay" @click.self="showConfirm = false">
+        <div v-if="showConfirm" class="modal-overlay" role="dialog" aria-modal="true" @click.self="showConfirm = false">
           <div class="modal">
             <h4>Confirm Token Reset</h4>
             <p>Are you sure? After resetting, all existing connections using this token will stop working immediately. You will need to update every device with the new token.</p>
@@ -141,7 +141,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index.js'
+import api from '../api/index'
 import QrCode from '../components/QrCode.vue'
 
 const auth = useAuthStore()
@@ -263,17 +263,7 @@ function toggleTokenVisibility() {
 // Copy masked token
 async function copyToken() {
   if (!tokenData.value?.token) return
-  try {
-    await navigator.clipboard.writeText(tokenData.value.token)
-  } catch {
-    // Fallback for non-HTTPS
-    const ta = document.createElement('textarea')
-    ta.value = tokenData.value.token
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-  }
+  await navigator.clipboard.writeText(tokenData.value.token)
   copied.value = true
   setTimeout(() => { copied.value = false }, 2000)
 }
@@ -304,17 +294,9 @@ async function regenerateToken() {
 // Copy new token
 async function copyNewToken() {
   if (!newToken.value) return
-  try {
-    await navigator.clipboard.writeText(newToken.value)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = newToken.value
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-  }
+  await navigator.clipboard.writeText(newToken.value)
   newCopied.value = true
+  setTimeout(() => { newCopied.value = false }, 2000)
 }
 
 // Fetch node list

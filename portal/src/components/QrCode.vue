@@ -1,6 +1,7 @@
 <template>
   <div class="qr-wrapper">
-    <canvas ref="canvas"></canvas>
+    <canvas v-show="!errorMsg" ref="canvas"></canvas>
+    <div v-if="errorMsg" class="qr-error">{{ errorMsg }}</div>
   </div>
 </template>
 
@@ -10,9 +11,11 @@ import QRCode from 'qrcode'
 
 const props = defineProps<{ url: string }>()
 const canvas = ref<HTMLCanvasElement | null>(null)
+const errorMsg = ref('')
 
 async function render() {
   if (!canvas.value || !props.url) return
+  errorMsg.value = ''
   try {
     await QRCode.toCanvas(canvas.value, props.url, {
       width: 200,
@@ -21,6 +24,7 @@ async function render() {
     })
   } catch (e) {
     console.error('QR render failed:', e)
+    errorMsg.value = 'Failed to generate QR code'
   }
 }
 
@@ -36,5 +40,13 @@ watch(() => props.url, render)
 }
 canvas {
   border-radius: 8px;
+}
+.qr-error {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  text-align: center;
 }
 </style>

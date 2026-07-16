@@ -12,7 +12,12 @@ class AccountSubscription extends StatefulWidget {
   State<AccountSubscription> createState() => _AccountSubscriptionState();
 }
 
+// TODO(M4): _statusBadge, _formatTrafficGb, and _trafficEstimateBytes are
+// duplicated across AccountSubscription, HomeDashboard, and DashboardScreen.
+// Extract shared utilities and widgets.
 class _AccountSubscriptionState extends State<AccountSubscription> {
+  // TODO(M7): Traffic estimate is hardcoded at 100 GB. Fetch the actual plan
+  // limit from the API or subscription config instead.
   static const int _trafficEstimateBytes = 100 * 1024 * 1024 * 1024;
 
   @override
@@ -56,7 +61,11 @@ class _AccountSubscriptionState extends State<AccountSubscription> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('订阅详情'),
+      ),
+      body: Stack(
       children: [
         RefreshIndicator(
           onRefresh: _refresh,
@@ -130,52 +139,6 @@ class _AccountSubscriptionState extends State<AccountSubscription> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 12),
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  '流量使用',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                TrafficBar(
-                                  usedBytes: (_trafficEstimateBytes - sub.trafficRemainingBytes)
-                                      .clamp(0, _trafficEstimateBytes),
-                                  totalBytes: _trafficEstimateBytes,
-                                  label:
-                                      '剩余 ${_formatTrafficGb(sub.trafficRemainingBytes / (1024 * 1024 * 1024))} GB',
-                                ),
-                                const SizedBox(height: 12),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton.icon(
-                                    onPressed: () {
-                                      Navigator.pushNamed(context, '/traffic');
-                                    },
-                                    icon: const Icon(Icons.bar_chart, size: 18),
-                                    label: const Text('查看详细流量统计'),
-                                    style: OutlinedButton.styleFrom(
-                                      side: BorderSide(
-                                        color: Colors.cyanAccent.withAlpha(100),
-                                      ),
-                                      foregroundColor: Colors.cyanAccent,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
                       ] else if (statusError == 'SUBSCRIPTION_PENDING' ||
                           statusError == 'SUBSCRIPTION_EXPIRED') ...[
                         const SizedBox(height: 12),
@@ -209,6 +172,7 @@ class _AccountSubscriptionState extends State<AccountSubscription> {
           },
         ),
       ],
+      )
     );
   }
 }

@@ -20,6 +20,15 @@
         <h2>Checkout</h2>
         <p class="subtitle">Review your order and select a payment method.</p>
 
+        <!-- Renewal notice -->
+        <div v-if="hasActiveSub" class="renew-notice">
+          <span class="renew-icon">🔄</span>
+          <div class="renew-text">
+            <strong>Renewal Order</strong>
+            <p>You have an active subscription. This purchase will <strong>extend</strong> your current subscription period.</p>
+          </div>
+        </div>
+
         <div class="checkout-layout">
           <!-- Order Summary -->
           <div class="card summary-card">
@@ -99,7 +108,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index.js'
+import api from '../api/index'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -123,14 +132,28 @@ const selectedProvider = ref('bepusdt')
 const submitting = ref(false)
 const submitError = ref('')
 
+// Subscription info for renewal notice
+const profile = ref<any>({})
+const hasActiveSub = ref(false)
+
+async function fetchProfile() {
+  try {
+    const res = await api.get('/user/profile')
+    profile.value = res.data
+    hasActiveSub.value = res.data.subscription_status === 'active'
+  } catch {
+    // Non-critical
+  }
+}
+
 async function fetchPlan() {
   loading.value = true
   error.value = ''
   try {
     // Fetch all plans and find the one matching plan_id
-    const res = await api.get('/web/plans')
-    const plans: Plan[] = Array.isArray(res.data) ? res.data : (res.data.plans || [])
-    const found = plans.find(p => p.id === route.params.plan_id)
+    const res = await api.get('/products')
+    const plans: Plan[] = Array.isArray(res.data) ? res.data : (res.data.products || [])
+    const found = plans.find(p => String(p.id) === route.params.plan_id)
     if (found) {
       plan.value = found
     } else {
@@ -147,8 +170,8 @@ async function placeOrder() {
   submitting.value = true
   submitError.value = ''
   try {
-    const res = await api.post('/web/orders', {
-      plan_id: route.params.plan_id,
+    const res = await api.post('/user/orders', {
+      product_id: route.params.plan_id,
       provider: selectedProvider.value,
     })
     const order = res.data
@@ -197,7 +220,10 @@ function formatSpeed(bps: number): string {
   return `${bps} bps`
 }
 
-onMounted(fetchPlan)
+onMounted(() => {
+  fetchPlan()
+  fetchProfile()
+})
 </script>
 
 <style scoped>
@@ -224,6 +250,23 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .subtitle { color: #a0a0b0; margin: 0.25rem 0 2rem; font-size: 0.9rem; }
 .loading { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
 .error-msg { color: #ff6b6b; background: rgba(255,107,107,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+
+/* Renewal notice */
+.renew-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  background: linear-gradient(135deg, #1b4332, #16213e);
+  border: 1px solid #68d391;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.renew-icon { font-size: 1.3rem; line-height: 1.4; }
+.renew-text { flex: 1; }
+.renew-text strong { color: #68d391; font-size: 0.95rem; }
+.renew-text p { margin: 0.25rem 0 0; color: #a0a0b0; font-size: 0.85rem; line-height: 1.4; }
+.renew-text p strong { color: #e0e0e0; }
 
 .checkout-layout {
   display: grid;

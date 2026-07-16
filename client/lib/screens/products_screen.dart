@@ -12,6 +12,7 @@ class ProductsScreen extends StatefulWidget {
 class _ProductsScreenState extends State<ProductsScreen> {
   List<Product> _products = [];
   bool _loading = true;
+  String? _loadError;
   final _mockProducts = [
     Product(
       id: 1,
@@ -98,10 +99,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
         _products = list;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       setState(() {
-        _products = _mockProducts;
+        _products = [];
         _loading = false;
+        _loadError = e.toString();
       });
     }
   }
@@ -144,7 +146,36 @@ class _ProductsScreenState extends State<ProductsScreen> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
+                : _loadError != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.cloud_off, size: 48, color: Colors.grey[500]),
+                              const SizedBox(height: 12),
+                              Text(
+                                '加载产品失败',
+                                style: TextStyle(color: Colors.grey[400], fontSize: 16),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _loadError!,
+                                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 16),
+                              OutlinedButton.icon(
+                                onPressed: _loadProducts,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('重试'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : ListView.builder(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: _products.length,
                     itemBuilder: (context, index) {

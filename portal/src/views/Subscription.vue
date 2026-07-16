@@ -136,7 +136,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index.js'
+import api from '../api/index'
 import QrCode from '../components/QrCode.vue'
 
 const auth = useAuthStore()
@@ -243,16 +243,7 @@ function toggleTokenVisibility() {
 
 async function copyToken() {
   if (!tokenData.value?.token) return
-  try {
-    await navigator.clipboard.writeText(tokenData.value.token)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = tokenData.value.token
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-  }
+  await navigator.clipboard.writeText(tokenData.value.token)
   copied.value = true
   setTimeout(() => { copied.value = false }, 2000)
 }
@@ -278,17 +269,9 @@ async function regenerateToken() {
 
 async function copyNewToken() {
   if (!newToken.value) return
-  try {
-    await navigator.clipboard.writeText(newToken.value)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = newToken.value
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-  }
+  await navigator.clipboard.writeText(newToken.value)
   newCopied.value = true
+  setTimeout(() => { newCopied.value = false }, 2000)
 }
 
 async function fetchNodes() {

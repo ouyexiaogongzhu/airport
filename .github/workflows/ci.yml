@@ -67,6 +67,12 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
+  # TODO(L4): Add CI jobs for the daemon and xray components. Currently only
+  # manager, nginx, portal, admin, and flutter are tested. Consider:
+  #   - daemon: build + unit tests
+  #   - xray: build + config validation
+  #   - integration test with --profile full
+
   # Docker: Build + smoke test
   docker:
     name: Docker Build

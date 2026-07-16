@@ -26,6 +26,8 @@ func EncodeNodeToURI(node *model.Node, user *model.User) string {
 }
 
 func encodeVmess(node *model.Node, user *model.User) string {
+	// TODO: These credentials are derived deterministically from user.ID.
+	// Generate random per-user UUIDs and passwords, store them in the DB.
 	uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", user.ID, 0, 0, 0, user.ID*100)
 
 	vmessData := map[string]interface{}{

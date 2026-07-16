@@ -16,7 +16,12 @@ class HomeDashboard extends StatefulWidget {
   State<HomeDashboard> createState() => _HomeDashboardState();
 }
 
+// TODO(M4): _statusBadge, _formatTrafficGb, traffic bar, and node card sections
+// are duplicated across HomeDashboard, DashboardScreen, and AccountSubscription.
+// Extract shared widgets and utility functions to reduce duplication.
 class _HomeDashboardState extends State<HomeDashboard> {
+  // TODO(M7): Traffic estimate is hardcoded at 100 GB. Fetch the actual plan
+  // limit from the API or subscription config instead.
   static const int _trafficEstimateBytes = 100 * 1024 * 1024 * 1024;
 
   @override
@@ -65,6 +70,8 @@ class _HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
+  // BUG: Ping always targets 8.8.8.8:53 instead of the actual node address.
+  // Should use node.host / node.port to measure real latency to each node.
   Future<void> _pingNode(VpnService vpn, VpnNode node) async {
     await vpn.pingNode(node.name, '8.8.8.8', 53);
   }

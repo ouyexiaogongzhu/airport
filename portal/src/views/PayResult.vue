@@ -66,7 +66,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index.js'
+import api from '../api/index'
 
 const auth = useAuthStore()
 const route = useRoute()

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"os"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 func getJWTSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
+		log.Println("[WARNING] JWT_SECRET not set, using dev-secret (DO NOT use in production)")
 		secret = "dev-secret"
 	}
 	return []byte(secret)

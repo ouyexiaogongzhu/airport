@@ -22,7 +22,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadProfile() async {
     setState(() => _loading = true);
     try {
-      await ApiService().get('/auth/profile');
+      // TODO(M6): The API response is fetched but never used. Parse the response
+      // to populate profile fields (e.g. email, avatar, settings) instead of
+      // relying solely on AuthService.currentUser.
+      final response = await ApiService().get('/auth/profile');
+      debugPrint('[ProfileScreen] profile response: $response');
     } catch (_) {
     }
     if (mounted) {
@@ -116,13 +120,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ? user!.createdAt.substring(0, 10)
               : '-',
         ),
-        _InfoItem(
-          icon: Icons.token,
-          label: 'Token',
-          value: user?.token != null
-              ? '${user!.token!.substring(0, 20)}...'
-              : '-',
-        ),
         const SizedBox(height: 32),
 
         // My Devices
@@ -136,18 +133,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         const SizedBox(height: 8),
-
-        // Subscription details
-        Card(
-          child: ListTile(
-            leading: Icon(Icons.subscriptions, color: Theme.of(context).colorScheme.primary),
-            title: const Text('订阅详情'),
-            subtitle: const Text('套餐、到期时间与流量信息'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.pushNamed(context, '/account/subscription'),
-          ),
-        ),
-        const SizedBox(height: 12),
 
         // Order history button
         SizedBox(

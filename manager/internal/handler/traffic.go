@@ -6,6 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/db"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
+	"gorm.io/gorm"
 )
 
 type ReportTrafficRequest struct {
@@ -23,6 +24,7 @@ type TrafficStatsQuery struct {
 }
 
 // ReportTraffic records a traffic data point and updates the node's cumulative counters.
+// TODO: Propagate request context via c.Context() for GORM queries.
 func ReportTraffic(c *fiber.Ctx) error {
 	req := new(ReportTrafficRequest)
 	if err := c.BodyParser(req); err != nil {
@@ -59,11 +61,15 @@ func ReportTraffic(c *fiber.Ctx) error {
 		})
 	}
 
-	// Update node cumulative counters
-	db.DB.Model(&node).Updates(map[string]interface{}{
-		"traffic_up":   node.TrafficUp + req.UploadBytes,
-		"traffic_down": node.TrafficDown + req.DownloadBytes,
-	})
+	// Update node cumulative counters (atomic SQL expression to avoid race condition)
+	if err := db.DB.Model(&model.Node{}).Where("id = ?", req.NodeID).Updates(map[string]interface{}{
+		"traffic_up":   gorm.Expr("traffic_up + ?", req.UploadBytes),
+		"traffic_down": gorm.Expr("traffic_down + ?", req.DownloadBytes),
+	}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to update node traffic counters",
+		})
+	}
 
 	return c.Status(fiber.StatusCreated).JSON(record)
 }

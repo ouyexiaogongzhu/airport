@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/api_service.dart';
@@ -39,6 +40,9 @@ Future<void> main() async {
   );
 }
 
+// TODO(L8): All user-visible strings are currently in Chinese (zh-CN).
+// Extract strings to an i18n/l10n system (e.g. flutter_localizations +
+// intl) before adding multi-language support.
 class RFPlayApp extends StatelessWidget {
   final AuthService authService;
 
@@ -46,7 +50,7 @@ class RFPlayApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    final app = MaterialApp(
       title: 'RFPlay Airport',
       debugShowCheckedModeBanner: false,
       initialRoute: authService.isLoggedIn ? '/main' : '/login',
@@ -73,6 +77,31 @@ class RFPlayApp extends StatelessWidget {
       },
       theme: _buildTheme(),
     );
+
+    if (Platform.isLinux) {
+      // 16:9 portrait: height=16, width=9 → width:height = 9:16
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          double w, h;
+          final ratio = 9.0 / 16.0; // width / height
+
+          if (constraints.maxWidth / constraints.maxHeight < ratio) {
+            // Width-limited
+            w = constraints.maxWidth;
+            h = w / ratio;
+          } else {
+            // Height-limited
+            h = constraints.maxHeight;
+            w = h * ratio;
+          }
+
+          return Center(
+            child: SizedBox(width: w, height: h, child: app),
+          );
+        },
+      );
+    }
+    return app;
   }
 
   ThemeData _buildTheme() {

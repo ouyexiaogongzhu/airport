@@ -71,6 +71,29 @@ class DeviceList extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+        // TODO(L3): Device list uses hardcoded placeholder data. Replace with
+        // real device data from the API when the devices feature is implemented.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.amber.withAlpha(30),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.amber.withAlpha(80)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.construction, color: Colors.amber, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '功能开发中 — 以下为示例数据',
+                  style: TextStyle(color: Colors.amber[300], fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
         Text(
           '设备管理',
           style: Theme.of(context).textTheme.headlineSmall?.copyWith(

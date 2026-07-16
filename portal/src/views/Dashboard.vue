@@ -17,6 +17,8 @@
       <p class="greeting">Here's what's happening with your account today.</p>
 
       <div v-if="loading" class="loading">Loading…</div>
+      <div v-if="error" class="error-msg">{{ error }}</div>
+      <div v-if="error" class="error-msg">{{ error }}</div>
 
       <div class="cards">
         <div class="card">
@@ -70,10 +72,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index.js'
+import api from '../api/index'
 
 const auth = useAuthStore()
 const loading = ref(true)
+const error = ref('')
 const profile = ref<any>({})
 const nodes = ref<string[]>([])
 
@@ -132,6 +135,7 @@ async function fetchData() {
     nodes.value = nodesRes.data.nodes || []
   } catch (e: any) {
     console.error('Dashboard load error:', e)
+    error.value = e.response?.data?.error || 'Failed to load dashboard data'
   } finally {
     loading.value = false
   }
@@ -250,6 +254,7 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
 .detail-value { color: #e2e8f0; font-weight: 500; }
 
 .loading { color: #a0aec0; text-align: center; padding: 2rem; }
+.error-msg { color: #fc8181; background: #4a1c1c; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
 .empty-state { text-align: center; padding: 1rem; color: #a0aec0; }
 .empty-state p { margin-bottom: 1rem; }
 </style>

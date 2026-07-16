@@ -25,6 +25,7 @@ type UpdateNodeRequest struct {
 }
 
 // CreateNode adds a new proxy node.
+// TODO: Propagate request context via c.Context() for GORM queries.
 func CreateNode(c *fiber.Ctx) error {
 	req := new(CreateNodeRequest)
 	if err := c.BodyParser(req); err != nil {
@@ -36,6 +37,29 @@ func CreateNode(c *fiber.Ctx) error {
 	if req.Name == "" || req.Type == "" || req.Address == "" || req.Port == 0 || req.Protocol == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "name, type, address, port and protocol are required",
+		})
+	}
+
+	// Validate port range
+	if req.Port < 1 || req.Port > 65535 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "port must be between 1 and 65535",
+		})
+	}
+
+	// Validate protocol
+	validProtocols := map[string]bool{"vmess": true, "vless": true, "shadowsocks": true, "trojan": true}
+	if !validProtocols[req.Protocol] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "protocol must be one of: vmess, vless, shadowsocks, trojan",
+		})
+	}
+
+	// Validate node type
+	validTypes := map[string]bool{"v2ray": true, "xray": true}
+	if !validTypes[req.Type] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "type must be one of: v2ray, xray",
 		})
 	}
 
@@ -77,22 +101,30 @@ func GetNode(c *fiber.Ctx) error {
 	return c.JSON(node)
 }
 
-// ListNode returns all nodes with optional status filter.
+// ListNode returns all nodes with optional status filter and pagination.
 func ListNode(c *fiber.Ctx) error {
-	var nodes []model.Node
-	query := db.DB
+	offset, limit := parsePagination(c)
 
+	var total int64
+	query := db.DB.Model(&model.Node{})
 	if status := c.Query("status"); status != "" {
 		query = query.Where("status = ?", status)
 	}
+	query.Count(&total)
 
-	if result := query.Find(&nodes); result.Error != nil {
+	var nodes []model.Node
+	if result := query.Offset(offset).Limit(limit).Find(&nodes); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to list nodes",
 		})
 	}
 
-	return c.JSON(nodes)
+	return c.JSON(fiber.Map{
+		"data":     nodes,
+		"total":    total,
+		"page":     offset/limit + 1,
+		"per_page": limit,
+	})
 }
 
 // UpdateNode updates a node's fields.
@@ -159,9 +191,16 @@ func DeleteNode(c *fiber.Ctx) error {
 		})
 	}
 
-	if result := db.DB.Delete(&model.Node{}, id); result.Error != nil {
+	result := db.DB.Delete(&model.Node{}, id)
+	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to delete node",
+		})
+	}
+
+	if result.RowsAffected == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "node not found",
 		})
 	}
 

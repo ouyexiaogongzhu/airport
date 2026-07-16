@@ -1,7 +1,11 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -79,6 +83,21 @@ func (p *BEpusdtProvider) VerifyCallback(c *fiber.Ctx) (*CallbackResult, error) 
 		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid callback body")
 	}
 
+	// Verify HMAC signature if secret is configured
+	secret := os.Getenv("BEPUSDT_SECRET")
+	if secret != "" {
+		if body.Signature == "" {
+			return nil, fiber.NewError(fiber.StatusBadRequest, "missing signature")
+		}
+		payload := fmt.Sprintf("%s%s%s%s", body.OrderID, body.Amount, body.ActualAmount, body.Token)
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(payload))
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(body.Signature), []byte(expected)) {
+			return nil, fiber.NewError(fiber.StatusBadRequest, "invalid signature")
+		}
+	}
+
 	status := "failed"
 	if body.Status == 2 {
 		status = "paid"
@@ -112,9 +131,25 @@ func (p *PayoneerProvider) VerifyCallback(c *fiber.Ctx) (*CallbackResult, error)
 		EventType     string `json:"event_type"`
 		TransactionID string `json:"transaction_id"`
 		Status        string `json:"status"`
+		Signature     string `json:"signature"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid callback body")
+	}
+
+	// Verify HMAC signature if secret is configured
+	secret := os.Getenv("PAYONEER_WEBHOOK_SECRET")
+	if secret != "" {
+		if body.Signature == "" {
+			return nil, fiber.NewError(fiber.StatusBadRequest, "missing signature")
+		}
+		payload := fmt.Sprintf("%s%s%s%s", body.ReferenceID, body.EventType, body.TransactionID, body.Status)
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(payload))
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(body.Signature), []byte(expected)) {
+			return nil, fiber.NewError(fiber.StatusBadRequest, "invalid signature")
+		}
 	}
 
 	status := "failed"

@@ -60,6 +60,9 @@ class TrafficChart extends StatelessWidget {
 }
 
 /// Custom painter that draws the bar chart.
+// TODO(L9): TextPainter objects are allocated on every paint() call.
+// Cache label TextPainters in a map keyed by text string to reduce
+// GC pressure during frequent repaints.
 class _BarChartPainter extends CustomPainter {
   final List<int> data;
   final List<String> labels;
@@ -199,6 +202,9 @@ class _BarChartPainter extends CustomPainter {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
+  // TODO(L4): Uses reference equality (!=) for lists, which always returns true
+  // for new list instances. Use listEquals from flutter/foundation.dart for
+  // proper deep comparison, or cache the painter.
   @override
   bool shouldRepaint(covariant _BarChartPainter oldDelegate) {
     return data != oldDelegate.data || labels != oldDelegate.labels;

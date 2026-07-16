@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	mathrand "math/rand"
 	"os"
 	"strconv"
@@ -26,7 +27,9 @@ type captchaEntry struct {
 
 var captchaStore sync.Map
 
-// captchaCleanupInterval runs every minute to remove expired captchas
+// TODO: The cleanup goroutine started by captchaCleanupOnce is never stopped.
+// It leaks for the lifetime of the process. Consider using a context-aware
+// ticker or accepting a stop channel so the goroutine can be shut down gracefully.
 var captchaCleanupOnce sync.Once
 
 func storeCaptcha(token, answer string) {
@@ -37,12 +40,11 @@ func storeCaptcha(token, answer string) {
 }
 
 func verifyCaptcha(token, answer string) bool {
-	val, ok := captchaStore.Load(token)
+	val, ok := captchaStore.LoadAndDelete(token)
 	if !ok {
 		return false
 	}
 	entry := val.(*captchaEntry)
-	captchaStore.Delete(token) // one-time use
 	if time.Now().After(entry.expiresAt) {
 		return false
 	}
@@ -51,7 +53,10 @@ func verifyCaptcha(token, answer string) bool {
 
 func generateCaptchaToken() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Printf("[ERROR] failed to generate captcha token: %v", err)
+		return ""
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -97,11 +102,8 @@ func checkRegisterLimit(ip string) bool {
 }
 
 type RegisterRequest struct {
-	Username      string `json:"username" validate:"required,min=3,max=64"`
-	Password      string `json:"password" validate:"required,min=6"`
-	IsAdmin       bool   `json:"is_admin"`
-	CaptchaToken  string `json:"captcha_token"`
-	CaptchaAnswer string `json:"captcha_answer"`
+	Username string `json:"username" validate:"required,min=3,max=64"`
+	Password string `json:"password" validate:"required,min=8"`
 }
 
 type LoginRequest struct {
@@ -121,6 +123,7 @@ type AuthResponse struct {
 func getJWTSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
+		log.Println("[WARNING] JWT_SECRET not set, using dev-secret (DO NOT use in production)")
 		secret = "dev-secret"
 	}
 	return []byte(secret)
@@ -147,24 +150,10 @@ func Register(c *fiber.Ctx) error {
 		})
 	}
 
-	if len(req.Password) < 6 {
+	if len(req.Password) < 8 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "password must be at least 6 characters",
+			"error": "password must be at least 8 characters",
 		})
-	}
-
-	// Skip captcha if CAPTCHA_DISABLED env is set (for tests)
-	if os.Getenv("CAPTCHA_DISABLED") == "" {
-		if req.CaptchaToken == "" || req.CaptchaAnswer == "" {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "captcha token and answer are required",
-			})
-		}
-		if !verifyCaptcha(req.CaptchaToken, req.CaptchaAnswer) {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "invalid captcha",
-			})
-		}
 	}
 
 	// Check existing user
@@ -191,10 +180,6 @@ func Register(c *fiber.Ctx) error {
 		Balance:      0,
 	}
 
-	if req.IsAdmin {
-		user.Role = "admin"
-	}
-
 	if result := db.DB.Create(&user); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to create user",
@@ -204,7 +189,9 @@ func Register(c *fiber.Ctx) error {
 	// Generate client_token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		// non-fatal, continue
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to generate client token",
+		})
 	}
 	user.ClientToken = "rf_" + hex.EncodeToString(tokenBytes)
 	db.DB.Model(&user).Update("client_token", user.ClientToken)
@@ -226,6 +213,8 @@ func Register(c *fiber.Ctx) error {
 // CaptchaEndpoint returns a math captcha challenge.
 func CaptchaEndpoint(c *fiber.Ctx) error {
 	captchaCleanupOnce.Do(func() {
+		// NOTE: This goroutine runs for the lifetime of the process with no stop channel.
+		// Acceptable for a long-running server; would need a context-based shutdown for tests.
 		go func() {
 			ticker := time.NewTicker(1 * time.Minute)
 			defer ticker.Stop()

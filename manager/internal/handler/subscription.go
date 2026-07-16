@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -11,12 +10,16 @@ import (
 	"sync"
 	"time"
 
+	"crypto/rand"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/db"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
 )
 
-// Rate limiter for subscription links
+// Rate limiter for subscription links.
+// TODO: This sync.Map grows without bound. Replace with a TTL cache (e.g. golang-lru with expiry).
+// TODO: Add global IP-based rate limiting across all tokens to prevent abuse from distributed requests.
 var linkRateLimiters = sync.Map{}
 
 type rateLimiter struct {
@@ -91,7 +94,10 @@ func GetClientConfig(c *fiber.Ctx) error {
 // GetSubscription returns subscription info with node list (JWT required)
 // GET /api/v1/client/subscription
 func GetSubscription(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+	}
 
 	var user model.User
 	if result := db.DB.First(&user, userID); result.Error != nil {
@@ -148,7 +154,10 @@ func GetSubscription(c *fiber.Ctx) error {
 // GetClientToken returns masked client token (JWT required)
 // GET /api/v1/web/client-token
 func GetClientToken(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+	}
 
 	var user model.User
 	if result := db.DB.First(&user, userID); result.Error != nil {
@@ -178,7 +187,10 @@ func GetClientToken(c *fiber.Ctx) error {
 // RegenerateClientToken generates a new client token (JWT required)
 // POST /api/v1/web/client-token/regenerate
 func RegenerateClientToken(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+	}
 
 	var user model.User
 	if result := db.DB.First(&user, userID); result.Error != nil {
@@ -421,6 +433,7 @@ func handleQRCodeFormat(c *fiber.Ctx, user *model.User, nodes *[]model.Node) err
 		return c.Status(fiber.StatusNoContent).Send(nil)
 	}
 
+	// TODO: This is a stub. Implement actual QR code image generation (e.g. using rsc.io/qr).
 	c.Set("Content-Type", "text/plain")
 	return c.SendString("QR code generation requires rsc.io/qr library. Install with: go get rsc.io/qr")
 }

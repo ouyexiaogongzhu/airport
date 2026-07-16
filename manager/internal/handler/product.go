@@ -6,22 +6,43 @@ import (
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
 )
 
-// ListProducts returns all products ordered by id
+// ListProducts returns all products ordered by id with pagination
+// TODO: Propagate request context via c.Context() for GORM queries.
 func ListProducts(c *fiber.Ctx) error {
+	offset, limit := parsePagination(c)
+
+	var total int64
+	db.DB.Model(&model.Product{}).Count(&total)
+
 	var products []model.Product
-	if result := db.DB.Order("id ASC").Find(&products); result.Error != nil {
+	if result := db.DB.Order("id ASC").Offset(offset).Limit(limit).Find(&products); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list products"})
 	}
-	return c.JSON(fiber.Map{"products": products})
+	return c.JSON(fiber.Map{
+		"products": products,
+		"total":    total,
+		"page":     offset/limit + 1,
+		"per_page": limit,
+	})
 }
 
-// ListActiveProducts returns only active products (public)
+// ListActiveProducts returns only active products (public) with pagination
 func ListActiveProducts(c *fiber.Ctx) error {
+	offset, limit := parsePagination(c)
+
+	var total int64
+	db.DB.Model(&model.Product{}).Where("status = ?", "active").Count(&total)
+
 	var products []model.Product
-	if result := db.DB.Where("status = ?", "active").Order("id ASC").Find(&products); result.Error != nil {
+	if result := db.DB.Where("status = ?", "active").Order("id ASC").Offset(offset).Limit(limit).Find(&products); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list products"})
 	}
-	return c.JSON(fiber.Map{"products": products})
+	return c.JSON(fiber.Map{
+		"products": products,
+		"total":    total,
+		"page":     offset/limit + 1,
+		"per_page": limit,
+	})
 }
 
 // CreateProduct creates a new product
@@ -33,6 +54,23 @@ func CreateProduct(c *fiber.Ctx) error {
 	if req.Name == "" || req.Price <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name and price are required"})
 	}
+
+	// Validate product type
+	validTypes := map[string]bool{"subscription": true, "one-time": true, "trial": true}
+	if req.Type != "" && !validTypes[req.Type] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "type must be one of: subscription, one-time, trial",
+		})
+	}
+
+	// Validate product status
+	validStatuses := map[string]bool{"active": true, "inactive": true, "archived": true}
+	if req.Status != "" && !validStatuses[req.Status] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "status must be one of: active, inactive, archived",
+		})
+	}
+
 	if result := db.DB.Create(req); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to create product"})
 	}

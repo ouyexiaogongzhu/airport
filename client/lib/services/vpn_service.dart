@@ -25,6 +25,8 @@ enum VpnState {
 }
 
 /// Node latency measurement
+// TODO(L1): Implement operator == and hashCode for value-based equality.
+// Consider using package:equatable or manually overriding these.
 class NodeLatency {
   final String nodeName;
   final int latencyMs; // -1 = timeout/error
@@ -43,7 +45,7 @@ class NodeLatency {
 /// Real VPN service with Android VpnService + external app support
 class VpnService extends ChangeNotifier {
   static const MethodChannel _channel =
-      MethodChannel('com.example.rfplay_client/vpn');
+      MethodChannel('uk.rfplay.client/vpn');
 
   // --- State ---
   VpnState _state = VpnState.disconnected;
@@ -111,7 +113,8 @@ class VpnService extends ChangeNotifier {
       _latencies[name] = latency;
       notifyListeners();
       return latency;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[VpnService] Ping failed for $name: $e');
       final latency = NodeLatency(
         nodeName: name,
         latencyMs: -1,
@@ -158,18 +161,67 @@ class VpnService extends ChangeNotifier {
   }
 
   // --- Connect ---
-  Future<bool> connect() async {
+  Future<bool> connect({SubscriptionInfo? subscription}) async {
     if (_state == VpnState.connected || _state == VpnState.connecting) return false;
+
+    // Pre-connection checks
+    if (subscription == null) {
+      _state = VpnState.error;
+      _errorMessage = '未找到订阅信息，请先购买套餐';
+      notifyListeners();
+      return false;
+    }
+
+    if (subscription.nodes.isEmpty) {
+      _state = VpnState.error;
+      _errorMessage = '套餐暂无可用节点，请联系管理员';
+      notifyListeners();
+      return false;
+    }
+
+    if (_selectedNode == null) {
+      _state = VpnState.error;
+      _errorMessage = '请先选择一个节点';
+      notifyListeners();
+      return false;
+    }
 
     _state = VpnState.connecting;
     _errorMessage = null;
     notifyListeners();
+
+    if (Platform.isLinux) {
+      return _connectDesktop();
+    }
 
     if (_mode == VpnMode.builtin) {
       return _connectBuiltin();
     } else {
       return _connectExternal();
     }
+  }
+
+  /// Desktop: copy subscription link to clipboard (no native VPN)
+  Future<bool> _connectDesktop() async {
+    if (_selectedNode == null) {
+      _state = VpnState.error;
+      _errorMessage = '请先选择一个节点';
+      notifyListeners();
+      return false;
+    }
+
+    if (_configuredSubscriptionUrl != null) {
+      await Clipboard.setData(
+        ClipboardData(text: _configuredSubscriptionUrl!),
+      );
+    }
+
+    _state = VpnState.connected;
+    _connectedNode = _selectedNode;
+    _startSimulation();
+    _errorMessage = '订阅链接已复制，请导入到代理客户端';
+    notifyListeners();
+    return true;
   }
 
   /// Connect via built-in Android VpnService
@@ -271,11 +323,11 @@ class VpnService extends ChangeNotifier {
     return true;
   }
 
-  /// Build subscription URL for external apps
+  // TODO(L6): This method always returns null, causing external VPN launch to
+  // always fall back to clipboard copy. Implement by returning
+  // _configuredSubscriptionUrl or fetching from the API.
   String? _buildSubscriptionUrl() {
-    // Use the subscription endpoint URL
-    // In production, this comes from /client/config or the portal
-    return null; // Placeholder — set via configure()
+    return _configuredSubscriptionUrl;
   }
 
   /// Configure subscription URL from API
@@ -286,20 +338,29 @@ class VpnService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set subscription URL (no notify, for use after loading subscription data)
+  void setSubscriptionUrl(String url) {
+    _configuredSubscriptionUrl = url;
+  }
+
   /// Get configured subscription URL
   String? get configuredSubscriptionUrl => _configuredSubscriptionUrl;
 
   // --- Disconnect ---
-  void disconnect() {
+  Future<void> disconnect() async {
     if (_state == VpnState.disconnected) return;
 
     _state = VpnState.disconnecting;
     notifyListeners();
 
-    // Stop native VPN
-    try {
-      _channel.invokeMethod('stopVpn');
-    } catch (_) {}
+    // Stop native VPN (Android only)
+    if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('stopVpn');
+      } catch (e) {
+        debugPrint('[VpnService] Failed to stop native VPN: $e');
+      }
+    }
 
     _stopSimulation();
     _state = VpnState.disconnected;
@@ -311,11 +372,11 @@ class VpnService extends ChangeNotifier {
   }
 
   // --- Toggle ---
-  Future<void> toggle() async {
+  Future<void> toggle({SubscriptionInfo? subscription}) async {
     if (isConnected || isConnecting) {
-      disconnect();
+      await disconnect();
     } else {
-      await connect();
+      await connect(subscription: subscription);
     }
   }
 

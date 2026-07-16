@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -13,6 +15,8 @@ import (
 	"github.com/ouyexiaogongzhu/airport/manager/internal/middleware"
 )
 
+// TODO: Replace log with structured logging (zerolog or log/slog) for better observability.
+
 func main() {
 	// Initialize database
 	dataDir := os.Getenv("DATA_DIR")
@@ -20,7 +24,8 @@ func main() {
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
-		AppName: "RFPlay Airport Manager API",
+		AppName:   "RFPlay Airport Manager API",
+		BodyLimit: 10 * 1024 * 1024, // 10MB max request body
 	})
 
 	// Global middleware
@@ -70,13 +75,13 @@ func main() {
 	client := v1.Group("/client", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
 	client.Get("/subscription", handler.GetSubscription)
 
-	// Web routes (JWT required, rate limited: 100 req/s per IP)
-	web := v1.Group("/web", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupUser))
+	// Web routes (JWT required, rate limited: 30 req/s per IP)
+	web := v1.Group("/web", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
 	web.Get("/client-token", handler.GetClientToken)
 	web.Post("/client-token/regenerate", handler.RegenerateClientToken)
 
-	// User routes (JWT required, rate limited: 100 req/s per IP)
-	user := v1.Group("/user", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupUser))
+	// User routes (JWT required, rate limited: 30 req/s per IP)
+	user := v1.Group("/user", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
 	user.Get("/profile", handler.GetProfile)
 	user.Put("/profile", handler.UpdateProfile)
 	user.Post("/orders", handler.CreateOrder)
@@ -118,6 +123,18 @@ func main() {
 	}
 
 	log.Printf("Manager API starting on :%s", port)
+
+	// Graceful shutdown
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down gracefully...")
+		if err := app.Shutdown(); err != nil {
+			log.Printf("error during shutdown: %v", err)
+		}
+	}()
+
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}

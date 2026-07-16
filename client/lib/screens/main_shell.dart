@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
-import 'subscription/input_page.dart';
+import 'vpn_screen.dart';
 import 'profile_screen.dart';
 
 /// Main shell with bottom navigation bar.
 ///
 /// Uses [IndexedStack] for persistent tab state across navigation.
+///
+/// TODO(M2): The [DashboardScreen], [VpnScreen], and [ProfileScreen] all use
+/// const constructors. Ensure new screens added here also use const.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -20,13 +23,17 @@ class _MainShellState extends State<MainShell> {
 
   final List<Widget> _screens = const [
     DashboardScreen(),
-    SubscriptionInputPage(),
+    VpnScreen(),
     ProfileScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
-    // Guard: if not logged in, redirect to login
+    // Guard: if not logged in, redirect to login.
+    // ANTI-PATTERN: Calling addPostFrameCallback inside build() mutates state
+    // during the build phase. This works but triggers an unnecessary rebuild.
+    // Consider using a [Listener] or [NavigatorObserver] to react to auth
+    // state changes outside of build, or use an auth-aware routing wrapper.
     final auth = context.watch<AuthService>();
     if (!auth.isLoggedIn) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -52,9 +59,9 @@ class _MainShellState extends State<MainShell> {
             label: '首页',
           ),
           NavigationDestination(
-            icon: Icon(Icons.cloud_download_outlined),
-            selectedIcon: Icon(Icons.cloud_download),
-            label: '订阅',
+            icon: Icon(Icons.vpn_key_outlined),
+            selectedIcon: Icon(Icons.vpn_key),
+            label: 'VPN',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),

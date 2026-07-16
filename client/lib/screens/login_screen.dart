@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/auth_service.dart';
 
+// TODO(M3): This screen duplicates functionality in lib/screens/login/login_screen.dart.
+// Consolidate into a single login screen to avoid divergence.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -13,12 +16,14 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _tokenController = TextEditingController();
   bool _obscurePassword = true;
 
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _tokenController.dispose();
     super.dispose();
   }
 
@@ -46,6 +51,40 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     }
   }
+
+  Future<void> _tokenLogin() async {
+    final token = _tokenController.text.trim();
+    if (token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('请输入 Token'),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+      return;
+    }
+
+    final auth = context.read<AuthService>();
+    auth.clearError();
+
+    final success = await auth.tokenLogin(token);
+
+    if (!mounted) return;
+
+    if (success) {
+      Navigator.pushReplacementNamed(context, '/main');
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(auth.error ?? 'Token 登录失败'),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    }
+  }
+
+  // TODO: Load portal URL from remote config or SubscriptionService
+  static const _kPortalRegisterUrl = 'https://www.rfplay.uk/register';
 
   @override
   Widget build(BuildContext context) {
@@ -162,10 +201,61 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 // Register link
                 TextButton(
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/register');
+                  onPressed: () async {
+                    await launchUrl(
+                      Uri.parse(_kPortalRegisterUrl),
+                      mode: LaunchMode.externalApplication,
+                    );
                   },
                   child: const Text('没有账号？立即注册'),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 8),
+                Text(
+                  '或使用 Token 登录',
+                  style: TextStyle(
+                    color: Colors.grey[500],
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _tokenController,
+                  decoration: InputDecoration(
+                    labelText: 'Token',
+                    prefixIcon: const Icon(Icons.key),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Consumer<AuthService>(
+                  builder: (context, auth, _) {
+                    return SizedBox(
+                      width: double.infinity,
+                      height: 40,
+                      child: ElevatedButton(
+                        onPressed: auth.isLoading ? null : _tokenLogin,
+                        style: ElevatedButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          backgroundColor: Colors.grey[700],
+                        ),
+                        child: auth.isLoading
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('登录', style: TextStyle(fontSize: 14)),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),

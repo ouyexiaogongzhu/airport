@@ -14,12 +14,14 @@ class VpnButton extends StatefulWidget {
   final VpnState state;
   final VoidCallback? onTap;
   final double size;
+  final String? errorMessage;
 
   const VpnButton({
     super.key,
     required this.state,
     this.onTap,
     this.size = 120,
+    this.errorMessage,
   });
 
   @override
@@ -208,6 +210,21 @@ class _VpnButtonState extends State<VpnButton>
                 ),
             child: Text(_labelText),
           ),
+          if (widget.state == VpnState.error && widget.errorMessage != null) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                widget.errorMessage!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.red.shade300,
+                  fontSize: 12,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

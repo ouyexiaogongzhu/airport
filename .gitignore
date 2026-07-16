@@ -56,6 +56,16 @@ Thumbs.db
 # SSL dev certificates
 deploy/certs/
 
+# SSL private keys (NEVER commit)
+deploy/ssl/*.pem
+deploy/ssl/*.key
+
+# Backups
+deploy/backups/
+
+# Production env overrides
+.env.production
+
 # Unity skills cache (from old project)
 .com-unity-codely.json
 .agent/

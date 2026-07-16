@@ -1,3 +1,5 @@
+// TODO(L1): Implement operator == and hashCode for value-based equality.
+// Consider using package:equatable or manually overriding these.
 class Product {
   final int id;
   final String name;

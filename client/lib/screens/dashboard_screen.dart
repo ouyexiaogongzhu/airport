@@ -1,7 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/subscription.dart' show SubscriptionInfo;
 import '../services/subscription_service.dart';
 import '../widgets/loading_overlay.dart';
@@ -45,9 +44,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // Open URL via platform command
+    // Open URL via url_launcher (cross-platform)
     try {
-      await Process.run('xdg-open', [url]);
+      final uri = Uri.parse(url);
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法打开链接: $url')),
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -98,6 +103,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // TODO(M4): _statusBadge, _formatTrafficGb, _trafficEstimateBytes, and traffic
+  // bar logic are duplicated across DashboardScreen, HomeDashboard, and
+  // AccountSubscription. Extract to a shared utility or widget.
+  // TODO(M7): Traffic estimate is hardcoded at 100 GB. Fetch the actual plan
+  // limit from the API or subscription config instead.
   static const int _trafficEstimateBytes = 100 * 1024 * 1024 * 1024;
 
   @override
@@ -166,11 +176,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       const SizedBox(height: 12),
                       if (sub != null) ...[
-                        _InfoCard(
-                          title: '套餐等级',
-                          value: sub.tier.isNotEmpty ? sub.tier.toUpperCase() : '—',
-                          icon: Icons.workspace_premium,
-                          color: Colors.cyanAccent,
+                        Card(
+                          color: Colors.cyanAccent.withAlpha(20),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: Colors.cyanAccent.withAlpha(60)),
+                          ),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => Navigator.pushNamed(context, '/account/subscription'),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.workspace_premium, color: Colors.cyanAccent, size: 24),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('套餐等级', style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          sub.tier.isNotEmpty ? sub.tier.toUpperCase() : '—',
+                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(Icons.chevron_right, color: Colors.grey[500]),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 12),
                         _InfoCard(
@@ -178,13 +216,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           value: _formatExpireTime(sub.expireTime),
                           icon: Icons.event,
                           color: Colors.blue,
-                        ),
-                        const SizedBox(height: 12),
-                        _InfoCard(
-                          title: '可用节点',
-                          value: '${sub.nodes.length} 个',
-                          icon: Icons.public,
-                          color: Colors.teal,
                         ),
                         const SizedBox(height: 12),
                         _buildTrafficSection(sub),
