@@ -30,6 +30,14 @@ android {
         versionName = flutter.versionName
     }
 
+    // libXray gomobile .aar — built with scripts/build_libxray.sh android.
+    // The reflection-based XrayBridge keeps the app compiling without it.
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("libs")
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

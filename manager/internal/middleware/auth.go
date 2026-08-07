@@ -12,8 +12,10 @@ import (
 func getJWTSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		log.Println("[WARNING] JWT_SECRET not set, using dev-secret (DO NOT use in production)")
-		secret = "dev-secret"
+		log.Fatalf("[FATAL] JWT_SECRET environment variable is required (set it before starting the server)")
+	}
+	if len(secret) < 16 {
+		log.Printf("[WARNING] JWT_SECRET is shorter than 16 characters; use a long random string in production")
 	}
 	return []byte(secret)
 }

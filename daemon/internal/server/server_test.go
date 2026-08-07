@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
@@ -30,15 +28,43 @@ func performRequest(srv *Server, path string) *http.Response {
 	return resp
 }
 
-// writeNodesJSON writes nodes directly to the data dir for testing.
-func writeNodesJSON(syncer *sync.Syncer, nodes []sync.NodeConfig) error {
-	data, err := json.MarshalIndent(nodes, "", "  ")
-	if err != nil {
-		return err
+// setupSyncedServer runs a Sync against a mock manager before returning the
+// server, so the in-memory node metadata is populated.
+func setupSyncedServer(t *testing.T) (*Server, *sync.Syncer) {
+	t.Helper()
+	srv, syncer := setupTestServer(t)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/node/test-token/config":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(sampleConfigJSON))
+		case "/api/v1/node/test-token/traffic/report":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	syncer.GetConfigForTesting().ManagerURL = ts.URL
+	if err := syncer.Sync(); err != nil {
+		t.Fatalf("syncer.Sync() setup error: %v", err)
 	}
-	path := filepath.Join(syncer.GetDataDirForTesting(), "nodes.json")
-	return os.WriteFile(path, data, 0644)
+	return srv, syncer
 }
+
+const sampleConfigJSON = `{
+  "node_id": 1,
+  "name": "node-x",
+  "protocol": "vless",
+  "config": {
+    "log": {"loglevel": "info"},
+    "inbounds": [{"port": 443, "protocol": "vless", "settings": {"clients": [{"id": "u1"}]}}],
+    "_meta": {"node_id": 1, "user_ids": [1], "version": 7}
+  }
+}`
 
 func TestHealthEndpoint(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -67,19 +93,7 @@ func TestHealthEndpoint(t *testing.T) {
 }
 
 func TestStatusEndpoint(t *testing.T) {
-	srv, syncer := setupTestServer(t)
-
-	// Pre-run sync so we have data
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[]`))
-	}))
-	defer ts.Close()
-
-	syncer.GetConfigForTesting().ManagerURL = ts.URL
-	if err := syncer.Sync(); err != nil {
-		t.Fatalf("syncer.Sync() setup error: %v", err)
-	}
+	srv, _ := setupSyncedServer(t)
 
 	resp := performRequest(srv, "/api/v1/status")
 	if resp.StatusCode != http.StatusOK {
@@ -123,16 +137,7 @@ func TestNodesEndpoint_NoData(t *testing.T) {
 }
 
 func TestNodesEndpoint_WithData(t *testing.T) {
-	srv, syncer := setupTestServer(t)
-
-	// Pre-write nodes.json to simulate synced data
-	nodes := []sync.NodeConfig{
-		{ID: 1, Name: "node-x", Address: "10.0.0.1", Port: 8080, Status: "online", TrafficUp: 100, TrafficDown: 200, Protocol: "tcp", Type: "relay"},
-		{ID: 2, Name: "node-y", Address: "10.0.0.2", Port: 8081, Status: "offline", TrafficUp: 300, TrafficDown: 400, Protocol: "udp", Type: "relay"},
-	}
-	if err := writeNodesJSON(syncer, nodes); err != nil {
-		t.Fatalf("write test nodes error: %v", err)
-	}
+	srv, _ := setupSyncedServer(t)
 
 	resp := performRequest(srv, "/api/v1/nodes")
 	if resp.StatusCode != http.StatusOK {
@@ -143,8 +148,8 @@ func TestNodesEndpoint_WithData(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(body) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(body))
+	if len(body) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(body))
 	}
 	if body[0]["name"] != "node-x" {
 		t.Errorf("expected name=node-x, got %v", body[0]["name"])
@@ -154,14 +159,24 @@ func TestNodesEndpoint_WithData(t *testing.T) {
 func TestTrafficEndpoint(t *testing.T) {
 	srv, syncer := setupTestServer(t)
 
-	// Pre-write nodes with traffic data
-	nodes := []sync.NodeConfig{
-		{ID: 1, Name: "a", Address: "1", Port: 80, Status: "up", TrafficUp: 1000, TrafficDown: 2000, Protocol: "tcp", Type: "relay"},
-		{ID: 2, Name: "b", Address: "2", Port: 81, Status: "up", TrafficUp: 3000, TrafficDown: 4000, Protocol: "tcp", Type: "relay"},
-		{ID: 3, Name: "c", Address: "3", Port: 82, Status: "down", TrafficUp: 500, TrafficDown: 600, Protocol: "udp", Type: "relay"},
-	}
-	if err := writeNodesJSON(syncer, nodes); err != nil {
-		t.Fatalf("write test nodes error: %v", err)
+	// Populate node metadata via a manager sync (traffic counters are 0 until
+	// the first report, so node_count is the meaningful assertion here).
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/node/test-token/config":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(sampleConfigJSON))
+		case "/api/v1/node/test-token/traffic/report":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+	syncer.GetConfigForTesting().ManagerURL = ts.URL
+	if err := syncer.Sync(); err != nil {
+		t.Fatalf("syncer.Sync() setup error: %v", err)
 	}
 
 	resp := performRequest(srv, "/api/v1/traffic")
@@ -174,14 +189,13 @@ func TestTrafficEndpoint(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	// total_up: 1000+3000+500 = 4500, total_down: 2000+4000+600 = 6600
-	if body["total_up"] != float64(4500) {
-		t.Errorf("expected total_up=4500, got %v", body["total_up"])
+	if body["total_up"] != float64(0) {
+		t.Errorf("expected total_up=0 before traffic report, got %v", body["total_up"])
 	}
-	if body["total_down"] != float64(6600) {
-		t.Errorf("expected total_down=6600, got %v", body["total_down"])
+	if body["total_down"] != float64(0) {
+		t.Errorf("expected total_down=0 before traffic report, got %v", body["total_down"])
 	}
-	if body["node_count"] != float64(3) {
-		t.Errorf("expected node_count=3, got %v", body["node_count"])
+	if body["node_count"] != float64(1) {
+		t.Errorf("expected node_count=1, got %v", body["node_count"])
 	}
 }

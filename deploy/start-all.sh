@@ -43,6 +43,13 @@ if [ "$WITH_XRAY" = true ]; then
     (cd "$PROJECT_DIR/xray-core" && go build -o "$PROJECT_DIR/build/xray-core" .)
 fi
 
+# JWT_SECRET is required; the manager refuses to start without it. Refuse early
+# so a missing secret surfaces here instead of a cryptic crash later.
+if [ -z "${JWT_SECRET:-}" ]; then
+    echo "[start] ERROR: JWT_SECRET is required (set it to a long random string)"
+    exit 1
+fi
+
 mkdir -p "$PROJECT_DIR/logs"
 echo ""
 
@@ -51,7 +58,7 @@ echo "[start] Starting Manager API on :${PORT:-8080}..."
 if [ "$BACKGROUND" = true ]; then
     PORT="${PORT:-8080}" \
     DATA_DIR="${DATA_DIR:-${PROJECT_DIR}/data}" \
-    JWT_SECRET="${JWT_SECRET:-dev-secret}" \
+    JWT_SECRET="${JWT_SECRET}" \
     nohup "$PROJECT_DIR/build/manager" > "$PROJECT_DIR/logs/manager.log" 2>&1 &
     MANAGER_PID=$!
     echo "[start] Manager PID: $MANAGER_PID"
@@ -59,7 +66,7 @@ if [ "$BACKGROUND" = true ]; then
 else
     PORT="${PORT:-8080}" \
     DATA_DIR="${DATA_DIR:-${PROJECT_DIR}/data}" \
-    JWT_SECRET="${JWT_SECRET:-dev-secret}" \
+    JWT_SECRET="${JWT_SECRET}" \
     "$PROJECT_DIR/build/manager" &
     MANAGER_PID=$!
 fi

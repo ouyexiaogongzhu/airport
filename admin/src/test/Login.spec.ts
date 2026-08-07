@@ -26,7 +26,6 @@ vi.mock('vue-router', () => ({
 describe('Admin Login.vue', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    localStorage.clear()
     mockPush.mockClear()
   })
 

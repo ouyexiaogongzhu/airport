@@ -19,8 +19,9 @@ func resetGlobalLimiter() {
 }
 
 var (
-	rateVisitors sync.Map
-	regVisitors  sync.Map
+	// rateVisitors/regVisitors were removed: they were declared but never
+	// written to, so they could grow without bound. The active limiter state
+	// lives in globalLimiter.windows, which is pruned by cleanupLoop.
 )
 
 // RateGroup defines the rate limit for a group of endpoints.

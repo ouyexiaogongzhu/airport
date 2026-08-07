@@ -84,6 +84,7 @@
               <label>Protocol</label>
               <select v-model="form.protocol" required>
                 <option value="">-- Select --</option>
+                <option value="vless">vless</option>
                 <option value="vmess">vmess</option>
                 <option value="shadowsocks">shadowsocks</option>
                 <option value="trojan">trojan</option>
@@ -187,7 +188,10 @@ async function loadNodes() {
   error.value = ''
   try {
     const res = await api.get('/admin/nodes')
-    nodes.value = Array.isArray(res.data) ? res.data : []
+    // Backend returns { data, total, page, per_page }
+    const data = res.data
+    nodes.value = Array.isArray(data) ? data :
+                  Array.isArray(data.data) ? data.data : []
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to load nodes'
     nodes.value = []

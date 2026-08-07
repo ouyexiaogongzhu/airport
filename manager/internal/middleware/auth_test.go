@@ -9,10 +9,45 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ouyexiaogongzhu/airport/manager/internal/db"
+	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func init() {
 	os.Setenv("JWT_SECRET", "test-secret")
+}
+
+// setupTestDB points db.DB at an in-memory test database.
+func setupTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	database, err := gorm.Open(sqlite.Open(t.TempDir()+"/test.db"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to connect test DB: %v", err)
+	}
+	if err := database.AutoMigrate(&model.User{}, &model.Node{}); err != nil {
+		t.Fatalf("failed to migrate test DB: %v", err)
+	}
+	db.DB = database
+	return database
+}
+
+func createTestNode(t *testing.T, token string) *model.Node {
+	t.Helper()
+	node := model.Node{
+		Name:     "test-node",
+		Type:     "xray",
+		Address:  "1.2.3.4",
+		Port:     443,
+		Protocol: "vless",
+		Status:   "active",
+		Token:    token,
+	}
+	if err := db.DB.Create(&node).Error; err != nil {
+		t.Fatalf("failed to create node: %v", err)
+	}
+	return &node
 }
 
 func generateTestToken(claims jwt.MapClaims) string {

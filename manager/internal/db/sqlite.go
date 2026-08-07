@@ -17,6 +17,40 @@ import (
 
 var DB *gorm.DB
 
+// backfillUserCredentials generates random proxy credentials for users created
+// before the credential columns existed. Mirrors handler.ensureUserCredentials
+// without importing the handler package (avoids an import cycle).
+func backfillUserCredentials(u *model.User) {
+	if u.VlessUUID == "" {
+		u.VlessUUID = newUUIDString()
+	}
+	if u.SSPassword == "" {
+		u.SSPassword = "ss_" + newHex(16)
+	}
+	if u.TrojanPassword == "" {
+		u.TrojanPassword = "tr_" + newHex(24)
+	}
+}
+
+func newUUIDString() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	s := hex.EncodeToString(b)
+	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
+}
+
+func newHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
 func Init(dataDir string) {
 	if dataDir == "" {
 		dataDir = "data"
@@ -49,17 +83,20 @@ func Init(dataDir string) {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
-	// Backfill client_token for existing users
-	var tokenlessUsers []model.User
-	DB.Where("client_token IS NULL OR client_token = ''").Find(&tokenlessUsers)
-	for _, u := range tokenlessUsers {
-		tokenBytes := make([]byte, 32)
-		if _, err := rand.Read(tokenBytes); err != nil {
-			continue
+	// Backfill client_token and per-user proxy credentials for existing users
+	var credentiallessUsers []model.User
+	DB.Where("client_token IS NULL OR client_token = '' OR vless_uuid IS NULL OR vless_uuid = ''").Find(&credentiallessUsers)
+	for _, u := range credentiallessUsers {
+		if u.ClientToken == "" {
+			tokenBytes := make([]byte, 32)
+			if _, err := rand.Read(tokenBytes); err != nil {
+				continue
+			}
+			u.ClientToken = "rf_" + hex.EncodeToString(tokenBytes)
 		}
-		token := "rf_" + hex.EncodeToString(tokenBytes)
-		DB.Model(&u).Update("client_token", token)
-		fmt.Printf("backfilled client_token for user %d\n", u.ID)
+		backfillUserCredentials(&u)
+		DB.Model(&u).Select("client_token", "vless_uuid", "ss_password", "trojan_password").Updates(&u)
+		fmt.Printf("backfilled credentials for user %d\n", u.ID)
 	}
 
 	// Auto-create admin user if no users exist

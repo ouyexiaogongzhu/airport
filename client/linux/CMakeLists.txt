@@ -106,6 +106,14 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# Ship libxray.so (built by scripts/build_libxray.sh or a manual Go build)
+# so the FFI engine can load it at runtime.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/libxray.so")
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/libs/libxray.so"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

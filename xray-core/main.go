@@ -29,12 +29,21 @@ type LogConfig struct {
 	Loglevel string `json:"loglevel,omitempty"`
 }
 
+// InboundConfig mirrors a standard Xray inbound section.
 type InboundConfig struct {
 	Port           int                `json:"port"`
 	Protocol       string             `json:"protocol"`
 	StreamSettings *StreamSettings    `json:"streamSettings,omitempty"`
 	Settings       json.RawMessage    `json:"settings,omitempty"`
 	Tag            string             `json:"tag,omitempty"`
+}
+
+// InboundSettings holds the standard `settings` object of an inbound.
+type InboundSettings struct {
+	Clients []struct {
+		ID   string `json:"id"`
+		Flow string `json:"flow"`
+	} `json:"clients"`
 }
 
 type StreamSettings struct {
@@ -126,6 +135,19 @@ func main() {
 			VerifyURL: verifyURL,
 			Tag:       inbound.Tag,
 		}
+
+		// Load allowed VLESS client UUIDs from the standard settings object.
+		if len(inbound.Settings) > 0 {
+			var settings InboundSettings
+			if err := json.Unmarshal(inbound.Settings, &settings); err == nil {
+				for _, c := range settings.Clients {
+					if c.ID != "" {
+						proxyCfg.ClientIDs = append(proxyCfg.ClientIDs, c.ID)
+					}
+				}
+			}
+		}
+
 		ps := proxy.New(proxyCfg, verifyURL)
 		if err := ps.Start(); err != nil {
 			log.Fatalf("failed to start proxy on :%d: %v", inbound.Port, err)

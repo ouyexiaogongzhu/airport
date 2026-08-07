@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../config.dart';
 import '../models/subscription.dart';
 import 'api_service.dart';
 
@@ -33,6 +34,10 @@ class SubscriptionService extends ChangeNotifier {
   bool get importing => _importing;
   String? get importError => _importError;
 
+  /// 有效节点列表：优先使用服务器下发的订阅节点；
+  /// store 模式（无账号体系）下使用手动导入的节点。
+  List<VpnNode> get effectiveNodes => _subscription?.nodes ?? _importedNodes;
+
   /// Load client config (public, no auth needed)
   Future<void> loadConfig() async {
     try {
@@ -50,8 +55,12 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
-  /// Load subscription from real API (requires JWT)
+  /// Load subscription from real API (requires JWT).
+  ///
+  /// store 模式没有账号体系，直接跳过，避免发起无意义的认证请求。
   Future<void> loadSubscription() async {
+    if (AppConfig.storeMode) return;
+
     _isLoading = true;
     _statusError = null;
     notifyListeners();
@@ -94,6 +103,15 @@ class SubscriptionService extends ChangeNotifier {
     _importing = true;
     _importError = null;
     notifyListeners();
+
+    // SECURITY: reject plain HTTP so subscription tokens and node credentials
+    // are never transmitted (or fetched) in cleartext / subject to MITM.
+    if (!url.trim().startsWith('https://')) {
+      _importError = '订阅链接必须使用 HTTPS';
+      _importing = false;
+      notifyListeners();
+      return false;
+    }
 
     try {
       final response = await http
@@ -187,8 +205,11 @@ class SubscriptionService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Get full renewal URL
+  /// Get full renewal URL.
+  ///
+  /// store 模式为通用代理客户端，禁止携带/跳转官网续费地址，一律返回 null。
   String? get renewalUrl {
+    if (AppConfig.storeMode) return null;
     if (_portalUrl != null && _renewalPath != null) {
       return '$_portalUrl$_renewalPath';
     }

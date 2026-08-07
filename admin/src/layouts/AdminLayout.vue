@@ -30,7 +30,7 @@
       </nav>
       <div class="sidebar-footer">
         <span class="badge">{{ auth.username }}</span>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')" class="logout">Logout</a>
+        <a href="#" @click.prevent="handleLogout" class="logout">Logout</a>
       </div>
     </aside>
     <main class="main">
@@ -51,6 +51,11 @@ function navigateIfDiff(path: string) {
   if (route.path !== path) {
     router.push(path)
   }
+}
+
+async function handleLogout() {
+  await auth.logout()
+  router.push('/')
 }
 </script>
 

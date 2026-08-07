@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../../config.dart';
 import '../../models/subscription.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vpn_service.dart';
@@ -220,8 +221,12 @@ class _HomeDashboardState extends State<HomeDashboard> {
                             padding: const EdgeInsets.all(16),
                             child: Text(
                               statusError == 'SUBSCRIPTION_PENDING'
-                                  ? '您尚未购买订阅，请前往官网选择套餐。'
-                                  : '您的订阅已过期，请续费后继续使用。',
+                                  ? (AppConfig.storeMode
+                                      ? '订阅待生效，请向您的服务商确认。'
+                                      : '您尚未购买订阅，请前往官网选择套餐。')
+                                  : (AppConfig.storeMode
+                                      ? '订阅已失效，请向您的服务商更新订阅。'
+                                      : '您的订阅已过期，请续费后继续使用。'),
                               style: TextStyle(color: Colors.grey[300]),
                             ),
                           ),

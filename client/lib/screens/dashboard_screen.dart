@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../config.dart';
 import '../models/subscription.dart' show SubscriptionInfo;
 import '../services/subscription_service.dart';
 import '../widgets/loading_overlay.dart';
@@ -19,6 +20,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // store 模式无账号体系，跳过订阅 API 加载。
+      if (AppConfig.storeMode) return;
       final sub = context.read<SubscriptionService>();
       if (sub.subscription == null && sub.statusError == null && !sub.isLoading) {
         sub.loadSubscription();
@@ -28,6 +31,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadAll() async {
     final subscriptionService = context.read<SubscriptionService>();
+    if (AppConfig.storeMode) return;
     await Future.wait([
       subscriptionService.loadConfig(),
       subscriptionService.loadSubscription(),
@@ -133,6 +137,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const SizedBox(height: 24),
               Consumer<SubscriptionService>(
                 builder: (context, subService, _) {
+                  if (AppConfig.storeMode) {
+                    return _buildStoreModeSummary(context, subService);
+                  }
+
                   final sub = subService.subscription;
                   final statusError = subService.statusError;
                   final statusColor = _statusColor(statusError);
@@ -319,6 +327,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// store 模式的仪表盘概览：不展示账号/订阅/流量相关入口，
+  /// 仅展示导入状态并提供导入/更新订阅的入口。
+  Widget _buildStoreModeSummary(
+    BuildContext context,
+    SubscriptionService subService,
+  ) {
+    final nodes = subService.effectiveNodes;
+    final hasNodes = nodes.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          color: (hasNodes ? Colors.green : Colors.orange).withAlpha(15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: (hasNodes ? Colors.green : Colors.orange).withAlpha(80),
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Icon(
+                  hasNodes ? Icons.cloud_done : Icons.cloud_queue,
+                  size: 28,
+                  color: hasNodes ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '节点状态',
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        hasNodes ? '已导入 ${nodes.length} 个节点' : '尚未导入订阅',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              hasNodes
+                  ? '节点已就绪，前往「VPN」页选择节点并连接。'
+                  : '请通过订阅链接导入节点后使用。节点信息由您的订阅服务商提供。',
+              style: TextStyle(color: Colors.grey[300]),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: ElevatedButton.icon(
+            onPressed: () => Navigator.pushNamed(context, '/subscription/input'),
+            icon: const Icon(Icons.link, size: 20),
+            label: Text(hasNodes ? '更新订阅' : '导入订阅'),
+          ),
+        ),
+      ],
     );
   }
 }

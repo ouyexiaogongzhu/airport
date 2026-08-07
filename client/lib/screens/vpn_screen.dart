@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../config.dart';
 import '../models/subscription.dart';
 import '../services/subscription_service.dart';
 import '../services/vpn_service.dart';
@@ -20,6 +21,8 @@ class _VpnScreenState extends State<VpnScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // store 模式无账号体系，节点来自手动导入，跳过订阅 API 加载。
+      if (AppConfig.storeMode) return;
       final sub = context.read<SubscriptionService>();
       if (sub.subscription == null && !sub.isLoading) {
         sub.loadSubscription();
@@ -30,6 +33,13 @@ class _VpnScreenState extends State<VpnScreen> {
   Future<void> _refresh() async {
     final subService = context.read<SubscriptionService>();
     final vpn = context.read<VpnService>();
+    if (AppConfig.storeMode) {
+      final nodes = subService.effectiveNodes;
+      if (nodes.isNotEmpty) {
+        await vpn.pingAllNodesList(nodes);
+      }
+      return;
+    }
     await subService.loadSubscription();
     if (subService.subscription != null) {
       await vpn.pingAllNodes(subService.subscription!);
@@ -57,14 +67,16 @@ class _VpnScreenState extends State<VpnScreen> {
           Consumer<SubscriptionService>(
             builder: (context, subService, _) {
               final subscription = subService.subscription;
-              final nodes = subscription?.nodes ?? [];
+              final nodes = AppConfig.storeMode
+                  ? subService.effectiveNodes
+                  : (subscription?.nodes ?? []);
 
               return RefreshIndicator(
                 onRefresh: _refresh,
                 child: ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
-                    _buildConnectionCard(vpn, subscription),
+                    _buildConnectionCard(vpn, subscription, nodes),
                     const SizedBox(height: 16),
                     Row(
                       children: [
@@ -113,7 +125,9 @@ class _VpnScreenState extends State<VpnScreen> {
                           child: Text(
                             subService.isLoading
                                 ? ''
-                                : '暂无可用节点\n请先购买套餐',
+                                : (AppConfig.storeMode
+                                    ? '暂无可用节点\n请先导入订阅'
+                                    : '暂无可用节点\n请先购买套餐'),
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.grey[500]),
                           ),
@@ -182,7 +196,11 @@ class _VpnScreenState extends State<VpnScreen> {
     );
   }
 
-  Widget _buildConnectionCard(VpnService vpn, SubscriptionInfo? subscription) {
+  Widget _buildConnectionCard(
+    VpnService vpn,
+    SubscriptionInfo? subscription,
+    List<VpnNode> nodes,
+  ) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -190,7 +208,13 @@ class _VpnScreenState extends State<VpnScreen> {
           children: [
             VpnButton(
               state: vpn.state,
-              onTap: () => vpn.toggle(subscription: subscription),
+              onTap: () {
+                if (AppConfig.storeMode) {
+                  vpn.toggle(nodes: nodes);
+                } else {
+                  vpn.toggle(subscription: subscription);
+                }
+              },
               errorMessage: vpn.errorMessage,
             ),
             if (vpn.isConnected) ...[

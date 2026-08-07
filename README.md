@@ -48,9 +48,14 @@ airport-system/
 Env (both): `VITE_API_BASE_URL=https://api.rfplay.uk`  
 Portal/Admin: `axios.withCredentials = true` + CSRF header
 
+> Portal only: subscription links are built from `VITE_API_BASE_URL` with the
+> `/api/v1` prefix appended automatically, or from the optional
+> `VITE_SUBSCRIPTION_BASE_URL` override (see `portal.env.example`).
+
 ## Docs
 
 * **[PLAN.md](PLAN.md)** — 当前交付计划（Phase 0-5，MVP 优先） ← **必读**
+* **[appstore_plan_a.md](appstore_plan_a.md)** — App Store 上架方案 A（纯客户端 + 订阅 URL 导入）
 * [Architecture & API](airport_system_design.md) — 系统架构设计
 * [Implementation plan](implementation_plan.md) — （归档）旧 Sprint 计划
 * [Task checklist](task.md) — （归档）旧任务清单

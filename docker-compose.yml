@@ -57,7 +57,8 @@ services:
     environment:
       - PORT=8080
       - DATA_DIR=/app/data
-      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-in-production}
+      # Required: set JWT_SECRET to a long random string in your .env
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (see .env.example)}
       - CORS_ORIGINS=https://rfplay.uk,https://admin.rfplay.uk
     networks:
       - rfplay-net
@@ -86,6 +87,9 @@ services:
       - DAEMON_MANAGER_URL=http://manager:8080
       - DAEMON_LISTEN_ADDR=:9090
       - DAEMON_NODE_ID=${DAEMON_NODE_ID:-1}
+      # Node daemon auth token: create a node in the Admin panel and rotate its
+      # token, then set DAEMON_MANAGER_TOKEN to that value in your .env.
+      - DAEMON_MANAGER_TOKEN=${DAEMON_MANAGER_TOKEN:-}
     networks:
       - rfplay-net
     depends_on:

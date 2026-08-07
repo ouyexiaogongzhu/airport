@@ -24,7 +24,7 @@ func GetProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(user)
+	return c.JSON(SanitizedUser(&user))
 }
 
 // UpdateProfile updates the current user's profile (password change etc.).
@@ -66,7 +66,7 @@ func UpdateProfile(c *fiber.Ctx) error {
 
 	var user model.User
 	db.DB.First(&user, userID)
-	return c.JSON(user)
+	return c.JSON(SanitizedUser(&user))
 }
 
 // parsePagination extracts page and per_page query params with defaults.

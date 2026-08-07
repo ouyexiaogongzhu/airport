@@ -17,6 +17,7 @@ type Config struct {
 	DataDir        string        `json:"data_dir"`
 	ListenAddr     string        `json:"listen_addr"`
 	LogLevel       string        `json:"log_level"`
+	XrayBinary     string        `json:"xray_binary,omitempty"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.

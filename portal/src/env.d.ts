@@ -1,13 +1,23 @@
+/// <reference types="vite/client" />
+
+declare global {
+  interface ImportMetaEnv {
+    // Optional override for the subscription URL base (defaults to
+    // VITE_API_BASE_URL-derived logic). See src/utils/subscriptionUrl.ts.
+    readonly VITE_SUBSCRIPTION_BASE_URL?: string
+  }
+}
+
 declare module '../stores/auth' {
   import { Store } from 'pinia'
   interface AuthStore {
-    token: string | null
     user: any
     isLoggedIn: boolean
     username: string
+    init(): Promise<void>
     login(username: string, password: string): Promise<{ success: boolean; error?: string }>
-    register(username: string, email: string, password: string): Promise<{ success: boolean; error?: string }>
-    logout(): void
+    register(username: string, email: string, password: string, captchaToken?: string, captchaAnswer?: string): Promise<{ success: boolean; error?: string }>
+    logout(): Promise<void>
   }
   export function useAuthStore(): AuthStore
 }

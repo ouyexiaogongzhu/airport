@@ -1,9 +1,6 @@
 package handler
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -205,6 +202,13 @@ func PaymentCallback(c *fiber.Ctx) error {
 		})
 	}
 
+	// The mock provider must never be reachable unless explicitly enabled.
+	if providerName == "mock" && os.Getenv("MOCK_PAY_ENABLED") != "1" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "mock payment provider is disabled",
+		})
+	}
+
 	result, err := provider.VerifyCallback(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -223,6 +227,13 @@ func PaymentCallback(c *fiber.Ctx) error {
 	if dbResult := db.DB.First(&order, orderID); dbResult.Error != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "order not found",
+		})
+	}
+
+	// The callback provider must match the provider recorded on the order.
+	if order.Provider != providerName {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "provider mismatch",
 		})
 	}
 
@@ -295,22 +306,44 @@ func activateSubscriptionTx(tx *gorm.DB, user *model.User, product *model.Produc
 	return tx.Model(user).Updates(updates).Error
 }
 
-// AdminListOrders returns all orders with product details and pagination.
+// AdminListOrders returns all orders with user/product details and pagination.
 func AdminListOrders(c *fiber.Ctx) error {
 	offset, limit := parsePagination(c)
 
-	var total int64
-	db.DB.Model(&model.Order{}).Count(&total)
+	status := c.Query("status")
+	search := c.Query("search")
 
-	var orders []orderWithProduct
-	if result := db.DB.Preload("Product").Order("created_at DESC").Offset(offset).Limit(limit).Find(&orders); result.Error != nil {
+	query := db.DB.Model(&model.Order{})
+	if status != "" {
+		query = query.Where("orders.status = ?", status)
+	}
+	if search != "" {
+		query = query.Where("orders.id = ? OR users.username LIKE ?", search, "%"+search+"%")
+	}
+
+	var total int64
+	query.Joins("LEFT JOIN users ON users.id = orders.user_id").Count(&total)
+
+	type orderRow struct {
+		model.Order
+		Username    string `json:"username"`
+		ProductName string `json:"product_name"`
+	}
+	var rows []orderRow
+	if result := query.
+		Select("orders.*, users.username AS username, products.name AS product_name").
+		Joins("LEFT JOIN users ON users.id = orders.user_id").
+		Joins("LEFT JOIN products ON products.id = orders.product_id").
+		Order("orders.created_at DESC").
+		Offset(offset).Limit(limit).
+		Scan(&rows); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to list orders",
 		})
 	}
 
 	return c.JSON(fiber.Map{
-		"data":     orders,
+		"data":     rows,
 		"total":    total,
 		"page":     offset/limit + 1,
 		"per_page": limit,
@@ -383,10 +416,11 @@ type MockPayCallbackRequest struct {
 }
 
 // MockPayCallback simulates a payment gateway callback. Only available in dev/test.
+// Fails closed: requires an explicit MOCK_PAY_ENABLED=1 to be reachable.
 func MockPayCallback(c *fiber.Ctx) error {
-	if os.Getenv("MOCK_PAY_ENABLED") == "" && os.Getenv("APP_ENV") == "production" {
+	if os.Getenv("MOCK_PAY_ENABLED") != "1" {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-			"error": "mock payment callback is disabled in production",
+			"error": "mock payment callback is disabled",
 		})
 	}
 	req := new(MockPayCallbackRequest)
@@ -421,15 +455,17 @@ func MockPayCallback(c *fiber.Ctx) error {
 			if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&model.Product{}).Where("id = ? AND stock > 0", order.ProductID).
-				Update("stock", gorm.Expr("stock - 1")).Error; err != nil {
+			var user model.User
+			if err := tx.First(&user, order.UserID).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&model.User{}).Where("id = ?", order.UserID).
-				Update("balance", gorm.Expr("balance + ?", order.Amount)).Error; err != nil {
+			var product model.Product
+			if err := tx.First(&product, order.ProductID).Error; err != nil {
 				return err
 			}
-			return nil
+			// Mirrors the real PaymentCallback path: activate the subscription
+			// rather than just crediting balance.
+			return activateSubscriptionTx(tx, &user, &product, order.Amount)
 		}); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "failed to process payment",

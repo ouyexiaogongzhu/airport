@@ -72,6 +72,7 @@ func CreateNode(c *fiber.Ctx) error {
 		Status:   "inactive",
 		UserID:   req.UserID,
 	}
+	ensureNodeToken(&node)
 
 	if result := db.DB.Create(&node); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

@@ -47,6 +47,39 @@
         </div>
       </section>
 
+      <!-- Subscription Link -->
+      <section class="card-section">
+        <h3>Subscription Link</h3>
+        <p class="link-hint">Paste this link or scan the QR code in your proxy app (V2rayNG, Shadowrocket, Clash, RFPlay) to import all nodes.</p>
+
+        <template v-if="subscriptionUrl">
+          <div class="token-display">
+            <code class="token-text block">{{ subscriptionUrl }}</code>
+          </div>
+          <div class="token-actions">
+            <button class="btn-outline" @click="copySubscriptionUrl">
+              {{ urlCopied ? 'Copied!' : 'Copy Subscription Link' }}
+            </button>
+            <button class="btn-outline" @click="showLinkQr = !showLinkQr">
+              {{ showLinkQr ? 'Hide QR Code' : 'Show QR Code' }}
+            </button>
+          </div>
+          <div v-if="showLinkQr" class="qr-area">
+            <QrCode :url="subscriptionUrl" />
+            <p class="qr-hint">Scan with V2rayNG or import the URL</p>
+          </div>
+        </template>
+        <template v-else>
+          <div v-if="tokenData" class="token-display">
+            <code class="token-text block dim">{{ tokenData.token }}</code>
+          </div>
+          <p class="no-token">
+            Your full subscription link becomes available after resetting your token. Use the
+            <strong>Reset Token</strong> button below to generate it.
+          </p>
+        </template>
+      </section>
+
       <!-- Client Token -->
       <section class="card-section">
         <div class="section-header">
@@ -138,6 +171,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
 import QrCode from '../components/QrCode.vue'
+import { buildSubscriptionUrl } from '../utils/subscriptionUrl'
 
 const auth = useAuthStore()
 
@@ -154,6 +188,8 @@ const tokenLoading = ref(false)
 const tokenError = ref('')
 const copied = ref(false)
 const showQr = ref(false)
+const showLinkQr = ref(false)
+const urlCopied = ref(false)
 
 // Regenerate
 const showConfirm = ref(false)
@@ -181,10 +217,9 @@ const trafficPercent = computed(() => {
   return Math.min(100, Math.round((used / limit) * 100))
 })
 
-const subscriptionUrl = computed(() => {
-  if (!fullToken.value) return ''
-  return `${api.defaults.baseURL}/client/links/${fullToken.value}`
-})
+const fullSubscriptionToken = computed(() => newToken.value || profile.value.client_token || '')
+
+const subscriptionUrl = computed(() => buildSubscriptionUrl(fullSubscriptionToken.value))
 
 function formatBytes(bytes: number | undefined | null): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -246,6 +281,13 @@ async function copyToken() {
   await navigator.clipboard.writeText(tokenData.value.token)
   copied.value = true
   setTimeout(() => { copied.value = false }, 2000)
+}
+
+async function copySubscriptionUrl() {
+  if (!subscriptionUrl.value) return
+  await navigator.clipboard.writeText(subscriptionUrl.value)
+  urlCopied.value = true
+  setTimeout(() => { urlCopied.value = false }, 2000)
 }
 
 function confirmRegenerate() {
@@ -357,6 +399,7 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
   margin-bottom: 1rem;
 }
 .section-header h3 { margin: 0; font-size: 1rem; color: #e2e8f0; }
+.link-hint { color: #a0aec0; font-size: 0.85rem; margin: 0 0 0.75rem; }
 
 .status-badge {
   padding: 0.2rem 0.6rem;
@@ -389,6 +432,8 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
 }
 .token-text { font-family: monospace; font-size: 0.85rem; color: #68d391; }
 .token-text.full { display: block; padding: 0.5rem; background: #1a1a2e; border-radius: 4px; margin-top: 0.5rem; }
+.token-text.block { display: block; }
+.token-text.dim { opacity: 0.6; }
 .token-actions { display: flex; gap: 0.5rem; }
 .qr-area {
   margin-top: 1rem;

@@ -23,6 +23,7 @@ func setupTestAppWithOrderRoutes(userID uint) *fiber.App {
 func setupTestAppWithPaymentCallback() *fiber.App {
 	app := fiber.New()
 	app.Post("/api/v1/public/payment/callback", MockPayCallback)
+	app.Post("/api/v1/public/payment/callback/:provider", PaymentCallback)
 	return app
 }
 
@@ -122,6 +123,7 @@ func TestCreateOrder_NonexistentProduct(t *testing.T) {
 }
 
 func TestMockPayCallback_Paid(t *testing.T) {
+	t.Setenv("MOCK_PAY_ENABLED", "1")
 	setupTestDB(t)
 	user := createTestUser(t)
 	product := createTestProduct(t, 10)
@@ -156,16 +158,30 @@ func TestMockPayCallback_Paid(t *testing.T) {
 		t.Fatalf("expected order status paid, got %s", updatedOrder.Status)
 	}
 
+	// The mock callback must activate the subscription, matching the real
+	// PaymentCallback path (stock is decremented at order creation instead).
+	var updatedUser model.User
+	if result := db.DB.First(&updatedUser, user.ID); result.Error != nil {
+		t.Fatalf("failed to reload user: %v", result.Error)
+	}
+	if updatedUser.SubscriptionStatus != "active" {
+		t.Fatalf("expected subscription active, got %s", updatedUser.SubscriptionStatus)
+	}
+	if updatedUser.ExpireTime <= 0 {
+		t.Fatalf("expected expire_time set, got %d", updatedUser.ExpireTime)
+	}
+
 	var updatedProduct model.Product
 	if result := db.DB.First(&updatedProduct, product.ID); result.Error != nil {
 		t.Fatalf("failed to reload product: %v", result.Error)
 	}
-	if updatedProduct.Stock != 9 {
-		t.Fatalf("expected product stock 9, got %d", updatedProduct.Stock)
+	if updatedProduct.Stock != 10 {
+		t.Fatalf("expected product stock unchanged (10), got %d", updatedProduct.Stock)
 	}
 }
 
 func TestMockPayCallback_AlreadyPaid(t *testing.T) {
+	t.Setenv("MOCK_PAY_ENABLED", "1")
 	setupTestDB(t)
 	user := createTestUser(t)
 	product := createTestProduct(t, 10)
@@ -194,6 +210,7 @@ func TestMockPayCallback_AlreadyPaid(t *testing.T) {
 }
 
 func TestMockPayCallback_Cancelled(t *testing.T) {
+	t.Setenv("MOCK_PAY_ENABLED", "1")
 	setupTestDB(t)
 	user := createTestUser(t)
 	product := createTestProduct(t, 10)
@@ -226,5 +243,56 @@ func TestMockPayCallback_Cancelled(t *testing.T) {
 	}
 	if updatedOrder.Status != "cancelled" {
 		t.Fatalf("expected order status cancelled, got %s", updatedOrder.Status)
+	}
+}
+
+// The mock payment endpoints must fail closed (403) unless MOCK_PAY_ENABLED=1,
+// so a default production deployment cannot be used to activate subscriptions for free.
+func TestMockPayCallback_FailsClosedByDefault(t *testing.T) {
+	setupTestDB(t)
+	user := createTestUser(t)
+	product := createTestProduct(t, 10)
+	order := model.Order{
+		UserID:    user.ID,
+		ProductID: product.ID,
+		Amount:    9.99,
+		Status:    "pending",
+		Provider:  "mock",
+	}
+	if result := db.DB.Create(&order); result.Error != nil {
+		t.Fatalf("failed to create order: %v", result.Error)
+	}
+
+	app := setupTestAppWithPaymentCallback()
+
+	// Direct mock callback route.
+	req := httptest.NewRequest("POST", "/api/v1/public/payment/callback", bytes.NewReader([]byte(`{"order_id":1,"status":"paid"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != fiber.StatusForbidden {
+		t.Fatalf("expected 403 for mock callback without MOCK_PAY_ENABLED, got %d", resp.StatusCode)
+	}
+
+	// Provider-routed mock callback.
+	req2 := httptest.NewRequest("POST", "/api/v1/public/payment/callback/mock", bytes.NewReader([]byte(`{"order_id":1,"status":"paid"}`)))
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := app.Test(req2, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp2.StatusCode != fiber.StatusForbidden {
+		t.Fatalf("expected 403 for provider mock callback without MOCK_PAY_ENABLED, got %d", resp2.StatusCode)
+	}
+
+	// Order must remain pending.
+	var updatedOrder model.Order
+	if result := db.DB.First(&updatedOrder, order.ID); result.Error != nil {
+		t.Fatalf("failed to reload order: %v", result.Error)
+	}
+	if updatedOrder.Status != "pending" {
+		t.Fatalf("expected order to remain pending, got %s", updatedOrder.Status)
 	}
 }

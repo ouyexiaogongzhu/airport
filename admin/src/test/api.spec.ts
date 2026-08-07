@@ -1,9 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 describe('Admin API module', () => {
-  beforeEach(() => {
-    localStorage.clear()
-  })
 
   it('creates an axios instance with correct baseURL', async () => {
     // We need to test the API module directly,

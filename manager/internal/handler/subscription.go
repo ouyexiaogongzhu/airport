@@ -15,21 +15,100 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/db"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
+	"github.com/skip2/go-qrcode"
 )
 
-// Rate limiter for subscription links.
-// TODO: This sync.Map grows without bound. Replace with a TTL cache (e.g. golang-lru with expiry).
-// TODO: Add global IP-based rate limiting across all tokens to prevent abuse from distributed requests.
-var linkRateLimiters = sync.Map{}
+// linkRateLimiterTTL is how long a token's rate limiter stays cached after
+// its last request. Idle tokens are evicted so memory stays bounded.
+const linkRateLimiterTTL = 10 * time.Minute
+
+// linkRateLimiterMaxEntries caps how many token rate limiters are kept in
+// memory; the least-recently-used tokens are evicted first when exceeded.
+const linkRateLimiterMaxEntries = 4096
+
+var linkRateLimiters = newTTLCache[*rateLimiter](linkRateLimiterTTL, linkRateLimiterMaxEntries)
 
 type rateLimiter struct {
 	mu      sync.Mutex
 	lastReq map[string]time.Time // ip -> last request time
 }
 
+// ttlCache is a goroutine-safe, bounded cache keyed by string. Every
+// GetOrCreate call refreshes the entry's lastAccess time, opportunistically
+// sweeps entries idle for longer than ttl, and evicts the least-recently
+// accessed entries when maxEntries would be exceeded.
+type ttlCache[V any] struct {
+	mu         sync.Mutex
+	items      map[string]*ttlCacheEntry[V]
+	ttl        time.Duration
+	maxEntries int
+}
+
+type ttlCacheEntry[V any] struct {
+	value      V
+	lastAccess time.Time
+}
+
+func newTTLCache[V any](ttl time.Duration, maxEntries int) *ttlCache[V] {
+	return &ttlCache[V]{
+		items:      make(map[string]*ttlCacheEntry[V]),
+		ttl:        ttl,
+		maxEntries: maxEntries,
+	}
+}
+
+// GetOrCreate returns the cached value for key, calling create if the key is
+// absent. Active keys (repeatedly accessed) never expire because every call
+// refreshes lastAccess.
+func (c *ttlCache[V]) GetOrCreate(key string, create func() V) V {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	if e, ok := c.items[key]; ok {
+		e.lastAccess = now
+		return e.value
+	}
+
+	e := &ttlCacheEntry[V]{value: create(), lastAccess: now}
+	c.items[key] = e
+	c.sweepLocked(now)
+	return e.value
+}
+
+// Len returns the number of cached entries (used by tests).
+func (c *ttlCache[V]) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.items)
+}
+
+// sweepLocked removes entries idle for longer than ttl and, if the cache is
+// still over maxEntries, evicts the least recently accessed entries.
+// Callers must hold c.mu.
+func (c *ttlCache[V]) sweepLocked(now time.Time) {
+	for k, e := range c.items {
+		if now.Sub(e.lastAccess) > c.ttl {
+			delete(c.items, k)
+		}
+	}
+	for over := len(c.items) - c.maxEntries; over > 0; over-- {
+		var oldestKey string
+		var oldestAccess time.Time
+		for k, e := range c.items {
+			if oldestKey == "" || e.lastAccess.Before(oldestAccess) {
+				oldestKey = k
+				oldestAccess = e.lastAccess
+			}
+		}
+		delete(c.items, oldestKey)
+	}
+}
+
 func getRateLimiter(token string) *rateLimiter {
-	v, _ := linkRateLimiters.LoadOrStore(token, &rateLimiter{lastReq: make(map[string]time.Time)})
-	return v.(*rateLimiter)
+	return linkRateLimiters.GetOrCreate(token, func() *rateLimiter {
+		return &rateLimiter{lastReq: make(map[string]time.Time)}
+	})
 }
 
 func checkRateLimit(c *fiber.Ctx, token string) bool {
@@ -421,6 +500,23 @@ func handleSingboxFormat(c *fiber.Ctx, user *model.User, nodes *[]model.Node) er
 	return c.JSON(config)
 }
 
+// apiBaseURL returns the public origin used to build subscription URLs.
+// API_PUBLIC_URL (documented in manager.env.example) takes precedence so
+// links stay correct behind a TLS-terminating proxy: Fiber does not trust
+// X-Forwarded-* headers in this app, so c.BaseURL() would report the
+// internal http origin there. c.BaseURL() is used as a fallback so local
+// smoke tests work without extra config, and the final default matches the
+// hardcoded geoip/geosite origins in GetSubscription.
+func apiBaseURL(c *fiber.Ctx) string {
+	if base := strings.TrimRight(os.Getenv("API_PUBLIC_URL"), "/"); base != "" {
+		return base
+	}
+	if origin := c.BaseURL(); origin != "" {
+		return origin
+	}
+	return "https://api.rfplay.uk"
+}
+
 func handleQRCodeFormat(c *fiber.Ctx, user *model.User, nodes *[]model.Node) error {
 	var lines []string
 	for _, node := range *nodes {
@@ -433,7 +529,17 @@ func handleQRCodeFormat(c *fiber.Ctx, user *model.User, nodes *[]model.Node) err
 		return c.Status(fiber.StatusNoContent).Send(nil)
 	}
 
-	// TODO: This is a stub. Implement actual QR code image generation (e.g. using rsc.io/qr).
-	c.Set("Content-Type", "text/plain")
-	return c.SendString("QR code generation requires rsc.io/qr library. Install with: go get rsc.io/qr")
+	// Encode the subscription URL so clients can import it by scanning.
+	// The Subscription-Userinfo etc. headers set in handleLinksRequest
+	// are intentionally kept for compatibility with clients that read them.
+	subURL := fmt.Sprintf("%s/api/v1/client/links/%s", apiBaseURL(c), c.Params("token"))
+	png, err := qrcode.Encode(subURL, qrcode.Medium, 256)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to generate QR code",
+		})
+	}
+
+	c.Set("Content-Type", "image/png")
+	return c.Send(png)
 }

@@ -276,7 +276,8 @@ async function loadUsersCount(): Promise<number> {
 async function loadNodesCount(): Promise<number> {
   try {
     const res = await api.get('/admin/nodes')
-    const nodes: any[] = Array.isArray(res.data) ? res.data : []
+    const data = res.data
+    const nodes: any[] = Array.isArray(data) ? data : (Array.isArray(data.data) ? data.data : [])
     return nodes.filter(n => n.status === 'active').length
   } catch {
     return 0

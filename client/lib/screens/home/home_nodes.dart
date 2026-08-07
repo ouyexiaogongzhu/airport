@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../config.dart';
 import '../../models/subscription.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vpn_service.dart';
@@ -20,6 +21,7 @@ class _HomeNodesState extends State<HomeNodes> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (AppConfig.storeMode) return;
       final sub = context.read<SubscriptionService>();
       if (sub.subscription == null && !sub.isLoading) {
         sub.loadSubscription();
@@ -30,6 +32,13 @@ class _HomeNodesState extends State<HomeNodes> {
   Future<void> _refresh() async {
     final subService = context.read<SubscriptionService>();
     final vpn = context.read<VpnService>();
+    if (AppConfig.storeMode) {
+      final nodes = subService.effectiveNodes;
+      if (nodes.isNotEmpty) {
+        await vpn.pingAllNodesList(nodes);
+      }
+      return;
+    }
     await subService.loadSubscription();
     if (subService.subscription != null) {
       await vpn.pingAllNodes(subService.subscription!);
@@ -94,11 +103,26 @@ class _HomeNodesState extends State<HomeNodes> {
               Consumer<SubscriptionService>(
                 builder: (context, subService, _) {
                   final sub = subService.subscription;
-                  final nodes = sub?.nodes ?? [];
+                  final nodes = AppConfig.storeMode
+                      ? subService.effectiveNodes
+                      : (sub?.nodes ?? []);
                   final statusError = subService.statusError;
 
                   // --- Empty / expired state ---
                   if (nodes.isEmpty && statusError != null) {
+                    // store 模式无订阅状态概念，直接显示中性空态。
+                    if (AppConfig.storeMode) {
+                      return SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        child: Center(
+                          child: Text(
+                            '暂无可用节点\n请先导入订阅',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey[500]),
+                          ),
+                        ),
+                      );
+                    }
                     // Show renewal card for expired/pending subscriptions
                     return _ExpiredRenewalCard(
                       statusError: statusError,
@@ -111,7 +135,11 @@ class _HomeNodesState extends State<HomeNodes> {
                       height: MediaQuery.of(context).size.height * 0.5,
                       child: Center(
                         child: Text(
-                          subService.isLoading ? '' : '暂无可用节点\n请先购买套餐',
+                          subService.isLoading
+                              ? ''
+                              : (AppConfig.storeMode
+                                  ? '暂无可用节点\n请先导入订阅'
+                                  : '暂无可用节点\n请先购买套餐'),
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey[500]),
                         ),
@@ -139,6 +167,9 @@ class _HomeNodesState extends State<HomeNodes> {
               // --- Renewal button (always visible when nodes exist) ---
               Consumer<SubscriptionService>(
                 builder: (context, subService, _) {
+                  // store 模式禁止展示续费/购买入口。
+                  if (AppConfig.storeMode) return const SizedBox.shrink();
+
                   final nodes = subService.subscription?.nodes ?? [];
                   if (nodes.isEmpty) return const SizedBox.shrink();
 

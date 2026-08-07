@@ -20,52 +20,74 @@ func setupTestSyncer(t *testing.T, mockServerURL string) *Syncer {
 	return NewSyncer(cfg)
 }
 
-func TestFetchNodes_Success(t *testing.T) {
-	sampleNodes := []NodeConfig{
-		{ID: 1, Name: "node-1", Address: "10.0.0.1", Port: 8080, Status: "online", TrafficUp: 100, TrafficDown: 200, Protocol: "tcp", Type: "relay"},
-		{ID: 2, Name: "node-2", Address: "10.0.0.2", Port: 8081, Status: "offline", TrafficUp: 300, TrafficDown: 400, Protocol: "udp", Type: "relay"},
+func sampleConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"log": map[string]interface{}{"loglevel": "info"},
+		"inbounds": []interface{}{
+			map[string]interface{}{
+				"port":     443,
+				"protocol": "vless",
+				"settings": map[string]interface{}{
+					"clients": []interface{}{
+						map[string]interface{}{"id": "uuid-1", "flow": "xtls-rprx-vision"},
+					},
+				},
+			},
+		},
+		"_meta": map[string]interface{}{
+			"node_id":  1,
+			"user_ids": []interface{}{float64(1)},
+			"version":  float64(100),
+		},
+	}
+}
+
+func TestFetchConfig_Success(t *testing.T) {
+	sample := nodeConfigResponse{
+		NodeID:   1,
+		Name:     "node-1",
+		Protocol: "vless",
+		Config:   sampleConfig(),
 	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			w.WriteHeader(http.StatusUnauthorized)
+		if r.URL.Path != "/api/v1/node/test-token/config" {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sampleNodes)
+		json.NewEncoder(w).Encode(sample)
 	}))
 	defer ts.Close()
 
 	syncer := setupTestSyncer(t, ts.URL)
-	nodes, err := syncer.fetchNodes()
+	cfg, err := syncer.fetchConfig()
 	if err != nil {
-		t.Fatalf("fetchNodes returned error: %v", err)
+		t.Fatalf("fetchConfig returned error: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	if cfg.NodeID != 1 || cfg.Name != "node-1" {
+		t.Errorf("unexpected config metadata: %+v", cfg)
 	}
-	if nodes[0].ID != 1 || nodes[0].Name != "node-1" {
-		t.Errorf("unexpected node[0]: %+v", nodes[0])
-	}
-	if nodes[1].ID != 2 || nodes[1].Name != "node-2" {
-		t.Errorf("unexpected node[1]: %+v", nodes[1])
+	inbounds, ok := cfg.Config["inbounds"].([]interface{})
+	if !ok || len(inbounds) != 1 {
+		t.Fatalf("expected 1 inbound, got %v", cfg.Config["inbounds"])
 	}
 }
 
-func TestFetchNodes_ServerError(t *testing.T) {
+func TestFetchConfig_ServerError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
 
 	syncer := setupTestSyncer(t, ts.URL)
-	_, err := syncer.fetchNodes()
+	_, err := syncer.fetchConfig()
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}
 }
 
-func TestFetchNodes_BadJSON(t *testing.T) {
+func TestFetchConfig_BadJSON(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{not valid json}"))
@@ -73,48 +95,75 @@ func TestFetchNodes_BadJSON(t *testing.T) {
 	defer ts.Close()
 
 	syncer := setupTestSyncer(t, ts.URL)
-	_, err := syncer.fetchNodes()
+	_, err := syncer.fetchConfig()
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
 
-func TestWriteLocalConfig(t *testing.T) {
+func TestApplyConfig_WritesXrayJSON(t *testing.T) {
 	syncer := setupTestSyncer(t, "http://localhost:9999")
 
-	nodes := []NodeConfig{
-		{ID: 10, Name: "test-node", Address: "192.168.1.10", Port: 9090, Status: "active", TrafficUp: 500, TrafficDown: 600, Protocol: "tcp", Type: "relay"},
-	}
-
-	if err := syncer.writeLocalConfig(nodes); err != nil {
-		t.Fatalf("writeLocalConfig error: %v", err)
+	if err := syncer.applyConfig(sampleConfig()); err != nil {
+		t.Fatalf("applyConfig error: %v", err)
 	}
 
 	// Verify file was written
-	path := filepath.Join(syncer.cfg.DataDir, "nodes.json")
+	path := filepath.Join(syncer.cfg.DataDir, "xray.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("failed to read written file: %v", err)
 	}
 
-	var loaded []NodeConfig
+	// Config embeds subscriber credentials; must not be world-readable.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("failed to stat written file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("expected config file mode 0600, got %v", perm)
+	}
+
+	var loaded map[string]interface{}
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		t.Fatalf("written file is not valid JSON: %v", err)
 	}
-	if len(loaded) != 1 || loaded[0].ID != 10 {
-		t.Errorf("unexpected data in written file: %+v", loaded)
+	if _, ok := loaded["inbounds"]; !ok {
+		t.Errorf("expected inbounds in written config")
+	}
+}
+
+func TestApplyConfig_Idempotent(t *testing.T) {
+	syncer := setupTestSyncer(t, "http://localhost:9999")
+
+	if err := syncer.applyConfig(sampleConfig()); err != nil {
+		t.Fatalf("first applyConfig error: %v", err)
+	}
+	// Second apply with the same config should not rewrite (hash unchanged).
+	if err := syncer.applyConfig(sampleConfig()); err != nil {
+		t.Fatalf("second applyConfig error: %v", err)
 	}
 }
 
 func TestSync_Integration(t *testing.T) {
-	sampleNodes := []NodeConfig{
-		{ID: 1, Name: "alpha", Address: "10.0.0.1", Port: 8080, Status: "online", TrafficUp: 111, TrafficDown: 222, Protocol: "tcp", Type: "relay"},
-		{ID: 2, Name: "beta", Address: "10.0.0.2", Port: 8081, Status: "online", TrafficUp: 333, TrafficDown: 444, Protocol: "udp", Type: "relay"},
+	sample := nodeConfigResponse{
+		NodeID:   1,
+		Name:     "alpha",
+		Protocol: "vless",
+		Config:   sampleConfig(),
 	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sampleNodes)
+		switch r.URL.Path {
+		case "/api/v1/node/test-token/config":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(sample)
+		case "/api/v1/node/test-token/traffic/report":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer ts.Close()
 
@@ -124,27 +173,32 @@ func TestSync_Integration(t *testing.T) {
 		t.Fatalf("Sync() returned error: %v", err)
 	}
 
-	// Verify nodes are readable via GetLocalNodes
 	nodes, err := syncer.GetLocalNodes()
 	if err != nil {
 		t.Fatalf("GetLocalNodes error: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
 	}
-	if nodes[0].Name != "alpha" || nodes[1].Name != "beta" {
-		t.Errorf("unexpected nodes: %+v", nodes)
+	if nodes[0].Name != "alpha" {
+		t.Errorf("unexpected node: %+v", nodes[0])
+	}
+	if nodes[0].Users != 1 {
+		t.Errorf("expected 1 active user, got %d", nodes[0].Users)
 	}
 }
 
 func TestLastSyncResult(t *testing.T) {
-	sampleNodes := []NodeConfig{
-		{ID: 1, Name: "gamma", Address: "10.0.0.3", Port: 8080, Status: "online", TrafficUp: 10, TrafficDown: 20, Protocol: "tcp", Type: "relay"},
+	sample := nodeConfigResponse{
+		NodeID:   1,
+		Name:     "gamma",
+		Protocol: "vless",
+		Config:   sampleConfig(),
 	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sampleNodes)
+		json.NewEncoder(w).Encode(sample)
 	}))
 	defer ts.Close()
 
@@ -167,6 +221,9 @@ func TestLastSyncResult(t *testing.T) {
 	if result.SyncedAt == "" {
 		t.Error("expected non-empty SyncedAt")
 	}
+	if result.ConfigVersion != 100 {
+		t.Errorf("expected ConfigVersion=100, got %d", result.ConfigVersion)
+	}
 }
 
 func TestLastSyncResult_NoData(t *testing.T) {
@@ -182,5 +239,63 @@ func TestLastSyncResult_NoData(t *testing.T) {
 	}
 	if result.NodeCount != 0 {
 		t.Errorf("expected NodeCount=0, got %d", result.NodeCount)
+	}
+}
+
+func TestReportTraffic_Delta(t *testing.T) {
+	var gotBody map[string]interface{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/node/test-token/traffic/report" {
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	syncer := setupTestSyncer(t, ts.URL)
+
+	// First snapshot establishes the baseline; no report expected.
+	statsFile := filepath.Join(syncer.cfg.DataDir, "traffic_stats.json")
+	writeStats := func(upload, download int64) {
+		data, _ := json.Marshal(map[string]interface{}{
+			"1": map[string]int64{"upload": upload, "download": download},
+		})
+		os.WriteFile(statsFile, data, 0644)
+	}
+
+	writeStats(100, 200)
+	if err := syncer.reportTraffic(1); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	if gotBody != nil {
+		t.Fatal("expected no report on first snapshot (baseline only)")
+	}
+
+	// Second snapshot: delta of 50 up / 30 down should be reported.
+	gotBody = nil
+	writeStats(150, 230)
+	if err := syncer.reportTraffic(1); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatal("expected a report on second snapshot")
+	}
+	nodeID := int(gotBody["node_id"].(float64))
+	if nodeID != 1 {
+		t.Fatalf("expected node_id 1, got %d", nodeID)
+	}
+	traffic := gotBody["traffic"].([]interface{})
+	if len(traffic) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(traffic))
+	}
+	entry := traffic[0].(map[string]interface{})
+	if entry["upload_bytes"].(float64) != 50 {
+		t.Errorf("expected upload delta 50, got %v", entry["upload_bytes"])
+	}
+	if entry["download_bytes"].(float64) != 30 {
+		t.Errorf("expected download delta 30, got %v", entry["download_bytes"])
 	}
 }

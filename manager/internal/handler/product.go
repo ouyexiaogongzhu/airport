@@ -55,11 +55,11 @@ func CreateProduct(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name and price are required"})
 	}
 
-	// Validate product type
-	validTypes := map[string]bool{"subscription": true, "one-time": true, "trial": true}
+	// Validate product type (subscription period or one-time/trial)
+	validTypes := map[string]bool{"subscription": true, "monthly": true, "quarterly": true, "half-yearly": true, "yearly": true, "one-time": true, "trial": true}
 	if req.Type != "" && !validTypes[req.Type] {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "type must be one of: subscription, one-time, trial",
+			"error": "type must be one of: subscription, monthly, quarterly, half-yearly, yearly, one-time, trial",
 		})
 	}
 

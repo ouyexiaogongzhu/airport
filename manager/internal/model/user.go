@@ -17,8 +17,13 @@ type User struct {
 	ExpireTime          int64     `gorm:"default:0" json:"expire_time"`
 	RateLimitBps        int64     `gorm:"default:0" json:"rate_limit_bps"`
 	TrafficPeriodStart  int64     `gorm:"default:0" json:"traffic_period_start"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	// Per-user proxy credentials. Generated randomly at registration and stored in DB
+	// so that node configs and subscription links reference the same credentials.
+	VlessUUID       string `gorm:"size:64;index" json:"vless_uuid"`     // UUIDv4 for VLESS/VMess
+	SSPassword      string `gorm:"size:128" json:"-"`                   // Shadowsocks password
+	TrojanPassword  string `gorm:"size:128" json:"-"`                   // Trojan password
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (User) TableName() string {

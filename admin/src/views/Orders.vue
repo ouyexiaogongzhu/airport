@@ -143,9 +143,16 @@ async function loadOrders() {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get('/admin/orders')
+    const res = await api.get('/admin/orders', {
+      params: {
+        status: filterStatus.value || undefined,
+        search: search.value || undefined,
+      },
+    })
+    // Backend returns { data, total, page, per_page }
     const data = res.data
     orders.value = Array.isArray(data) ? data :
+                   Array.isArray(data.data) ? data.data :
                    data.orders ? data.orders : []
   } catch (e: any) {
     error.value = e?.response?.data?.error || 'Failed to load orders'

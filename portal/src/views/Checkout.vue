@@ -174,15 +174,18 @@ async function placeOrder() {
       product_id: route.params.plan_id,
       provider: selectedProvider.value,
     })
-    const order = res.data
+    // Backend returns { order: { id, payment_url, ... }, payment_url }
+    const order = res.data.order || res.data
+    const orderId = order.id || res.data.order?.id
+    const paymentURL = order.payment_url || res.data.payment_url
     // If there's a payment_url, redirect the browser to the payment page
-    if (order.payment_url) {
+    if (paymentURL) {
       // Save order_id for /pay page in case redirect fails
-      sessionStorage.setItem('pay_order_id', order.order_id)
-      window.location.href = order.payment_url
+      sessionStorage.setItem('pay_order_id', String(orderId))
+      window.location.href = paymentURL
     } else {
       // No redirect URL — go to polling page
-      router.push(`/pay/${order.order_id}`)
+      router.push(`/pay/${orderId}`)
     }
   } catch (e: any) {
     submitError.value = e.response?.data?.error || 'Failed to create order. Please try again.'

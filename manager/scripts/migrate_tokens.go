@@ -1,3 +1,5 @@
+//go:build migrate_tokens
+
 package main
 
 import (

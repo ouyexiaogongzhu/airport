@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../config.dart';
 import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
 import 'vpn_screen.dart';
@@ -34,8 +35,10 @@ class _MainShellState extends State<MainShell> {
     // during the build phase. This works but triggers an unnecessary rebuild.
     // Consider using a [Listener] or [NavigatorObserver] to react to auth
     // state changes outside of build, or use an auth-aware routing wrapper.
+    //
+    // store 模式为通用代理客户端，无账号体系，跳过登录守卫。
     final auth = context.watch<AuthService>();
-    if (!auth.isLoggedIn) {
+    if (!auth.isLoggedIn && !AppConfig.storeMode) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.pushReplacementNamed(context, '/login');
       });

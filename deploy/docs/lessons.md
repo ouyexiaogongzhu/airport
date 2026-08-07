@@ -84,3 +84,13 @@
 | Admin 登录 401 循环 | axios 拦截器没有排除 `/public/` 路径 | 在拦截器中加 `if (config.url.includes('/public/')) return config` |
 | Flutter 登录 "No host specified" | 未传 API_BASE_URL 编译参数 | `--dart-define=API_BASE_URL=...` |
 | 镜像:443 端口 TLS 握手失败 | Nginx 容器有 SSL block 但无证书文件 | 挂载证书 + 检查 `ssl_certificate` 路径 |
+| Node daemon 401 拉不到配置 | daemon 未带 `X-Node-Timestamp`/`X-Node-Signature` | 用 token 派生 HMAC 签名（`sha256("rfplay-node-hmac-v1:"+token)`），签名覆盖 method+path+ts+body |
+| 部署脚本用弱 JWT_SECRET | `start-manager.sh`/`start-all.sh`/compose 曾 fallback `dev-secret` | 全部改为强制要求 `JWT_SECRET`，compose 用 `${JWT_SECRET:?}` 启动即失败 |
+
+## 安全加固记录（Phase 6）
+
+- **节点 HMAC 认证** — `/node/:token/config` 与 `/node/:token/traffic/report` 现在要求 `X-Node-Timestamp` + `X-Node-Signature`（HMAC-SHA256，key = `sha256("rfplay-node-hmac-v1:"+token)`），签名绑定 method/path/timestamp/body，±5 分钟窗口防重放。
+- **JWT_SECRET 强制** — 移除所有 `dev-secret` fallback；缺环境变量时 manager 拒绝启动。
+- **无界 sync.Map 移除** — `ratelimit.go` 中声而未用的 `rateVisitors`/`regVisitors` 删除（会无限增长）；限流状态统一在 `globalLimiter.windows`（每分钟 prune）。
+- **context 传播** — 高流量写入路径（`ReportTraffic`/`ReportNodeTraffic`）改用 `db.DB.WithContext(c.Context())`，请求取消可中断 SQL。
+- **节点部署脚本** — `deploy/node-reality/deploy-node.sh`、`deploy/node-cf-ws/deploy-node-cf-ws.sh`：安装 Xray + rfplay-daemon + 两个 systemd unit，daemon 拉配置→写 `/var/lib/rfplay/xray.json`→重启 xray→上报流量。

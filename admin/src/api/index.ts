@@ -1,18 +1,38 @@
 import axios from 'axios'
 
-// TODO: CSRF protection — add a CSRF token header (e.g. X-CSRF-Token) for state-changing requests
-// when the backend supports it. For now, the API relies on Bearer token auth.
+// Auth is cookie-based: session lives in httpOnly `admin_session`/`admin_refresh`
+// cookies set by the backend, and CSRF protection uses double-submit via the
+// JS-readable `admin_csrf` cookie.
+
+export function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
+
+// The auth store registers a callback here so a 401 can clear in-memory state
+// without creating an import cycle (auth store imports this module).
+let onUnauthorized: (() => void) | null = null
+export function setOnUnauthorized(handler: (() => void) | null) {
+  onUnauthorized = handler
+}
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
   timeout: 10000,
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 })
 
 api.interceptors.request.use(cfg => {
-  const token = localStorage.getItem('admin_token')
-  if (token) {
-    cfg.headers.Authorization = `Bearer ${token}`
+  const method = (cfg.method || 'get').toLowerCase()
+  if (UNSAFE_METHODS.has(method)) {
+    const csrfToken = readCookie('admin_csrf')
+    if (csrfToken) {
+      cfg.headers['X-CSRF-Token'] = csrfToken
+    }
   }
   return cfg
 })
@@ -21,14 +41,15 @@ api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
-      // Skip redirect for login endpoint — let auth.login() handle the error
       const url = err.config?.url || ''
-      if (url.includes('/public/login')) {
-        return Promise.reject(err)
+      const excluded =
+        url.includes('/admin/auth/login') ||
+        url.includes('/auth/csrf') ||
+        url.includes('/auth/validate')
+      if (!excluded) {
+        onUnauthorized?.()
+        window.location.href = '/'
       }
-      localStorage.removeItem('admin_token')
-      localStorage.removeItem('admin_user')
-      window.location.href = '/'
     }
     return Promise.reject(err)
   },

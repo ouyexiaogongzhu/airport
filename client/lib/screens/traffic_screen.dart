@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../config.dart';
 import '../models/subscription.dart';
 import '../services/subscription_service.dart';
 import '../services/vpn_service.dart';
@@ -181,8 +182,12 @@ class _TrafficScreenState extends State<TrafficScreen> {
                     padding: const EdgeInsets.all(16),
                     child: Text(
                       statusError == 'SUBSCRIPTION_PENDING'
-                          ? '您尚未购买订阅，暂无流量数据。'
-                          : '您的订阅已过期，流量数据不可用。',
+                          ? (AppConfig.storeMode
+                              ? '订阅待生效，暂无流量数据。'
+                              : '您尚未购买订阅，暂无流量数据。')
+                          : (AppConfig.storeMode
+                              ? '订阅已失效，流量数据不可用。'
+                              : '您的订阅已过期，流量数据不可用。'),
                       style: TextStyle(color: Colors.grey[300]),
                     ),
                   ),

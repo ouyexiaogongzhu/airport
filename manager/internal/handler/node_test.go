@@ -95,12 +95,18 @@ func TestListNode_Empty(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)
 	}
 
-	var nodes []model.Node
-	if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
+	var result struct {
+		Data  []model.Node `json:"data"`
+		Total int64        `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
-	if len(nodes) != 0 {
-		t.Fatalf("expected empty array, got %d items", len(nodes))
+	if len(result.Data) != 0 {
+		t.Fatalf("expected empty array, got %d items", len(result.Data))
+	}
+	if result.Total != 0 {
+		t.Fatalf("expected total 0, got %d", result.Total)
 	}
 }
 
@@ -120,12 +126,15 @@ func TestCreateAndListNode(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)
 	}
 
-	var nodes []model.Node
-	if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
+	var result struct {
+		Data  []model.Node `json:"data"`
+		Total int64        `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
-	if len(nodes) != 1 {
-		t.Fatalf("expected 1 node, got %d", len(nodes))
+	if len(result.Data) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(result.Data))
 	}
 }
 

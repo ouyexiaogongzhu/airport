@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'config.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
 import 'services/subscription_service.dart';
@@ -53,28 +54,8 @@ class RFPlayApp extends StatelessWidget {
     final app = MaterialApp(
       title: 'RFPlay Airport',
       debugShowCheckedModeBanner: false,
-      initialRoute: authService.isLoggedIn ? '/main' : '/login',
-      routes: {
-        '/login': (context) => const LoginScreen(),
-        '/register': (context) => const RegisterScreen(),
-        '/main': (context) => const MainShell(),
-        '/orders': (context) => const OrderHistoryScreen(),
-        '/traffic': (context) => const TrafficScreen(),
-        '/devices': (context) => const DeviceList(),
-        '/account/subscription': (context) => const AccountSubscription(),
-        '/subscription/input': (context) => const SubscriptionInputPage(),
-        '/subscription/qr': (context) => const QrScannerPage(),
-        '/payment': (context) {
-          final args = ModalRoute.of(context)?.settings.arguments;
-          if (args is String) {
-            return PaymentWebViewPage(url: args);
-          }
-          return const PaymentWebViewPage(
-            url: 'https://www.rfplay.uk/plans',
-            title: '支付中心',
-          );
-        },
-      },
+      initialRoute: _initialRoute,
+      routes: _buildRoutes(),
       theme: _buildTheme(),
     );
 
@@ -102,6 +83,57 @@ class RFPlayApp extends StatelessWidget {
       );
     }
     return app;
+  }
+
+  /// 首屏路由。
+  ///
+  /// App Store 版（storeMode）直接进入订阅导入页，无需登录；
+  /// 普通版保持原有的「已登录进主界面 / 未登录进登录页」行为。
+  String get _initialRoute {
+    if (AppConfig.storeMode) return '/subscription/input';
+    return authService.isLoggedIn ? '/main' : '/login';
+  }
+
+  /// 路由表。
+  ///
+  /// App Store 版为通用代理客户端：账号、金流、官网相关路由一律不注册，
+  /// 改为导向订阅导入页，确保任何旧入口都无法进入这些页面。
+  Map<String, WidgetBuilder> _buildRoutes() {
+    if (AppConfig.storeMode) {
+      return {
+        '/main': (context) => const MainShell(),
+        '/subscription/input': (context) => const SubscriptionInputPage(),
+        '/subscription/qr': (context) => const QrScannerPage(),
+        '/login': (context) => const _StoreModeRedirect(),
+        '/register': (context) => const _StoreModeRedirect(),
+        '/orders': (context) => const _StoreModeRedirect(),
+        '/traffic': (context) => const _StoreModeRedirect(),
+        '/devices': (context) => const _StoreModeRedirect(),
+        '/account/subscription': (context) => const _StoreModeRedirect(),
+        '/payment': (context) => const _StoreModeRedirect(),
+      };
+    }
+    return {
+      '/login': (context) => const LoginScreen(),
+      '/register': (context) => const RegisterScreen(),
+      '/main': (context) => const MainShell(),
+      '/orders': (context) => const OrderHistoryScreen(),
+      '/traffic': (context) => const TrafficScreen(),
+      '/devices': (context) => const DeviceList(),
+      '/account/subscription': (context) => const AccountSubscription(),
+      '/subscription/input': (context) => const SubscriptionInputPage(),
+      '/subscription/qr': (context) => const QrScannerPage(),
+      '/payment': (context) {
+        final args = ModalRoute.of(context)?.settings.arguments;
+        if (args is String) {
+          return PaymentWebViewPage(url: args);
+        }
+        return const PaymentWebViewPage(
+          url: 'https://www.rfplay.uk/plans',
+          title: '支付中心',
+        );
+      },
+    };
   }
 
   ThemeData _buildTheme() {
@@ -184,3 +216,22 @@ class RFPlayApp extends StatelessWidget {
     );
   }
 }
+
+/// App Store 版（storeMode）中被隐藏的账号/金流/官网路由的占位页。
+///
+/// 任何旧入口 push 到这些路由时都会立即替换到订阅导入页，
+/// 保证通用代理客户端内永远无法进入登录、购买、订单等页面。
+class _StoreModeRedirect extends StatelessWidget {
+  const _StoreModeRedirect();
+
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Navigator.of(context).pushReplacementNamed('/subscription/input');
+    });
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator()),
+    );
+  }
+}
+

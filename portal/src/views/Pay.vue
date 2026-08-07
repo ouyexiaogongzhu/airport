@@ -109,7 +109,7 @@ async function fetchOrder() {
     return
   }
   try {
-    const res = await api.get(`/web/orders/${orderId}`)
+    const res = await api.get(`/user/orders/${orderId}`)
     orderData.value = res.data
     const s = res.data.status
     if (s === 'paid' || s === 'completed' || s === 'active') {

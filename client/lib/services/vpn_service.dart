@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../config.dart';
 import '../models/subscription.dart';
+import 'xray_engine.dart';
+import 'xray_ffi.dart';
 
 /// Connection mode for VPN
 enum VpnMode {
@@ -42,10 +45,22 @@ class NodeLatency {
   String get label => isReachable ? '${latencyMs}ms' : '超时';
 }
 
-/// Real VPN service with Android VpnService + external app support
+/// Real VPN service with Android VpnService + libXray engine
 class VpnService extends ChangeNotifier {
   static const MethodChannel _channel =
       MethodChannel('uk.rfplay.client/vpn');
+
+  final XrayEngine _engine;
+
+  VpnService({XrayEngine? engine}) : _engine = engine ?? _defaultEngine();
+
+  static XrayEngine _defaultEngine() {
+    if (Platform.isAndroid || Platform.isIOS) {
+      return NativeXrayEngine();
+    }
+    // Desktop: load the libXray shared library via FFI.
+    return FfiXrayEngine();
+  }
 
   // --- State ---
   VpnState _state = VpnState.disconnected;
@@ -54,9 +69,11 @@ class VpnService extends ChangeNotifier {
   String? _connectedNode;
   String? _errorMessage;
 
-  // Speed simulation (real speed data requires traffic accounting)
+  // Real speed data from the engine traffic counters
   double _downloadSpeed = 0;
   double _uploadSpeed = 0;
+  int _lastUpBytes = 0;
+  int _lastDownBytes = 0;
   Duration _connectedTime = Duration.zero;
 
   // Timers
@@ -65,9 +82,6 @@ class VpnService extends ChangeNotifier {
 
   // Node latencies
   final Map<String, NodeLatency> _latencies = {};
-
-  // Random for speed simulation
-  final Random _random = Random();
 
   // --- Getters ---
   VpnState get state => _state;
@@ -128,7 +142,12 @@ class VpnService extends ChangeNotifier {
 
   /// Ping all nodes in a subscription
   Future<void> pingAllNodes(SubscriptionInfo sub) async {
-    for (final node in sub.nodes) {
+    await pingAllNodesList(sub.nodes);
+  }
+
+  /// Ping an arbitrary node list (store 模式下对导入节点测速)。
+  Future<void> pingAllNodesList(List<VpnNode> nodes) async {
+    for (final node in nodes) {
       final parsed = _parseNodeAddress(node.uri);
       if (parsed != null) {
         await pingNode(node.name, parsed.$1, parsed.$2);
@@ -161,20 +180,30 @@ class VpnService extends ChangeNotifier {
   }
 
   // --- Connect ---
-  Future<bool> connect({SubscriptionInfo? subscription}) async {
+  Future<bool> connect({SubscriptionInfo? subscription, List<VpnNode>? nodes}) async {
     if (_state == VpnState.connected || _state == VpnState.connecting) return false;
 
+    _activeSubscription = subscription;
+    _activeNodes = nodes;
+
+    final activeNodes =
+        _activeSubscription?.nodes ?? _activeNodes ?? const <VpnNode>[];
+
     // Pre-connection checks
-    if (subscription == null) {
+    if (subscription == null && (nodes == null || nodes.isEmpty)) {
       _state = VpnState.error;
-      _errorMessage = '未找到订阅信息，请先购买套餐';
+      _errorMessage = AppConfig.storeMode
+          ? '未找到可用节点，请先导入订阅'
+          : '未找到订阅信息，请先购买套餐';
       notifyListeners();
       return false;
     }
 
-    if (subscription.nodes.isEmpty) {
+    if (activeNodes.isEmpty) {
       _state = VpnState.error;
-      _errorMessage = '套餐暂无可用节点，请联系管理员';
+      _errorMessage = AppConfig.storeMode
+          ? '暂无可用的节点，请先导入订阅'
+          : '套餐暂无可用节点，请联系管理员';
       notifyListeners();
       return false;
     }
@@ -190,7 +219,8 @@ class VpnService extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
 
-    if (Platform.isLinux) {
+    // Desktop platforms (Windows/macOS/Linux) use the FFI engine.
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return _connectDesktop();
     }
 
@@ -201,7 +231,11 @@ class VpnService extends ChangeNotifier {
     }
   }
 
-  /// Desktop: copy subscription link to clipboard (no native VPN)
+  /// 当前可用的节点列表（服务器订阅节点或 store 模式导入节点）。
+  List<VpnNode> get _activeNodeList =>
+      _activeSubscription?.nodes ?? _activeNodes ?? const <VpnNode>[];
+
+  /// Desktop: run libXray via FFI with a local SOCKS/HTTP inbound.
   Future<bool> _connectDesktop() async {
     if (_selectedNode == null) {
       _state = VpnState.error;
@@ -210,21 +244,40 @@ class VpnService extends ChangeNotifier {
       return false;
     }
 
-    if (_configuredSubscriptionUrl != null) {
-      await Clipboard.setData(
-        ClipboardData(text: _configuredSubscriptionUrl!),
-      );
+    // Find the selected node URI and build a local-port config.
+    final nodeUri = _activeNodeList
+        .where((n) => n.name == _selectedNode)
+        .map((n) => n.uri)
+        .firstOrNull;
+
+    if (nodeUri == null) {
+      _state = VpnState.error;
+      _errorMessage = '未找到所选节点信息';
+      notifyListeners();
+      return false;
+    }
+
+    try {
+      final configJson =
+          jsonEncode(XrayConfigBuilder.buildLocalPortConfig(nodeUri));
+      await _engine.start(configJson);
+    } catch (e) {
+      debugPrint('[VpnService] desktop engine start failed: $e');
+      _state = VpnState.error;
+      _errorMessage = '启动 Xray 引擎失败（请确认已安装 libXray）: $e';
+      notifyListeners();
+      return false;
     }
 
     _state = VpnState.connected;
     _connectedNode = _selectedNode;
-    _startSimulation();
-    _errorMessage = '订阅链接已复制，请导入到代理客户端';
+    _startTrafficMonitor();
+    _errorMessage = '已通过本地代理 127.0.0.1:10808 连接';
     notifyListeners();
     return true;
   }
 
-  /// Connect via built-in Android VpnService
+  /// Connect via built-in Android VpnService + libXray engine
   Future<bool> _connectBuiltin() async {
     // Validate node selection
     if (_selectedNode == null) {
@@ -234,31 +287,50 @@ class VpnService extends ChangeNotifier {
       return false;
     }
 
+    // Find the selected node's URI from the active node list.
+    final nodeUri = _activeNodeList
+        .where((n) => n.name == _selectedNode)
+        .map((n) => n.uri)
+        .firstOrNull;
+
+    if (nodeUri == null) {
+      _state = VpnState.error;
+      _errorMessage = '未找到所选节点信息';
+      notifyListeners();
+      return false;
+    }
+
+    // Build a standard Xray config from the node URI.
+    String? configJson;
+    try {
+      configJson = jsonEncode(XrayConfigBuilder.buildTunClientConfig(nodeUri));
+    } catch (e) {
+      debugPrint('[VpnService] failed to build xray config: $e');
+    }
+
     // Try to start the native VPN service via MethodChannel
     try {
       final result = await _channel.invokeMethod('startVpn', {
-        'host': 'proxy.example.com', // Would use node.address
-        'port': 443,
+        'host': _proxyHostFromUri(nodeUri) ?? 'proxy.example.com',
+        'port': _proxyPortFromUri(nodeUri) ?? 443,
         'name': 'RFPlay - $_selectedNode',
+        'config': configJson,
       });
 
       if (result == 'PERMISSION_REQUIRED') {
         // User needs to grant VPN permission via the system dialog
-        // The Flutter side shows a snackbar / dialog
         _state = VpnState.disconnected;
         _errorMessage = '需要 VPN 权限，请允许 VPN 连接请求';
         notifyListeners();
         // The permission result comes back via onActivityResult
-        // For now, we fall back to external mode
-        debugPrint('[VpnService] VPN permission required, falling back to external mode');
-        _mode = VpnMode.external;
-        return _connectExternal();
+        debugPrint('[VpnService] VPN permission required, waiting for grant');
+        return true;
       }
 
       if (result == 'VPN_STARTED') {
         _state = VpnState.connected;
         _connectedNode = _selectedNode;
-        _startSimulation();
+        _startTrafficMonitor();
         notifyListeners();
         return true;
       }
@@ -278,6 +350,21 @@ class VpnService extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  SubscriptionInfo? _activeSubscription;
+
+  /// store 模式下手动导入的节点（无 SubscriptionInfo 时使用）。
+  List<VpnNode>? _activeNodes;
+
+  String? _proxyHostFromUri(String uri) {
+    final node = XrayConfigBuilder.parseUri(uri);
+    return node?.host;
+  }
+
+  int? _proxyPortFromUri(String uri) {
+    final node = XrayConfigBuilder.parseUri(uri);
+    return node?.port;
   }
 
   /// Connect by opening external VPN app (v2rayNG, Clash, etc.)
@@ -318,7 +405,7 @@ class VpnService extends ChangeNotifier {
     // but the actual VPN connection is managed by the external app
     _state = VpnState.connected;
     _connectedNode = _selectedNode;
-    _startSimulation();
+    _startTrafficMonitor();
     notifyListeners();
     return true;
   }
@@ -353,12 +440,19 @@ class VpnService extends ChangeNotifier {
     _state = VpnState.disconnecting;
     notifyListeners();
 
-    // Stop native VPN (Android only)
-    if (Platform.isAndroid) {
+    // Stop the native VPN / engine
+    if (Platform.isAndroid || Platform.isIOS) {
       try {
         await _channel.invokeMethod('stopVpn');
       } catch (e) {
         debugPrint('[VpnService] Failed to stop native VPN: $e');
+      }
+    } else {
+      // Desktop FFI engine
+      try {
+        await _engine.stop();
+      } catch (e) {
+        debugPrint('[VpnService] Failed to stop desktop engine: $e');
       }
     }
 
@@ -372,11 +466,11 @@ class VpnService extends ChangeNotifier {
   }
 
   // --- Toggle ---
-  Future<void> toggle({SubscriptionInfo? subscription}) async {
+  Future<void> toggle({SubscriptionInfo? subscription, List<VpnNode>? nodes}) async {
     if (isConnected || isConnecting) {
       await disconnect();
     } else {
-      await connect(subscription: subscription);
+      await connect(subscription: subscription, nodes: nodes);
     }
   }
 
@@ -398,18 +492,33 @@ class VpnService extends ChangeNotifier {
     }
   }
 
-  // --- Speed simulation (for UI demo; real speed requires TUN accounting) ---
-  void _startSimulation() {
+  // --- Real traffic monitor (libXray stats polling) ---
+  void _startTrafficMonitor() {
     _speedTimer?.cancel();
     _durationTimer?.cancel();
 
-    _updateSpeeds();
+    _lastUpBytes = 0;
+    _lastDownBytes = 0;
+    _downloadSpeed = 0;
+    _uploadSpeed = 0;
 
-    _speedTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (isConnected) {
-        _updateSpeeds();
-        notifyListeners();
+    _speedTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (!isConnected) return;
+      try {
+        final stats = await _engine.stats();
+        final upDelta = stats.upload - _lastUpBytes;
+        final downDelta = stats.download - _lastDownBytes;
+        if (_lastUpBytes != 0 || _lastDownBytes != 0) {
+          // bytes per 2s -> bytes per second
+          _uploadSpeed = (upDelta / 2).clamp(0, double.infinity);
+          _downloadSpeed = (downDelta / 2).clamp(0, double.infinity);
+        }
+        _lastUpBytes = stats.upload;
+        _lastDownBytes = stats.download;
+      } catch (_) {
+        // Engine stats unavailable — keep last speeds
       }
+      notifyListeners();
     });
 
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -418,11 +527,6 @@ class VpnService extends ChangeNotifier {
         notifyListeners();
       }
     });
-  }
-
-  void _updateSpeeds() {
-    _downloadSpeed = 15 + _random.nextDouble() * 35;
-    _uploadSpeed = 5 + _random.nextDouble() * 10;
   }
 
   void _stopSimulation() {

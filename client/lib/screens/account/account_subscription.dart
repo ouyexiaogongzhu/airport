@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../config.dart';
 import '../../services/subscription_service.dart';
 import '../../widgets/loading_overlay.dart';
 import '../../widgets/status_badge.dart';
-import '../../widgets/traffic_bar.dart';
 
 class AccountSubscription extends StatefulWidget {
   const AccountSubscription({super.key});
@@ -12,14 +12,7 @@ class AccountSubscription extends StatefulWidget {
   State<AccountSubscription> createState() => _AccountSubscriptionState();
 }
 
-// TODO(M4): _statusBadge, _formatTrafficGb, and _trafficEstimateBytes are
-// duplicated across AccountSubscription, HomeDashboard, and DashboardScreen.
-// Extract shared utilities and widgets.
 class _AccountSubscriptionState extends State<AccountSubscription> {
-  // TODO(M7): Traffic estimate is hardcoded at 100 GB. Fetch the actual plan
-  // limit from the API or subscription config instead.
-  static const int _trafficEstimateBytes = 100 * 1024 * 1024 * 1024;
-
   @override
   void initState() {
     super.initState();
@@ -51,12 +44,6 @@ class _AccountSubscriptionState extends State<AccountSubscription> {
       default:
         return StatusBadge(label: status, color: Colors.grey, showDot: true);
     }
-  }
-
-  String _formatTrafficGb(double gb) {
-    if (gb >= 100) return gb.toStringAsFixed(0);
-    if (gb >= 10) return gb.toStringAsFixed(1);
-    return gb.toStringAsFixed(2);
   }
 
   @override
@@ -147,8 +134,12 @@ class _AccountSubscriptionState extends State<AccountSubscription> {
                             padding: const EdgeInsets.all(16),
                             child: Text(
                               statusError == 'SUBSCRIPTION_PENDING'
-                                  ? '您尚未购买订阅，请前往官网选择套餐。'
-                                  : '您的订阅已过期，请续费后继续使用。',
+                                  ? (AppConfig.storeMode
+                                      ? '订阅待生效，请向您的服务商确认。'
+                                      : '您尚未购买订阅，请前往官网选择套餐。')
+                                  : (AppConfig.storeMode
+                                      ? '订阅已失效，请向您的服务商更新订阅。'
+                                      : '您的订阅已过期，请续费后继续使用。'),
                               style: TextStyle(color: Colors.grey[300]),
                             ),
                           ),

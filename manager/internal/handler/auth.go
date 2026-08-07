@@ -116,15 +116,17 @@ type TokenLoginRequest struct {
 }
 
 type AuthResponse struct {
-	Token    string      `json:"token"`
-	User     *model.User `json:"user"`
+	Token string                 `json:"token"`
+	User  map[string]interface{} `json:"user"`
 }
 
 func getJWTSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		log.Println("[WARNING] JWT_SECRET not set, using dev-secret (DO NOT use in production)")
-		secret = "dev-secret"
+		log.Fatalf("[FATAL] JWT_SECRET environment variable is required (set it before starting the server)")
+	}
+	if len(secret) < 16 {
+		log.Printf("[WARNING] JWT_SECRET is shorter than 16 characters; use a long random string in production")
 	}
 	return []byte(secret)
 }
@@ -180,13 +182,8 @@ func Register(c *fiber.Ctx) error {
 		Balance:      0,
 	}
 
-	if result := db.DB.Create(&user); result.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to create user",
-		})
-	}
-
-	// Generate client_token
+	// Generate per-user proxy credentials and client token
+	ensureUserCredentials(&user)
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -194,19 +191,35 @@ func Register(c *fiber.Ctx) error {
 		})
 	}
 	user.ClientToken = "rf_" + hex.EncodeToString(tokenBytes)
-	db.DB.Model(&user).Update("client_token", user.ClientToken)
 
-	// Generate JWT
-	token, err := generateToken(&user)
-	if err != nil {
+	if result := db.DB.Create(&user); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to generate token",
+			"error": "failed to create user",
 		})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(AuthResponse{
-		Token: token,
-		User:  &user,
+	// Flutter keeps the Bearer JWT flow; browsers get httpOnly session cookies.
+	if isFlutter(c) {
+		token, err := generateToken(&user)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to generate token",
+			})
+		}
+		return c.Status(fiber.StatusCreated).JSON(AuthResponse{
+			Token: token,
+			User:  SanitizedUser(&user),
+		})
+	}
+
+	if err := setWebAuthCookies(c, &user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to establish session",
+		})
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"user": SanitizedUser(&user),
 	})
 }
 
@@ -279,16 +292,28 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	token, err := generateToken(&user)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to generate token",
+	// Flutter keeps the Bearer JWT flow; browsers get httpOnly session cookies.
+	if isFlutter(c) {
+		token, err := generateToken(&user)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to generate token",
+			})
+		}
+		return c.JSON(AuthResponse{
+			Token: token,
+			User:  SanitizedUser(&user),
 		})
 	}
 
-	return c.JSON(AuthResponse{
-		Token: token,
-		User:  &user,
+	if err := setWebAuthCookies(c, &user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to establish session",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"user": SanitizedUser(&user),
 	})
 }
 
@@ -333,19 +358,286 @@ func TokenLogin(c *fiber.Ctx) error {
 
 	return c.JSON(AuthResponse{
 		Token: token,
-		User:  &user,
+		User:  SanitizedUser(&user),
 	})
 }
 
 func generateToken(user *model.User) (string, error) {
+	return generateTokenWithTTL(user, 24*time.Hour)
+}
+
+func generateTokenWithTTL(user *model.User, ttl time.Duration) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id":  user.ID,
 		"username": user.Username,
 		"role":     user.Role,
-		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+		"exp":      time.Now().Add(ttl).Unix(),
 		"iat":      time.Now().Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(getJWTSecret())
+}
+
+const (
+	sessionCookieTTL = 30 * 24 * time.Hour
+	refreshCookieTTL = 90 * 24 * time.Hour
+)
+
+// isFlutter reports whether the request comes from the Flutter client, which
+// authenticates via Bearer JWT instead of httpOnly cookies.
+func isFlutter(c *fiber.Ctx) bool {
+	return c.Get("X-Client") == "flutter"
+}
+
+// cookieDomain returns the Domain attribute for cookies (empty for host-only,
+// e.g. dev over localhost).
+func cookieDomain() string {
+	return os.Getenv("COOKIE_DOMAIN")
+}
+
+// setWebAuthCookies issues the portal session/refresh/csrf cookies.
+func setWebAuthCookies(c *fiber.Ctx, user *model.User) error {
+	if err := setSessionCookie(c, "session", user); err != nil {
+		return err
+	}
+	if err := setRefreshCookie(c, "refresh", user); err != nil {
+		return err
+	}
+	setCSRFCookie(c, "csrf")
+	return nil
+}
+
+// setAdminAuthCookies issues the admin session/refresh/csrf cookies.
+func setAdminAuthCookies(c *fiber.Ctx, user *model.User) error {
+	if err := setSessionCookie(c, "admin_session", user); err != nil {
+		return err
+	}
+	if err := setRefreshCookie(c, "admin_refresh", user); err != nil {
+		return err
+	}
+	setCSRFCookie(c, "admin_csrf")
+	return nil
+}
+
+func setSessionCookie(c *fiber.Ctx, name string, user *model.User) error {
+	token, err := generateTokenWithTTL(user, sessionCookieTTL)
+	if err != nil {
+		return err
+	}
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    token,
+		Domain:   cookieDomain(),
+		Path:     "/",
+		MaxAge:   int(sessionCookieTTL / time.Second),
+		Secure:   true,
+		HTTPOnly: true,
+		SameSite: fiber.CookieSameSiteStrictMode,
+	})
+	return nil
+}
+
+func setRefreshCookie(c *fiber.Ctx, name string, user *model.User) error {
+	token, err := generateTokenWithTTL(user, refreshCookieTTL)
+	if err != nil {
+		return err
+	}
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    token,
+		Domain:   cookieDomain(),
+		Path:     "/",
+		MaxAge:   int(refreshCookieTTL / time.Second),
+		Secure:   true,
+		HTTPOnly: true,
+		SameSite: fiber.CookieSameSiteStrictMode,
+	})
+	return nil
+}
+
+// setCSRFCookie issues a double-submit CSRF token. It is intentionally NOT
+// HttpOnly so the frontend can read it via JS and echo it in X-CSRF-Token.
+func setCSRFCookie(c *fiber.Ctx, name string) {
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    randomHex(32),
+		Domain:   cookieDomain(),
+		Path:     "/",
+		MaxAge:   int(sessionCookieTTL / time.Second),
+		Secure:   true,
+		HTTPOnly: false,
+		SameSite: fiber.CookieSameSiteStrictMode,
+	})
+}
+
+func clearCookie(c *fiber.Ctx, name string) {
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    "",
+		Domain:   cookieDomain(),
+		Path:     "/",
+		MaxAge:   -1,
+		Secure:   true,
+		HTTPOnly: false,
+		SameSite: fiber.CookieSameSiteStrictMode,
+	})
+}
+
+// SanitizedUser returns the safe subset of a user that can be exposed to web
+// frontends. Credentials (password hashes, proxy secrets, vless_uuid) are
+// never included; client_token is kept because the portal needs it to render
+// subscription links.
+func SanitizedUser(u *model.User) map[string]interface{} {
+	return map[string]interface{}{
+		"id":                   u.ID,
+		"username":             u.Username,
+		"role":                 u.Role,
+		"status":               u.Status,
+		"balance":              u.Balance,
+		"subscription_status":  u.SubscriptionStatus,
+		"subscription_tier":    u.SubscriptionTier,
+		"traffic_limit_bytes":  u.TrafficLimitBytes,
+		"traffic_used_bytes":   u.TrafficUsedBytes,
+		"expire_time":          u.ExpireTime,
+		"rate_limit_bps":       u.RateLimitBps,
+		"traffic_period_start": u.TrafficPeriodStart,
+		"client_token":         u.ClientToken,
+		"created_at":           u.CreatedAt,
+	}
+}
+
+// GetCSRFToken ensures the csrf and admin_csrf cookies exist so the portal and
+// admin frontends can each read their own token via JS for the double-submit
+// header.
+func GetCSRFToken(c *fiber.Ctx) error {
+	if c.Cookies("csrf") == "" {
+		setCSRFCookie(c, "csrf")
+	}
+	if c.Cookies("admin_csrf") == "" {
+		setCSRFCookie(c, "admin_csrf")
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+// Logout clears all session cookies (portal and admin).
+func Logout(c *fiber.Ctx) error {
+	for _, name := range []string{"session", "refresh", "csrf", "admin_session", "admin_refresh", "admin_csrf"} {
+		clearCookie(c, name)
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+// AdminLogout clears the admin session cookies.
+func AdminLogout(c *fiber.Ctx) error {
+	for _, name := range []string{"admin_session", "admin_refresh", "admin_csrf"} {
+		clearCookie(c, name)
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+// parseJWT validates a JWT string the same way the middleware does and returns
+// its claims.
+func parseJWT(tokenStr string) (jwt.MapClaims, error) {
+	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fiber.ErrUnauthorized
+		}
+		return getJWTSecret(), nil
+	})
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid token claims")
+	}
+	return claims, nil
+}
+
+// Refresh re-signs the session cookie from the refresh cookie.
+func Refresh(c *fiber.Ctx) error {
+	refreshToken := c.Cookies("refresh")
+	if refreshToken == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "SESSION_EXPIRED"})
+	}
+	claims, err := parseJWT(refreshToken)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "SESSION_EXPIRED"})
+	}
+	userID, ok := claims["user_id"].(float64)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "SESSION_EXPIRED"})
+	}
+	var user model.User
+	if result := db.DB.First(&user, uint(userID)); result.Error != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "SESSION_EXPIRED"})
+	}
+	if err := setSessionCookie(c, "session", &user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to refresh session",
+		})
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+// ValidateSession returns the current user for a valid web session.
+func ValidateSession(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "SESSION_EXPIRED"})
+	}
+	var user model.User
+	if result := db.DB.First(&user, userID); result.Error != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "SESSION_EXPIRED"})
+	}
+	return c.JSON(fiber.Map{"user": SanitizedUser(&user)})
+}
+
+// AdminLogin authenticates an admin and issues admin session cookies.
+func AdminLogin(c *fiber.Ctx) error {
+	req := new(LoginRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid request body",
+		})
+	}
+	if req.Username == "" || req.Password == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "username and password are required",
+		})
+	}
+
+	var user model.User
+	if result := db.DB.Where("username = ?", req.Username).First(&user); result.Error != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "invalid username or password",
+		})
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "invalid username or password",
+		})
+	}
+	if user.Status != "active" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "account is not active",
+		})
+	}
+	if user.Role != "admin" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "admin access required",
+		})
+	}
+
+	if err := setAdminAuthCookies(c, &user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to establish session",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"user": SanitizedUser(&user),
+		"role": user.Role,
+	})
 }

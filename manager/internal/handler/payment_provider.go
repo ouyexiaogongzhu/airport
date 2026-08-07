@@ -1,11 +1,19 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -65,8 +73,93 @@ type BEpusdtProvider struct {
 
 func (p *BEpusdtProvider) Name() string { return "bepusdt" }
 
+// bepusdtSign computes the BEpusdt request signature: all non-empty params
+// (excluding signature) sorted by ASCII key, joined as k=v&k=v, with the API
+// token appended and the result MD5-hashed (lowercase).
+func bepusdtSign(params map[string]string, token string) string {
+	keys := make([]string, 0, len(params))
+	for k, v := range params {
+		if k == "signature" || v == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(params[k])
+	}
+	b.WriteString(token)
+
+	sum := md5.Sum([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// CreatePayment creates a BEpusdt order via the provider's REST API and
+// returns the hosted payment page URL.
 func (p *BEpusdtProvider) CreatePayment(order *PaymentOrder) (string, error) {
-	return fmt.Sprintf("https://pay.bepusdt.example/pay?order_id=%d&amount=%.2f", order.ID, order.Amount), nil
+	host := strings.TrimRight(p.Host, "/")
+	if host == "" {
+		host = strings.TrimRight(os.Getenv("BEPUSDT_API_URL"), "/")
+	}
+	token := p.AuthToken
+	if token == "" {
+		token = os.Getenv("BEPUSDT_TOKEN")
+	}
+	if host == "" || token == "" {
+		return "", fmt.Errorf("bepusdt: BEPUSDT_API_URL and BEPUSDT_TOKEN are required")
+	}
+
+	orderID := strconv.FormatUint(uint64(order.ID), 10)
+	amount := strconv.FormatFloat(order.Amount, 'f', -1, 64)
+	params := map[string]string{
+		"order_id":     orderID,
+		"amount":       amount,
+		"notify_url":   order.NotifyURL,
+		"redirect_url": order.ReturnURL,
+	}
+	params["signature"] = bepusdtSign(params, token)
+
+	payload, err := json.Marshal(params)
+	if err != nil {
+		return "", fmt.Errorf("bepusdt: marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, host+"/api/v1/order/create-transaction", bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("bepusdt: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("bepusdt: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		Status  bool   `json:"status"`
+		Message string `json:"message"`
+		Data    struct {
+			TradeID string `json:"trade_id"`
+			URL     string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return "", fmt.Errorf("bepusdt: decode response: %w", err)
+	}
+	if !apiResp.Status || apiResp.Data.URL == "" {
+		return "", fmt.Errorf("bepusdt: order rejected: %s", apiResp.Message)
+	}
+	return apiResp.Data.URL, nil
 }
 
 func (p *BEpusdtProvider) VerifyCallback(c *fiber.Ctx) (*CallbackResult, error) {
@@ -77,25 +170,37 @@ func (p *BEpusdtProvider) VerifyCallback(c *fiber.Ctx) (*CallbackResult, error) 
 		Token              string `json:"token"`
 		Status             int    `json:"status"`
 		BlockTransactionID string `json:"block_transaction_id"`
+		CreatedAt          string `json:"created_at"`
+		ExpiredAt          string `json:"expired_at"`
 		Signature          string `json:"signature"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid callback body")
 	}
 
-	// Verify HMAC signature if secret is configured
+	// Verify the callback signature using the same BEpusdt signing rule.
+	// Fails closed: if no secret is configured the callback is rejected outright
+	// rather than being trusted unsigned.
 	secret := os.Getenv("BEPUSDT_SECRET")
-	if secret != "" {
-		if body.Signature == "" {
-			return nil, fiber.NewError(fiber.StatusBadRequest, "missing signature")
-		}
-		payload := fmt.Sprintf("%s%s%s%s", body.OrderID, body.Amount, body.ActualAmount, body.Token)
-		mac := hmac.New(sha256.New, []byte(secret))
-		mac.Write([]byte(payload))
-		expected := hex.EncodeToString(mac.Sum(nil))
-		if !hmac.Equal([]byte(body.Signature), []byte(expected)) {
-			return nil, fiber.NewError(fiber.StatusBadRequest, "invalid signature")
-		}
+	if secret == "" {
+		secret = os.Getenv("BEPUSDT_TOKEN")
+	}
+	if secret == "" {
+		return nil, fiber.NewError(fiber.StatusServiceUnavailable, "BEPUSDT_SECRET not configured")
+	}
+	params := map[string]string{
+		"order_id":             body.OrderID,
+		"amount":               body.Amount,
+		"actual_amount":        body.ActualAmount,
+		"token":                body.Token,
+		"status":               strconv.Itoa(body.Status),
+		"block_transaction_id": body.BlockTransactionID,
+		"created_at":           body.CreatedAt,
+		"expired_at":           body.ExpiredAt,
+	}
+	expected := bepusdtSign(params, secret)
+	if body.Signature == "" || !hmac.Equal([]byte(strings.ToLower(body.Signature)), []byte(expected)) {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid signature")
 	}
 
 	status := "failed"
@@ -137,19 +242,21 @@ func (p *PayoneerProvider) VerifyCallback(c *fiber.Ctx) (*CallbackResult, error)
 		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid callback body")
 	}
 
-	// Verify HMAC signature if secret is configured
+	// Verify HMAC signature. Fails closed: unconfigured webhook secret rejects
+	// the callback outright instead of trusting an unsigned request.
 	secret := os.Getenv("PAYONEER_WEBHOOK_SECRET")
-	if secret != "" {
-		if body.Signature == "" {
-			return nil, fiber.NewError(fiber.StatusBadRequest, "missing signature")
-		}
-		payload := fmt.Sprintf("%s%s%s%s", body.ReferenceID, body.EventType, body.TransactionID, body.Status)
-		mac := hmac.New(sha256.New, []byte(secret))
-		mac.Write([]byte(payload))
-		expected := hex.EncodeToString(mac.Sum(nil))
-		if !hmac.Equal([]byte(body.Signature), []byte(expected)) {
-			return nil, fiber.NewError(fiber.StatusBadRequest, "invalid signature")
-		}
+	if secret == "" {
+		return nil, fiber.NewError(fiber.StatusServiceUnavailable, "PAYONEER_WEBHOOK_SECRET not configured")
+	}
+	if body.Signature == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "missing signature")
+	}
+	payload := fmt.Sprintf("%s%s%s%s", body.ReferenceID, body.EventType, body.TransactionID, body.Status)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(body.Signature), []byte(expected)) {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid signature")
 	}
 
 	status := "failed"
@@ -170,7 +277,10 @@ var paymentProviders map[string]PaymentProvider
 func init() {
 	paymentProviders = make(map[string]PaymentProvider)
 	RegisterPaymentProvider(&MockProvider{})
-	RegisterPaymentProvider(&BEpusdtProvider{})
+	RegisterPaymentProvider(&BEpusdtProvider{
+		Host:      os.Getenv("BEPUSDT_API_URL"),
+		AuthToken: os.Getenv("BEPUSDT_TOKEN"),
+	})
 	RegisterPaymentProvider(&PayoneerProvider{})
 	RegisterPaymentProvider(&StripeProvider{})
 }

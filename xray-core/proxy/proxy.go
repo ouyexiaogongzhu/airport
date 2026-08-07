@@ -15,16 +15,18 @@ import (
 
 // ProxyConfig holds the configuration for a proxy inbound
 type ProxyConfig struct {
-	Port      int    `json:"port"`
-	Protocol  string `json:"protocol"` // socks5, http, vmess, vless
-	VerifyURL string `json:"verify_url"`
-	Tag       string `json:"tag"`
+	Port      int      `json:"port"`
+	Protocol  string   `json:"protocol"` // socks5, http, vmess, vless
+	VerifyURL string   `json:"verify_url"`
+	Tag       string   `json:"tag"`
+	ClientIDs []string `json:"client_ids"` // allowed VLESS client UUIDs
 }
 
-// ProxyServer implements SOCKS5 and HTTP CONNECT proxy with token auth
+// ProxyServer implements SOCKS5, HTTP CONNECT, and VLESS proxies.
 type ProxyServer struct {
 	config    ProxyConfig
 	verifyURL string
+	vless     *vlessHandler
 	listener  net.Listener
 	wg        sync.WaitGroup
 	stopCh    chan struct{}
@@ -35,10 +37,21 @@ func New(cfg ProxyConfig, verifyURL string) *ProxyServer {
 	if cfg.Protocol == "" {
 		cfg.Protocol = "socks5"
 	}
-	return &ProxyServer{
+	ps := &ProxyServer{
 		config:    cfg,
 		verifyURL: verifyURL,
 		stopCh:    make(chan struct{}),
+	}
+	if cfg.Protocol == "vless" {
+		ps.vless = newVLESSHandler(cfg.ClientIDs)
+	}
+	return ps
+}
+
+// SetVLESSVerify registers a remote verification callback for VLESS clients.
+func (s *ProxyServer) SetVLESSVerify(fn func(uuid string) bool) {
+	if s.vless != nil {
+		s.vless.verifyRemote = fn
 	}
 }
 
@@ -98,8 +111,16 @@ func (s *ProxyServer) handleConnection(conn net.Conn) {
 	switch s.config.Protocol {
 	case "socks5":
 		s.handleSOCKS5(conn)
-	case "http", "vmess", "vless":
-		// VMess/VLESS over WebSocket falls back to HTTP CONNECT for Phase 3
+	case "vless":
+		if s.vless != nil {
+			s.vless.handle(conn)
+		}
+	case "http":
+		s.handleHTTPConnect(conn)
+	case "vmess":
+		// VMess requires AEAD crypto which the minimal fork does not implement;
+		// serve VLESS-compatible connections on the same port, or fall back to
+		// HTTP CONNECT for legacy clients.
 		s.handleHTTPConnect(conn)
 	default:
 		s.handleHTTPConnect(conn)

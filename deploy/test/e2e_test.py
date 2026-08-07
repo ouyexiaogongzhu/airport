@@ -751,6 +751,126 @@ code, _ = req("PUT", api("/user/profile"),
 step(6.3, "Profile update requires auth", code == 401, f"HTTP {code}")
 
 # ================================================================
+# SCENARIO 7: Node Daemon Flow (config pull + HMAC traffic report)
+# ================================================================
+print("\n" + "=" * 60)
+print("SCENARIO 7: Node Daemon Flow")
+print("    Create node -> rotate token -> fetch config -> report traffic")
+print("=" * 60)
+
+import hmac as hmac_mod
+import hashlib
+
+def sign_node_request(token, method, path, ts, body=b""):
+    """Build the X-Node-Signature for a daemon request (mirrors the Go daemon)."""
+    secret = hashlib.sha256(("rfplay-node-hmac-v1:" + token).encode()).digest()
+    msg = method.encode() + b"\n" + path.encode() + b"\n" + str(ts).encode() + b"\n" + body
+    return hmac_mod.new(secret, msg, hashlib.sha256).hexdigest()
+
+def node_req(method, path, token, data=None):
+    """Request with HMAC-signed headers, like the daemon does."""
+    ts = int(time.time())
+    body = json.dumps(data).encode() if data else b""
+    path2 = path.replace("{TOKEN}", token)
+    sig = sign_node_request(token, method, path2, ts, body)
+    headers = {"Content-Type": "application/json",
+               "X-Node-Timestamp": str(ts),
+               "X-Node-Signature": sig}
+    url = BASE + api(path2)
+    r = urllib.request.Request(url, data=body if body else None,
+                               headers=headers, method=method)
+    try:
+        resp = urllib.request.urlopen(r)
+        return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {"raw": str(e)}
+
+NODE_TOKEN = ""
+if ADMIN_TOKEN:
+    print("\n--- 7.1 Create Node (admin) ---")
+    code, res = req("POST", api("/admin/nodes"),
+        {"name": "E2E-Daemon-Node", "type": "xray",
+         "address": "10.0.0.2", "port": 443,
+         "protocol": "vless", "user_id": 1},
+        token=ADMIN_TOKEN)
+    if code in (200, 201):
+        daemon_node_id = res.get("id", 0)
+        step("7.1", "Daemon node created", daemon_node_id > 0, f"node_id={daemon_node_id}")
+    else:
+        daemon_node_id = 0
+        step("7.1", "Daemon node created", False, f"HTTP {code}")
+
+    print("\n--- 7.2 Rotate Node Token ---")
+    if daemon_node_id > 0:
+        code, res = req("POST", api(f"/admin/nodes/{daemon_node_id}/token"), token=ADMIN_TOKEN)
+        if code == 200:
+            NODE_TOKEN = res.get("token", "")
+            step("7.2", "Node token rotated", NODE_TOKEN.startswith("nd_"), f"token={NODE_TOKEN[:12]}...")
+        else:
+            step("7.2", "Node token rotated", False, f"HTTP {code}")
+
+    print("\n--- 7.3 Fetch Config (HMAC) ---")
+    if NODE_TOKEN:
+        code, res = node_req("GET", api(f"/node/{NODE_TOKEN}/config"), NODE_TOKEN)
+        ok = code == 200 and "config" in res
+        step("7.3", "Daemon config pull", ok, f"HTTP {code}, node_id={res.get('node_id')}")
+    else:
+        step("7.3", "Daemon config pull", False, "no node token")
+
+    print("\n--- 7.4 Config Without HMAC -> 401 ---")
+    if NODE_TOKEN:
+        code, _ = req("GET", api(f"/node/{NODE_TOKEN}/config"))
+        step("7.4", "Unsigned config pull rejected", code == 401, f"HTTP {code}")
+    else:
+        step("7.4", "Unsigned config pull rejected", False, "no node token")
+
+    print("\n--- 7.5 Bad Signature -> 401 ---")
+    if NODE_TOKEN:
+        ts = int(time.time())
+        path = api(f"/node/{NODE_TOKEN}/config")
+        headers = {"X-Node-Timestamp": str(ts), "X-Node-Signature": "deadbeef"}
+        r = urllib.request.Request(BASE + path, headers=headers, method="GET")
+        try:
+            urllib.request.urlopen(r)
+            step("7.5", "Bad signature rejected", False, "request unexpectedly succeeded")
+        except urllib.error.HTTPError as e:
+            step("7.5", "Bad signature rejected", e.code == 401, f"HTTP {e.code}")
+    else:
+        step("7.5", "Bad signature rejected", False, "no node token")
+
+    print("\n--- 7.6 Report Traffic (HMAC) ---")
+    if NODE_TOKEN and daemon_node_id > 0:
+        uid = TARGET_USER_ID if TARGET_USER_ID else 9
+        code, res = node_req("POST", api(f"/node/{NODE_TOKEN}/traffic/report"), NODE_TOKEN,
+            {"node_id": daemon_node_id, "traffic": [{"user_id": uid, "upload_bytes": 500, "download_bytes": 700}]})
+        step("7.6", "Traffic reported via HMAC", code == 200, f"HTTP {code}, recorded={res.get('recorded')}")
+    else:
+        step("7.6", "Traffic reported via HMAC", False, "no node token")
+
+    print("\n--- 7.7 Wrong Node ID -> 403 ---")
+    if NODE_TOKEN and daemon_node_id > 0:
+        code, res = node_req("POST", api(f"/node/{NODE_TOKEN}/traffic/report"), NODE_TOKEN,
+            {"node_id": 99999, "traffic": [{"user_id": 1, "upload_bytes": 1, "download_bytes": 1}]})
+        step("7.7", "Wrong node_id rejected", code == 403, f"HTTP {code}")
+    else:
+        step("7.7", "Wrong node_id rejected", False, "no node token")
+
+    print("\n--- 7.8 Verify User Traffic Accumulated ---")
+    if NODE_TOKEN and daemon_node_id > 0 and TARGET_USER_ID:
+        code, res = req("GET", api(f"/admin/users/{TARGET_USER_ID}"), token=ADMIN_TOKEN)
+        used = res.get("traffic_used_bytes", 0) if code == 200 else 0
+        step("7.8", "User traffic accumulated", used >= 1200, f"traffic_used_bytes={used}")
+    else:
+        step("7.8", "User traffic accumulated", False, "no target user")
+
+    # Cleanup
+    if daemon_node_id > 0:
+        req("DELETE", api(f"/admin/nodes/{daemon_node_id}"), token=ADMIN_TOKEN)
+
+# ================================================================
 # RESULTS
 # ================================================================
 print("\n" + "=" * 60)

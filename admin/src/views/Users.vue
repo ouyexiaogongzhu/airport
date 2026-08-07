@@ -111,7 +111,8 @@ async function loadUsers() {
   try {
     const res = await api.get('/admin/users')
     const data = res.data
-    users.value = Array.isArray(data) ? data : []
+    users.value = Array.isArray(data) ? data :
+                  Array.isArray(data.data) ? data.data : []
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to load users'
   } finally {

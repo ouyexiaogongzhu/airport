@@ -46,6 +46,12 @@ func main() {
 	if v := os.Getenv("DAEMON_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
 	}
+	if v := os.Getenv("DAEMON_XRAY_BINARY"); v != "" {
+		cfg.XrayBinary = v
+	}
+	if v := os.Getenv("DAEMON_DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {

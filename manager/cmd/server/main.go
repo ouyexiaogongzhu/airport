@@ -30,7 +30,12 @@ func main() {
 
 	// Global middleware
 	app.Use(recover.New())
-	app.Use(logger.New())
+	// Deliberately no ${path}/${url} tag: node daemon tokens and client link
+	// tokens live in the URL path (/node/:token/..., /client/links/:token) and
+	// must not be written to logs in cleartext.
+	app.Use(logger.New(logger.Config{
+		Format: "${time} ${method} ${status} ${latency} ${ip}\n",
+	}))
 
 	// CORS whitelist
 	corsOrigins := os.Getenv("CORS_ORIGINS")
@@ -40,7 +45,7 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     corsOrigins,
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-CSRF-Token,X-Client",
 		AllowCredentials: true,
 	}))
 
@@ -75,43 +80,69 @@ func main() {
 	client := v1.Group("/client", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
 	client.Get("/subscription", handler.GetSubscription)
 
-	// Web routes (JWT required, rate limited: 30 req/s per IP)
-	web := v1.Group("/web", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
+	// Web session auth (cookie-based; CSRF via double-submit header)
+	auth := v1.Group("/auth", middleware.RateLimit(middleware.RateGroupPublic))
+	auth.Get("/csrf", handler.GetCSRFToken)
+	auth.Get("/validate", middleware.WebAuth("session"), handler.ValidateSession)
+	auth.Post("/refresh", middleware.WebAuth("session"), handler.Refresh)
+	auth.Post("/logout", middleware.WebAuth("session"), handler.Logout)
+
+	// Admin session auth (cookie-based)
+	adminAuth := v1.Group("/admin/auth", middleware.RateLimit(middleware.RateGroupPublic))
+	adminAuth.Post("/login", handler.AdminLogin)
+	adminAuth.Post("/logout", handler.AdminLogout)
+	adminAuth.Get("/csrf", handler.GetCSRFToken)
+
+	// Node daemon endpoints (authenticated by per-node token + HMAC signature)
+	nodeRoutes := v1.Group("/node")
+	nodeRoutes.Use(middleware.NodeHMAC())
+	nodeRoutes.Get("/:token/config", handler.GetNodeConfigForDaemon)
+	nodeRoutes.Post("/:token/traffic/report", handler.ReportNodeTraffic)
+
+	// Web routes (cookie session required, rate limited: 30 req/s per IP)
+	web := v1.Group("/web", middleware.WebAuth("session"), middleware.RateLimit(middleware.RateGroupAPI))
 	web.Get("/client-token", handler.GetClientToken)
-	web.Post("/client-token/regenerate", handler.RegenerateClientToken)
+	web.Post("/client-token/regenerate", middleware.WebCSRF("csrf"), handler.RegenerateClientToken)
 
-	// User routes (JWT required, rate limited: 30 req/s per IP)
-	user := v1.Group("/user", middleware.JWTProtected(), middleware.RateLimit(middleware.RateGroupAPI))
+	// User routes (cookie session required, rate limited: 30 req/s per IP)
+	user := v1.Group("/user", middleware.WebAuth("session"), middleware.RateLimit(middleware.RateGroupAPI))
 	user.Get("/profile", handler.GetProfile)
-	user.Put("/profile", handler.UpdateProfile)
-	user.Post("/orders", handler.CreateOrder)
+	user.Put("/profile", middleware.WebCSRF("csrf"), handler.UpdateProfile)
+	user.Post("/orders", middleware.WebCSRF("csrf"), handler.CreateOrder)
 	user.Get("/orders", handler.ListOrders)
+	user.Get("/orders/:id", handler.GetOrder)
 
-	// Admin routes (JWT + AdminOnly, rate limited: 30 req/s per IP)
-	admin := v1.Group("/admin", middleware.JWTProtected(), middleware.AdminOnly(), middleware.RateLimit(middleware.RateGroupAPI))
+	// Admin routes (admin session cookie + AdminOnly, rate limited: 30 req/s per IP)
+	admin := v1.Group("/admin", middleware.WebAuth("admin_session"), middleware.AdminOnly(), middleware.RateLimit(middleware.RateGroupAPI))
 	admin.Get("/users", handler.ListUsers)
 	admin.Get("/users/:id", handler.GetUser)
-	admin.Put("/users/:id", handler.UpdateUser)
+	admin.Put("/users/:id", middleware.WebCSRF("admin_csrf"), handler.UpdateUser)
+	admin.Get("/orders", handler.AdminListOrders)
+	admin.Get("/orders/:id", handler.AdminGetOrder)
+	admin.Post("/orders/:id/refund", middleware.WebCSRF("admin_csrf"), handler.AdminRefundOrder)
+	admin.Get("/stats", handler.GetAdminStats)
 
 	// Node management (admin)
 	nodes := admin.Group("/nodes")
-	nodes.Post("/", handler.CreateNode)
+	nodes.Post("/", middleware.WebCSRF("admin_csrf"), handler.CreateNode)
 	nodes.Get("/", handler.ListNode)
 	nodes.Get("/:id", handler.GetNode)
-	nodes.Put("/:id", handler.UpdateNode)
-	nodes.Delete("/:id", handler.DeleteNode)
+	nodes.Put("/:id", middleware.WebCSRF("admin_csrf"), handler.UpdateNode)
+	nodes.Delete("/:id", middleware.WebCSRF("admin_csrf"), handler.DeleteNode)
+	nodes.Get("/:id/config", handler.GenerateNodeConfig)
+	nodes.Post("/:id/token", middleware.WebCSRF("admin_csrf"), handler.GenerateNodeToken)
 
 	// Traffic (admin)
 	traffic := admin.Group("/traffic")
-	traffic.Post("/report", handler.ReportTraffic)
+	traffic.Post("/report", middleware.WebCSRF("admin_csrf"), handler.ReportTraffic)
 	traffic.Get("/stats", handler.GetTrafficStats)
 
 	// Product management (admin)
 	products := admin.Group("/products")
-	products.Post("/", handler.CreateProduct)
+	products.Post("/", middleware.WebCSRF("admin_csrf"), handler.CreateProduct)
 	products.Get("/", handler.ListProducts)
-	products.Put("/:id", handler.UpdateProduct)
-	products.Delete("/:id", handler.DeleteProduct)
+	products.Put("/:id", middleware.WebCSRF("admin_csrf"), handler.UpdateProduct)
+	products.Delete("/:id", middleware.WebCSRF("admin_csrf"), handler.DeleteProduct)
 
 	// Public product list (active only)
 	v1.Get("/products", handler.ListActiveProducts)

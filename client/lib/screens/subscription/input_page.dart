@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../../config.dart';
 import '../../services/subscription_service.dart';
 import 'qr_scanner_page.dart';
 
@@ -34,8 +35,7 @@ class _SubscriptionInputPageState extends State<SubscriptionInputPage> {
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       if (data?.text != null && data!.text!.isNotEmpty) {
         final text = data.text!.trim();
-        if (text.startsWith('http://') ||
-            text.startsWith('https://') ||
+        if (text.startsWith('https://') ||
             text.startsWith('ss://') ||
             text.startsWith('vmess://') ||
             text.startsWith('vless://') ||
@@ -64,6 +64,32 @@ class _SubscriptionInputPageState extends State<SubscriptionInputPage> {
     try {
       // Call subscription service to parse the URL
       final subService = context.read<SubscriptionService>();
+
+      if (AppConfig.storeMode) {
+        // store 模式：无账号体系，直接解析订阅链接 / 节点链接。
+        final success = await subService.importFromLink(url);
+        if (!mounted) return;
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('订阅导入成功')),
+          );
+          if (Navigator.canPop(context)) {
+            // 从主界面进入的更新订阅场景：直接返回，节点列表实时刷新。
+            Navigator.of(context).pop(true);
+          } else {
+            // 首次启动进入的导入场景：进入主界面。
+            Navigator.of(context).pushReplacementNamed('/main');
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(subService.importError ?? '导入失败'),
+              backgroundColor: Colors.red.shade800,
+            ),
+          );
+        }
+        return;
+      }
 
       // For subscription URL import, we load the subscription
       // If the service supports importing from URL, use that;
@@ -114,10 +140,12 @@ class _SubscriptionInputPageState extends State<SubscriptionInputPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('导入订阅'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        leading: Navigator.canPop(context)
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -214,8 +242,12 @@ class _SubscriptionInputPageState extends State<SubscriptionInputPage> {
                     return '请输入订阅链接';
                   }
                   final text = value.trim();
-                  if (!text.startsWith('http://') &&
-                      !text.startsWith('https://') &&
+                  // SECURITY: reject plain HTTP — subscription token / node
+                  // credentials would be sent in cleartext over HTTP.
+                  if (text.startsWith('http://')) {
+                    return '仅支持 HTTPS 订阅链接';
+                  }
+                  if (!text.startsWith('https://') &&
                       !text.startsWith('ss://') &&
                       !text.startsWith('vmess://') &&
                       !text.startsWith('vless://') &&
@@ -232,7 +264,7 @@ class _SubscriptionInputPageState extends State<SubscriptionInputPage> {
 
               // Supported formats hint
               Text(
-                '支持: HTTP/HTTPS 订阅链接、SS/vMess/vLESS/Trojan/Hysteria2/TUIC 节点链接',
+                '支持: HTTPS 订阅链接、SS/vMess/vLESS/Trojan/Hysteria2/TUIC 节点链接',
                 style: TextStyle(
                   color: Colors.grey[600],
                   fontSize: 11,

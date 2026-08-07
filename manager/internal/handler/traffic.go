@@ -24,7 +24,6 @@ type TrafficStatsQuery struct {
 }
 
 // ReportTraffic records a traffic data point and updates the node's cumulative counters.
-// TODO: Propagate request context via c.Context() for GORM queries.
 func ReportTraffic(c *fiber.Ctx) error {
 	req := new(ReportTrafficRequest)
 	if err := c.BodyParser(req); err != nil {
@@ -39,9 +38,10 @@ func ReportTraffic(c *fiber.Ctx) error {
 		})
 	}
 
+	ctx := c.Context()
 	// Verify the node exists
 	var node model.Node
-	if result := db.DB.First(&node, req.NodeID); result.Error != nil {
+	if result := db.DB.WithContext(ctx).First(&node, req.NodeID); result.Error != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "node not found",
 		})
@@ -55,19 +55,28 @@ func ReportTraffic(c *fiber.Ctx) error {
 		DownloadBytes: req.DownloadBytes,
 		RecordedAt:    time.Now(),
 	}
-	if result := db.DB.Create(&record); result.Error != nil {
+	if result := db.DB.WithContext(ctx).Create(&record); result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to record traffic",
 		})
 	}
 
 	// Update node cumulative counters (atomic SQL expression to avoid race condition)
-	if err := db.DB.Model(&model.Node{}).Where("id = ?", req.NodeID).Updates(map[string]interface{}{
+	if err := db.DB.WithContext(ctx).Model(&model.Node{}).Where("id = ?", req.NodeID).Updates(map[string]interface{}{
 		"traffic_up":   gorm.Expr("traffic_up + ?", req.UploadBytes),
 		"traffic_down": gorm.Expr("traffic_down + ?", req.DownloadBytes),
 	}).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to update node traffic counters",
+		})
+	}
+
+	// Accumulate the user's total usage so subscription links and the portal
+	// reflect real consumption.
+	if err := db.DB.WithContext(ctx).Model(&model.User{}).Where("id = ?", req.UserID).
+		Update("traffic_used_bytes", gorm.Expr("traffic_used_bytes + ?", req.UploadBytes+req.DownloadBytes)).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "failed to update user traffic counters",
 		})
 	}
 
