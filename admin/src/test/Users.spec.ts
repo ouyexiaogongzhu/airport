@@ -1,6 +1,22 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+
+// Mock the API module (Users.vue loads data through the axios-based api module)
+const mockApi = {
+  get: vi.fn(),
+  post: vi.fn(),
+  put: vi.fn(),
+  delete: vi.fn(),
+  interceptors: {
+    request: { use: vi.fn() },
+    response: { use: vi.fn() },
+  },
+}
+vi.mock('../api/index', () => ({
+  default: mockApi,
+  setOnUnauthorized: vi.fn(),
+}))
 
 // Mock vue-router
 vi.mock('vue-router', () => ({
@@ -8,7 +24,6 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ path: '/users' }),
 }))
 
-// Users.vue uses fetch() directly, not the api module
 const sampleUsers = [
   { id: 1, username: 'alice', role: 'user', status: 'active', subscription_status: 'active', client_token: 'tok_alice_abcdef123456', traffic_used_bytes: 1073741824, expire_time: 1893456000 },
   { id: 2, username: 'bob', role: 'admin', status: 'active', subscription_status: 'pending', client_token: 'tok_bob_xyz789012345', traffic_used_bytes: 536870912, expire_time: 0 },
@@ -18,17 +33,12 @@ const sampleUsers = [
 describe('Admin Users.vue', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    // Mock global fetch
-    vi.stubGlobal('fetch', vi.fn())
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
+    mockApi.get.mockReset()
   })
 
   it('renders loading state initially', async () => {
-    // Keep fetch pending to observe loading
-    vi.mocked(fetch).mockImplementationOnce(() => new Promise(() => {}))
+    // Keep the request pending to observe loading
+    mockApi.get.mockImplementationOnce(() => new Promise(() => {}))
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
       global: { plugins: [createPinia()] },
@@ -40,10 +50,7 @@ describe('Admin Users.vue', () => {
   })
 
   it('renders users table after loading', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(sampleUsers),
-    } as any)
+    mockApi.get.mockResolvedValueOnce({ data: sampleUsers })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
@@ -58,22 +65,20 @@ describe('Admin Users.vue', () => {
   })
 
   it('shows the page heading', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(sampleUsers),
-    } as any)
+    mockApi.get.mockResolvedValueOnce({ data: sampleUsers })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
       global: { plugins: [createPinia()] },
     })
     await new Promise(r => setTimeout(r, 50))
-    // The sidebar has <h2 class="brand">RFPlay Admin</h2> and topbar has <h2>Users</h2>
     expect(wrapper.find('.topbar h2').text()).toBe('Users')
   })
 
   it('renders error state on API failure', async () => {
-    vi.mocked(fetch).mockRejectedValueOnce(new Error('Failed to fetch'))
+    mockApi.get.mockRejectedValueOnce({
+      response: { status: 500, data: { error: 'Failed to fetch' } },
+    })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
@@ -86,10 +91,7 @@ describe('Admin Users.vue', () => {
   })
 
   it('filters users by search input', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(sampleUsers),
-    } as any)
+    mockApi.get.mockResolvedValueOnce({ data: sampleUsers })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
@@ -112,10 +114,7 @@ describe('Admin Users.vue', () => {
   })
 
   it('masks tokens correctly', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(sampleUsers),
-    } as any)
+    mockApi.get.mockResolvedValueOnce({ data: sampleUsers })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
@@ -133,10 +132,7 @@ describe('Admin Users.vue', () => {
   })
 
   it('handles empty users response', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve([]),
-    } as any)
+    mockApi.get.mockResolvedValueOnce({ data: [] })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {
@@ -149,11 +145,9 @@ describe('Admin Users.vue', () => {
   })
 
   it('handles HTTP error response', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      json: () => Promise.resolve({}),
-    } as any)
+    mockApi.get.mockRejectedValueOnce({
+      response: { status: 500, data: { error: 'HTTP 500' } },
+    })
 
     const Users = await import('../views/Users.vue')
     const wrapper = mount(Users.default, {

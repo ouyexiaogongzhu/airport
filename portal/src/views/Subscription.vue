@@ -84,7 +84,7 @@
       <section class="card-section">
         <div class="section-header">
           <h3>Client Token</h3>
-          <button class="btn-small" @click="fetchToken" :disabled="tokenLoading">
+          <button class="btn-small" @click="fetchToken(true)" :disabled="tokenLoading">
             {{ tokenLoading ? '…' : 'Refresh' }}
           </button>
         </div>
@@ -249,13 +249,15 @@ async function fetchProfile() {
   }
 }
 
-async function fetchToken() {
+// Fetch client token. `skipCache` is set by the explicit Refresh button so a
+// manual refresh always talks to the server.
+async function fetchToken(skipCache = false) {
   tokenLoading.value = true
   tokenError.value = ''
   showFullToken.value = false
   copied.value = false
   try {
-    const res = await api.get('/web/client-token')
+    const res = await api.get('/web/client-token', { cache: skipCache ? { skipCache: true } : undefined })
     tokenData.value = res.data
   } catch (e: any) {
     tokenError.value = e.response?.data?.error || 'Failed to load token'

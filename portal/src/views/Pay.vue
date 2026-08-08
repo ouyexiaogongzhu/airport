@@ -82,6 +82,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
+import { clearApiCache } from '../api/cache'
 import QrCode from '../components/QrCode.vue'
 
 const auth = useAuthStore()
@@ -109,11 +110,14 @@ async function fetchOrder() {
     return
   }
   try {
-    const res = await api.get(`/user/orders/${orderId}`)
+    // Bypass the GET cache: this endpoint is polled every 2s and must reflect
+    // live status transitions.
+    const res = await api.get(`/user/orders/${orderId}`, { cache: { skipCache: true } })
     orderData.value = res.data
     const s = res.data.status
     if (s === 'paid' || s === 'completed' || s === 'active') {
       status.value = 'paid'
+      clearApiCache()
       stopPolling()
     } else if (s === 'failed' || s === 'cancelled' || s === 'expired') {
       status.value = 'failed'

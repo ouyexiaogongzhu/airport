@@ -13,16 +13,11 @@ var ResetRateLimiter = func() {
 }
 
 func resetGlobalLimiter() {
-	globalLimiter.mu.Lock()
-	defer globalLimiter.mu.Unlock()
-	globalLimiter.windows = make(map[string]*slidingWindow)
+	globalLimiter.windows.Range(func(key, value any) bool {
+		globalLimiter.windows.Delete(key)
+		return true
+	})
 }
-
-var (
-	// rateVisitors/regVisitors were removed: they were declared but never
-	// written to, so they could grow without bound. The active limiter state
-	// lives in globalLimiter.windows, which is pruned by cleanupLoop.
-)
 
 // RateGroup defines the rate limit for a group of endpoints.
 type RateGroup struct {
@@ -38,24 +33,56 @@ var (
 	RateGroupUser   = RateGroup{Name: "user", Rate: 100}
 )
 
-// slidingWindow stores request timestamps for a single IP.
+// slidingWindow stores request timestamps for a single IP within a 1-second
+// sliding window using a fixed-capacity ring buffer (cap = group rate, at most
+// 100). Expired entries are skipped from the head on each call, so trimming is
+// O(k) only for k expired entries (k ≤ rate, bounded) and inserts are O(1) --
+// the previous slice implementation re-sliced the whole front on every request.
 type slidingWindow struct {
 	mu    sync.Mutex
-	ts    []time.Time // sorted request timestamps, oldest first
+	ts    []int64 // unix-millisecond timestamps, ring buffer
+	head  int     // index of the oldest valid entry
+	count int     // number of valid entries
+}
+
+func newSlidingWindow(cap int) *slidingWindow {
+	if cap < 1 {
+		cap = 1
+	}
+	return &slidingWindow{ts: make([]int64, cap)}
+}
+
+// allow records nowMs if the window has room, first skipping entries that have
+// fallen out of the 1-second window. Callers must hold sw.mu.
+func (sw *slidingWindow) allow(nowMs int64) bool {
+	for sw.count > 0 && nowMs-sw.ts[sw.head] >= 1000 {
+		sw.head = (sw.head + 1) % len(sw.ts)
+		sw.count--
+	}
+	if sw.count >= len(sw.ts) {
+		return false
+	}
+	sw.ts[(sw.head+sw.count)%len(sw.ts)] = nowMs
+	sw.count++
+	return true
+}
+
+// empty reports whether the window holds no valid entries. Callers must hold
+// sw.mu.
+func (sw *slidingWindow) empty() bool {
+	return sw.count == 0
 }
 
 type rateLimiter struct {
-	mu     sync.Mutex
-	windows map[string]*slidingWindow // key: "group:ip"
-	groups map[string]RateGroup
-	stopCh chan struct{}
+	windows sync.Map // key: "group:ip" -> *slidingWindow
+	groups  map[string]RateGroup
+	stopCh  chan struct{}
 }
 
 var globalLimiter *rateLimiter
 
 func init() {
 	globalLimiter = &rateLimiter{
-		windows: make(map[string]*slidingWindow),
 		groups: map[string]RateGroup{
 			RateGroupPublic.Name: RateGroupPublic,
 			RateGroupAuth.Name:   RateGroupAuth,
@@ -81,30 +108,24 @@ func (rl *rateLimiter) cleanupLoop() {
 	}
 }
 
+// prune drops windows with no entries valid within the 1-second window. The
+// sync.Map lookup is single-lock and per-window locks keep different IPs
+// independent.
 func (rl *rateLimiter) prune() {
-	now := time.Now()
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	for key, sw := range rl.windows {
+	nowMs := time.Now().UnixMilli()
+	rl.windows.Range(func(key, value any) bool {
+		sw := value.(*slidingWindow)
 		sw.mu.Lock()
-		// Trim entries older than 1 second (sliding window width)
-		cutoff := now.Add(-1 * time.Second)
-		keep := 0
-		for _, t := range sw.ts {
-			if t.After(cutoff) {
-				break
-			}
-			keep++
+		for sw.count > 0 && nowMs-sw.ts[sw.head] >= 1000 {
+			sw.head = (sw.head + 1) % len(sw.ts)
+			sw.count--
 		}
-		if keep > 0 {
-			sw.ts = sw.ts[keep:]
-		}
-		// Remove empty windows
-		if len(sw.ts) == 0 {
-			delete(rl.windows, key)
+		if sw.count == 0 {
+			rl.windows.Delete(key)
 		}
 		sw.mu.Unlock()
-	}
+		return true
+	})
 }
 
 func (rl *rateLimiter) allow(groupName string, ip string) bool {
@@ -114,39 +135,14 @@ func (rl *rateLimiter) allow(groupName string, ip string) bool {
 	}
 
 	key := groupName + ":" + ip
-	now := time.Now()
-	cutoff := now.Add(-1 * time.Second) // 1-second sliding window
+	nowMs := time.Now().UnixMilli()
 
-	rl.mu.Lock()
-	sw, exists := rl.windows[key]
-	if !exists {
-		sw = &slidingWindow{}
-		rl.windows[key] = sw
-	}
-	rl.mu.Unlock()
+	swAny, _ := rl.windows.LoadOrStore(key, newSlidingWindow(group.Rate))
+	sw := swAny.(*slidingWindow)
 
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
-
-	// Trim entries outside the window
-	keep := 0
-	for _, t := range sw.ts {
-		if t.After(cutoff) {
-			break
-		}
-		keep++
-	}
-	if keep > 0 {
-		sw.ts = sw.ts[keep:]
-	}
-
-	// Check rate
-	if len(sw.ts) >= group.Rate {
-		return false
-	}
-
-	sw.ts = append(sw.ts, now)
-	return true
+	return sw.allow(nowMs)
 }
 
 // RateLimit returns a Fiber middleware that limits requests per IP

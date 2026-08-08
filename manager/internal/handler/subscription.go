@@ -28,6 +28,54 @@ const linkRateLimiterMaxEntries = 4096
 
 var linkRateLimiters = newTTLCache[*rateLimiter](linkRateLimiterTTL, linkRateLimiterMaxEntries)
 
+// activeNodesCacheTTL bounds how long the active node list is served from
+// memory. The links/subscription endpoints are polled continuously by proxy
+// clients, so a short TTL removes the per-request DB round-trip while still
+// propagating node changes within ~10s.
+const activeNodesCacheTTL = 10 * time.Second
+
+var activeNodesCache struct {
+	mu        sync.Mutex
+	nodes     []model.Node
+	fetchedAt time.Time
+}
+
+// ResetActiveNodesCache is a test helper: clears the active node list cache so
+// tests against a fresh DB never read a list cached for another database.
+var ResetActiveNodesCache = func() {
+	activeNodesCache.mu.Lock()
+	defer activeNodesCache.mu.Unlock()
+	activeNodesCache.nodes = nil
+	activeNodesCache.fetchedAt = time.Time{}
+}
+
+// getActiveNodes returns a copy of the currently active nodes, refreshing the
+// list from the DB at most once per activeNodesCacheTTL. A fresh slice is
+// returned every time so callers can iterate or modify it without racing the
+// cache.
+func getActiveNodes() []model.Node {
+	activeNodesCache.mu.Lock()
+	defer activeNodesCache.mu.Unlock()
+
+	if activeNodesCache.nodes != nil && time.Since(activeNodesCache.fetchedAt) <= activeNodesCacheTTL {
+		out := make([]model.Node, len(activeNodesCache.nodes))
+		copy(out, activeNodesCache.nodes)
+		return out
+	}
+
+	var nodes []model.Node
+	db.DB.Where("status = ?", "active").Find(&nodes)
+	if nodes == nil {
+		nodes = []model.Node{}
+	}
+	activeNodesCache.nodes = nodes
+	activeNodesCache.fetchedAt = time.Now()
+
+	out := make([]model.Node, len(nodes))
+	copy(out, nodes)
+	return out
+}
+
 type rateLimiter struct {
 	mu      sync.Mutex
 	lastReq map[string]time.Time // ip -> last request time
@@ -35,14 +83,23 @@ type rateLimiter struct {
 
 // ttlCache is a goroutine-safe, bounded cache keyed by string. Every
 // GetOrCreate call refreshes the entry's lastAccess time, opportunistically
-// sweeps entries idle for longer than ttl, and evicts the least-recently
-// accessed entries when maxEntries would be exceeded.
+// sweeps entries idle for longer than ttl (throttled so high-frequency new-key
+// traffic does not pay a full scan on every insert), and evicts the
+// least-recently accessed entries when maxEntries would be exceeded.
 type ttlCache[V any] struct {
-	mu         sync.Mutex
-	items      map[string]*ttlCacheEntry[V]
-	ttl        time.Duration
-	maxEntries int
+	mu            sync.Mutex
+	items         map[string]*ttlCacheEntry[V]
+	ttl           time.Duration
+	maxEntries    int
+	sweepInterval time.Duration
+	lastSweep     time.Time
 }
+
+// ttlCacheSweepInterval is the minimum gap between full idle-sweeps. The links
+// endpoint inserts a fresh key per client token, so an O(n) scan on every new
+// key would add up quickly; throttling bounds that cost to one scan per
+// interval while expired entries linger for at most one interval.
+const ttlCacheSweepInterval = 30 * time.Second
 
 type ttlCacheEntry[V any] struct {
 	value      V
@@ -50,10 +107,17 @@ type ttlCacheEntry[V any] struct {
 }
 
 func newTTLCache[V any](ttl time.Duration, maxEntries int) *ttlCache[V] {
+	sweep := ttlCacheSweepInterval
+	if ttl < sweep {
+		// Short-TTL caches must still be swept often enough to honour their
+		// expiry semantics (tests rely on this).
+		sweep = ttl
+	}
 	return &ttlCache[V]{
-		items:      make(map[string]*ttlCacheEntry[V]),
-		ttl:        ttl,
-		maxEntries: maxEntries,
+		items:         make(map[string]*ttlCacheEntry[V]),
+		ttl:           ttl,
+		maxEntries:    maxEntries,
+		sweepInterval: sweep,
 	}
 }
 
@@ -72,7 +136,11 @@ func (c *ttlCache[V]) GetOrCreate(key string, create func() V) V {
 
 	e := &ttlCacheEntry[V]{value: create(), lastAccess: now}
 	c.items[key] = e
-	c.sweepLocked(now)
+	if now.Sub(c.lastSweep) >= c.sweepInterval {
+		c.sweepExpiredLocked(now)
+		c.lastSweep = now
+	}
+	c.evictOverCapacityLocked()
 	return e.value
 }
 
@@ -83,15 +151,19 @@ func (c *ttlCache[V]) Len() int {
 	return len(c.items)
 }
 
-// sweepLocked removes entries idle for longer than ttl and, if the cache is
-// still over maxEntries, evicts the least recently accessed entries.
-// Callers must hold c.mu.
-func (c *ttlCache[V]) sweepLocked(now time.Time) {
+// sweepExpiredLocked removes entries idle for longer than ttl. Callers must
+// hold c.mu.
+func (c *ttlCache[V]) sweepExpiredLocked(now time.Time) {
 	for k, e := range c.items {
 		if now.Sub(e.lastAccess) > c.ttl {
 			delete(c.items, k)
 		}
 	}
+}
+
+// evictOverCapacityLocked evicts the least recently accessed entries, one at a
+// time, until the cache is back within maxEntries. Callers must hold c.mu.
+func (c *ttlCache[V]) evictOverCapacityLocked() {
 	for over := len(c.items) - c.maxEntries; over > 0; over-- {
 		var oldestKey string
 		var oldestAccess time.Time
@@ -196,8 +268,7 @@ func GetSubscription(c *fiber.Ctx) error {
 		})
 	}
 
-	var nodes []model.Node
-	db.DB.Where("status = ?", "active").Find(&nodes)
+	nodes := getActiveNodes()
 
 	nodeURIs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
@@ -352,8 +423,7 @@ func handleLinksRequest(c *fiber.Ctx, token string, format string) error {
 		})
 	}
 
-	var nodes []model.Node
-	db.DB.Where("status = ?", "active").Find(&nodes)
+	nodes := getActiveNodes()
 
 	if len(nodes) == 0 {
 		return c.Status(fiber.StatusNoContent).Send(nil)

@@ -7,11 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
 )
 
-func setupTestSyncer(t *testing.T, mockServerURL string) *Syncer {
+func setupTestSyncer(t testing.TB, mockServerURL string) *Syncer {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.ManagerURL = mockServerURL
@@ -145,6 +146,86 @@ func TestApplyConfig_Idempotent(t *testing.T) {
 	}
 }
 
+func TestApplyConfig_SkipsRewriteWhenVersionUnchanged(t *testing.T) {
+	syncer := setupTestSyncer(t, "http://localhost:9999")
+
+	if err := syncer.applyConfig(sampleConfig()); err != nil {
+		t.Fatalf("first applyConfig error: %v", err)
+	}
+	path := filepath.Join(syncer.cfg.DataDir, "xray.json")
+	first, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after first apply: %v", err)
+	}
+
+	// A rewrite would visibly change the mtime (macOS APFS has ns resolution),
+	// so give the second apply a window in which to differ.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := syncer.applyConfig(sampleConfig()); err != nil {
+		t.Fatalf("second applyConfig error: %v", err)
+	}
+	second, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after second apply: %v", err)
+	}
+	if !second.ModTime().Equal(first.ModTime()) {
+		t.Errorf("config file was rewritten on identical version: mtime %v -> %v", first.ModTime(), second.ModTime())
+	}
+}
+
+func TestApplyConfig_WritesWhenVersionChanges(t *testing.T) {
+	syncer := setupTestSyncer(t, "http://localhost:9999")
+
+	cfg := sampleConfig()
+	if err := syncer.applyConfig(cfg); err != nil {
+		t.Fatalf("first applyConfig error: %v", err)
+	}
+
+	// Bump _meta.version: the fast path must not trigger and the file is
+	// rewritten with the new content.
+	bumped := sampleConfig()
+	bumped["_meta"] = map[string]interface{}{
+		"node_id":  1,
+		"user_ids": []interface{}{float64(1), float64(2)},
+		"version":  float64(101),
+	}
+	if err := syncer.applyConfig(bumped); err != nil {
+		t.Fatalf("second applyConfig error: %v", err)
+	}
+
+	path := filepath.Join(syncer.cfg.DataDir, "xray.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+	var loaded map[string]interface{}
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("written file is not valid JSON: %v", err)
+	}
+	meta, _ := loaded["_meta"].(map[string]interface{})
+	if v, ok := meta["version"].(float64); !ok || int64(v) != 101 {
+		t.Errorf("expected version 101 in rewritten file, got %v", meta["version"])
+	}
+
+	// And a third apply with the same bumped config must skip the rewrite.
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat before third apply: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := syncer.applyConfig(bumped); err != nil {
+		t.Fatalf("third applyConfig error: %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after third apply: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("config file was rewritten on unchanged version: mtime %v -> %v", before.ModTime(), after.ModTime())
+	}
+}
+
 func TestSync_Integration(t *testing.T) {
 	sample := nodeConfigResponse{
 		NodeID:   1,
@@ -239,6 +320,48 @@ func TestLastSyncResult_NoData(t *testing.T) {
 	}
 	if result.NodeCount != 0 {
 		t.Errorf("expected NodeCount=0, got %d", result.NodeCount)
+	}
+}
+
+func BenchmarkConfigHash(b *testing.B) {
+	data, err := json.MarshalIndent(sampleConfig(), "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		configHash(data)
+	}
+}
+
+// BenchmarkApplyConfig_MarshalHash measures the per-tick work the old
+// applyConfig did even when the config was unchanged: marshal + hash.
+func BenchmarkApplyConfig_MarshalHash(b *testing.B) {
+	cfg := sampleConfig()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			b.Fatal(err)
+		}
+		configHash(data)
+	}
+}
+
+// BenchmarkApplyConfig_Unchanged measures applyConfig on an unchanged config:
+// the _meta.version fast path skips marshal and write entirely.
+func BenchmarkApplyConfig_Unchanged(b *testing.B) {
+	syncer := setupTestSyncer(b, "http://localhost:9999")
+	cfg := sampleConfig()
+	if err := syncer.applyConfig(cfg); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := syncer.applyConfig(cfg); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

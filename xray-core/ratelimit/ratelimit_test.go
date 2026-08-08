@@ -189,6 +189,63 @@ func TestCleanup(t *testing.T) {
 	}
 }
 
+// TestCleanup_EvictsLeastRecentlyUsed verifies that the least-recently-used
+// entries are evicted first, rather than an arbitrary subset.
+func TestCleanup_EvictsLeastRecentlyUsed(t *testing.T) {
+	limiter := NewUserRateLimiter(10, 1)
+
+	// Access user-A first, then user-B, then user-C. lastAccess stamps differ
+	// by at least a couple of milliseconds.
+	limiter.Allow("user-A")
+	time.Sleep(2 * time.Millisecond)
+	limiter.Allow("user-B")
+	time.Sleep(2 * time.Millisecond)
+	limiter.Allow("user-C")
+
+	// maxUsers=2 evicts exactly one entry: the least recently used (user-A).
+	limiter.Cleanup(2)
+
+	if len(limiter.users) != 2 {
+		t.Fatalf("expected 2 users after cleanup, got %d", len(limiter.users))
+	}
+	if _, ok := limiter.users["user-A"]; ok {
+		t.Error("expected least-recently-used user-A to be evicted")
+	}
+	if _, ok := limiter.users["user-B"]; !ok {
+		t.Error("expected user-B to be kept")
+	}
+	if _, ok := limiter.users["user-C"]; !ok {
+		t.Error("expected user-C to be kept")
+	}
+}
+
+// TestCleanup_ReaccessRefreshesLRU verifies that reusing an entry updates its
+// recency, protecting it from eviction.
+func TestCleanup_ReaccessRefreshesLRU(t *testing.T) {
+	limiter := NewUserRateLimiter(10, 1)
+
+	limiter.Allow("user-A")
+	time.Sleep(2 * time.Millisecond)
+	limiter.Allow("user-B")
+	time.Sleep(2 * time.Millisecond)
+	// Re-access user-A: it becomes the most recently used.
+	limiter.Allow("user-A")
+	time.Sleep(2 * time.Millisecond)
+	limiter.Allow("user-C")
+
+	limiter.Cleanup(2)
+
+	if _, ok := limiter.users["user-A"]; !ok {
+		t.Error("expected re-accessed user-A to be kept")
+	}
+	if _, ok := limiter.users["user-B"]; ok {
+		t.Error("expected idle user-B to be evicted")
+	}
+	if _, ok := limiter.users["user-C"]; !ok {
+		t.Error("expected user-C to be kept")
+	}
+}
+
 // TestConcurrentAccess verifies that the rate limiter is goroutine-safe:
 // multiple goroutines calling Allow() simultaneously does not cause panics
 // or data races.

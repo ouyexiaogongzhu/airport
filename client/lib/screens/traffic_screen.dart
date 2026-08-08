@@ -40,6 +40,12 @@ class _TrafficScreenState extends State<TrafficScreen> {
   /// Daily data: list of (date, bytes) for the selected time range.
   List<(DateTime, int)> _dailyData = [];
 
+  /// Chart values/labels derived from [_dailyData]. Computed once per data
+  /// regeneration instead of on every rebuild (the screen rebuilds every
+  /// second while a VPN session is connected).
+  List<int> _chartValues = [];
+  List<String> _chartLabels = [];
+
   /// Whether daily data has been initialised.
   bool _initialised = false;
 
@@ -75,6 +81,9 @@ class _TrafficScreenState extends State<TrafficScreen> {
     if (_dailyData.isNotEmpty) {
       _todayBytes = _dailyData.last.$2;
     }
+
+    _chartValues = _dailyData.map((e) => e.$2).toList();
+    _chartLabels = _dailyData.map((e) => dayLabel(e.$1)).toList();
   }
 
   /// Number of days to show for the selected time range.
@@ -231,8 +240,8 @@ class _TrafficScreenState extends State<TrafficScreen> {
                           ..._buildTodayDetail()
                         else
                           TrafficChart(
-                            data: _dailyData.map((e) => e.$2).toList(),
-                            labels: _dailyData.map((e) => dayLabel(e.$1)).toList(),
+                            data: _chartValues,
+                            labels: _chartLabels,
                             height: 220,
                           ),
                         const SizedBox(height: 8),

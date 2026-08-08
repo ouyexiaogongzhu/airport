@@ -1,4 +1,11 @@
 import axios from 'axios'
+import {
+  applyGetCache,
+  buildCachedResponse,
+  clearApiCache,
+  isCacheHit,
+  storeCachedResponse,
+} from './cache'
 
 // State-changing HTTP methods require a CSRF token header.
 const UNSAFE_METHODS = ['post', 'put', 'patch', 'delete']
@@ -39,16 +46,31 @@ api.interceptors.request.use(cfg => {
     if (csrfToken) {
       cfg.headers.set('X-CSRF-Token', csrfToken)
     }
+    // Any state change invalidates previously cached GET data.
+    clearApiCache()
   }
   return cfg
 })
 
+// Serve fresh GET responses from the in-memory TTL cache before hitting the
+// network. Cached responses resolve through the error path below.
+api.interceptors.request.use(cfg => applyGetCache(cfg))
+
 api.interceptors.response.use(
-  res => res,
+  res => {
+    if (res.status >= 200 && res.status < 300) {
+      storeCachedResponse(res.config, res.data)
+    }
+    return res
+  },
   err => {
+    if (isCacheHit(err)) {
+      return Promise.resolve(buildCachedResponse(err))
+    }
     if (err.response?.status === 401 && !isExempt401(err.config?.url)) {
       // Full page reload: in-memory auth state resets and the router guard /
       // auth init() run again, landing unauthenticated users on `/`.
+      clearApiCache()
       window.location.href = '/'
     }
     return Promise.reject(err)

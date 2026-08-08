@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '../api/index'
+import { clearApiCache } from '../api/cache'
 
 export const useAuthStore = defineStore('auth', () => {
   // Session lives server-side in an httpOnly cookie — no token/user is kept
@@ -15,12 +16,13 @@ export const useAuthStore = defineStore('auth', () => {
   // load — a 401 from /auth/validate simply leaves the user logged out.
   async function init() {
     try {
-      await api.get('/auth/csrf')
+      // Always hit the server: these bootstrap calls decide the auth state.
+      await api.get('/auth/csrf', { cache: { skipCache: true } })
     } catch {
       // Non-fatal — /auth/validate below determines the real auth state.
     }
     try {
-      const res = await api.get('/auth/validate')
+      const res = await api.get('/auth/validate', { cache: { skipCache: true } })
       user.value = res.data.user
     } catch {
       user.value = null
@@ -56,6 +58,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // Clear local state regardless of the server response.
     }
+    clearApiCache()
     user.value = null
   }
 

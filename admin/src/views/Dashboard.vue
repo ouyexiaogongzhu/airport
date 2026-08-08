@@ -2,7 +2,7 @@
   <div class="page dashboard">
     <header class="topbar">
       <h2>Dashboard</h2>
-      <span class="date">{{ new Date().toLocaleDateString() }}</span>
+      <span class="date">{{ today }}</span>
     </header>
 
     <div v-if="error" class="error-msg">{{ error }}</div>
@@ -45,8 +45,8 @@
       <div v-if="stats.traffic_trend && stats.traffic_trend.length" class="trend-chart">
         <div v-for="p in stats.traffic_trend" :key="p.day" class="trend-col">
           <div class="trend-bar">
-            <div class="bar-up" :style="{ height: barHeight(p.upload, maxUpload()) + '%' }" :title="'up: ' + formatBytes(p.upload)"></div>
-            <div class="bar-down" :style="{ height: barHeight(p.download, maxDownload()) + '%' }" :title="'down: ' + formatBytes(p.download)"></div>
+            <div class="bar-up" :style="{ height: barHeight(p.upload, trendMax.upload) + '%' }" :title="'up: ' + formatBytes(p.upload)"></div>
+            <div class="bar-down" :style="{ height: barHeight(p.download, trendMax.download) + '%' }" :title="'down: ' + formatBytes(p.download)"></div>
           </div>
           <span class="trend-day">{{ p.day }}</span>
         </div>
@@ -76,11 +76,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import api from '../api/index'
 
 const stats = ref<any>({})
 const error = ref('')
+
+// Rendered once per mount; hoisted so it is not re-created on every render.
+const today = new Date().toLocaleDateString()
+
+// Precomputed once per stats update instead of re-scanning the whole trend
+// array for every bar on every render.
+const trendMax = computed(() => {
+  const trend: any[] = stats.value.traffic_trend || []
+  let upload = 1
+  let download = 1
+  for (const p of trend) {
+    const u = Number(p.upload) || 0
+    const d = Number(p.download) || 0
+    if (u > upload) upload = u
+    if (d > download) download = d
+  }
+  return { upload, download }
+})
 
 async function loadStats() {
   error.value = ''
@@ -110,12 +128,6 @@ function formatBytes(bytes: any): string {
   return (b / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
 }
 
-function maxUpload(): number {
-  return Math.max(1, ...(stats.value.traffic_trend || []).map((p: any) => Number(p.upload) || 0))
-}
-function maxDownload(): number {
-  return Math.max(1, ...(stats.value.traffic_trend || []).map((p: any) => Number(p.download) || 0))
-}
 function barHeight(v: any, max: number): number {
   if (max <= 0) return 0
   return Math.max(2, (Number(v) || 0) / max * 100)

@@ -32,6 +32,27 @@ func createActiveTestNode(t *testing.T) *model.Node {
 	return &node
 }
 
+// createNodeWithToken creates an active node with a unique daemon token so
+// multiple nodes can coexist under the nodes.token unique index.
+func createNodeWithToken(t *testing.T, token string) *model.Node {
+	t.Helper()
+	node := model.Node{
+		Name:     "Token-Node",
+		Type:     "xray",
+		Address:  "node.example.com",
+		Port:     443,
+		Protocol: "vless",
+		Status:   "active",
+		Network:  "ws",
+		WSPath:   "/ws",
+		Token:    token,
+	}
+	if result := db.DB.Create(&node); result.Error != nil {
+		t.Fatalf("failed to create node: %v", result.Error)
+	}
+	return &node
+}
+
 func TestHandleQRCodeFormat_ReturnsPNG(t *testing.T) {
 	setupTestDB(t)
 	user := createActiveTestUser(t)
@@ -139,5 +160,37 @@ func TestTTLCacheBoundedSize(t *testing.T) {
 	// The oldest entry "a" was evicted to make room for "c".
 	if got := cache.GetOrCreate("a", func() string { return "1-again" }); got != "1-again" {
 		t.Fatalf("expected evicted \"a\" to be recreated, got %q", got)
+	}
+}
+
+func TestActiveNodesCache_ReturnsCopyAndRefreshes(t *testing.T) {
+	setupTestDB(t)
+	ResetActiveNodesCache()
+	node1 := createNodeWithToken(t, "nd_active_cache_1")
+	createNodeWithToken(t, "nd_active_cache_2")
+
+	got := getActiveNodes()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 active nodes, got %d", len(got))
+	}
+
+	// The cached list is served as a fresh copy: mutating a result must not
+	// corrupt the cache for the next caller.
+	got[0].Name = "mutated"
+	for i, n := range getActiveNodes() {
+		if n.Name == "mutated" {
+			t.Fatalf("expected a fresh copy each call, index %d leaked the mutation", i)
+		}
+	}
+
+	// A status change is picked up once the cache is refreshed. ResetActiveNodesCache
+	// is what tests call to simulate the TTL boundary; production hits the
+	// same refresh path when the 10s TTL elapses.
+	if err := db.DB.Model(node1).Update("status", "inactive").Error; err != nil {
+		t.Fatalf("failed to deactivate node: %v", err)
+	}
+	ResetActiveNodesCache()
+	if got := getActiveNodes(); len(got) != 1 {
+		t.Fatalf("expected 1 active node after refresh, got %d", len(got))
 	}
 }

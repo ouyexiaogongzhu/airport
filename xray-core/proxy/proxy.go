@@ -22,6 +22,110 @@ type ProxyConfig struct {
 	ClientIDs []string `json:"client_ids"` // allowed VLESS client UUIDs
 }
 
+// sharedClient is a process-wide HTTP client reused by all proxy connections.
+// A single Transport keeps TCP connections alive and pooled across requests,
+// which matters on the manager verification path (one request per new
+// connection). The previous per-connection client built a fresh Transport for
+// every call, disabling keep-alive entirely.
+var sharedClient = &http.Client{
+	Timeout: 5 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 16,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
+// Token-verification result cache.
+//
+// verifyToken calls the manager on every new connection (each SOCKS5 and HTTP
+// CONNECT handshake). Clients opening many short connections would otherwise
+// hammer the manager API. Results are cached keyed by the token string.
+//
+// Security trade-off: a revoked token remains usable for at most
+// verifyCacheValidTTL (60s) while a positive result is cached, and negative
+// results are cached for only verifyCacheInvalidTTL (5s) so a freshly granted
+// or re-enabled token is picked up quickly. Enforcement changes therefore
+// propagate within a minute at worst.
+const (
+	verifyCacheMaxEntries = 65536
+	verifyCacheValidTTL   = 60 * time.Second
+	verifyCacheInvalidTTL = 5 * time.Second
+)
+
+type verifyCacheEntry struct {
+	valid   bool
+	expires time.Time
+}
+
+// verifyCache is a goroutine-safe TTL cache with a hard size cap. Expired
+// entries are dropped lazily on lookup and insert; when the cap is exceeded
+// the least-recently-inserted entries are evicted.
+var verifyCache = struct {
+	mu sync.RWMutex
+	m  map[string]verifyCacheEntry
+}{m: make(map[string]verifyCacheEntry, 1024)}
+
+// cachedVerify returns the cached verification result for token, if present
+// and still fresh.
+func cachedVerify(token string) (valid, ok bool) {
+	now := time.Now()
+	verifyCache.mu.RLock()
+	e, found := verifyCache.m[token]
+	verifyCache.mu.RUnlock()
+	if !found || now.After(e.expires) {
+		return false, false
+	}
+	return e.valid, true
+}
+
+// cacheVerify stores a verification result for token with the appropriate TTL.
+func cacheVerify(token string, valid bool) {
+	ttl := verifyCacheValidTTL
+	if !valid {
+		ttl = verifyCacheInvalidTTL
+	}
+	now := time.Now()
+
+	verifyCache.mu.Lock()
+	defer verifyCache.mu.Unlock()
+
+	if len(verifyCache.m) >= verifyCacheMaxEntries {
+		// Lazy sweep: drop expired entries first.
+		for k, e := range verifyCache.m {
+			if now.After(e.expires) {
+				delete(verifyCache.m, k)
+			}
+		}
+		// Still over the cap: evict the oldest entries. Each pass finds the
+		// earliest expiry in one linear scan; the number of passes is bounded
+		// by how far over the cap we are, which stays small in steady state.
+		for len(verifyCache.m) >= verifyCacheMaxEntries {
+			var oldestKey string
+			var oldestExp time.Time
+			first := true
+			for k, e := range verifyCache.m {
+				if first || e.expires.Before(oldestExp) {
+					oldestExp = e.expires
+					oldestKey = k
+					first = false
+				}
+			}
+			delete(verifyCache.m, oldestKey)
+		}
+	}
+
+	verifyCache.m[token] = verifyCacheEntry{valid: valid, expires: now.Add(ttl)}
+}
+
+// ClearVerifyCache drops all cached verification results. Exposed for tests
+// and for external management (e.g. after a bulk token revocation).
+func ClearVerifyCache() {
+	verifyCache.mu.Lock()
+	verifyCache.m = make(map[string]verifyCacheEntry, 1024)
+	verifyCache.mu.Unlock()
+}
+
 // ProxyServer implements SOCKS5, HTTP CONNECT, and VLESS proxies.
 type ProxyServer struct {
 	config    ProxyConfig
@@ -397,18 +501,33 @@ func (s *ProxyServer) handleHTTPConnect(conn net.Conn) {
 	}
 }
 
-// verifyToken checks a token against the Manager API
+// verifyToken checks a token against the Manager API. Results are cached for
+// a short TTL (see verifyCacheValidTTL/verifyCacheInvalidTTL) so repeated
+// connections from the same token do not hit the manager on every handshake.
 func (s *ProxyServer) verifyToken(userID, token string) bool {
 	if s.verifyURL == "" {
 		return true // No verification in dev mode
 	}
+	if token == "" {
+		return false
+	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	if valid, ok := cachedVerify(token); ok {
+		return valid
+	}
+
+	valid := s.verifyTokenRemote(userID, token)
+	cacheVerify(token, valid)
+	return valid
+}
+
+// verifyTokenRemote performs the actual manager round-trip for verifyToken.
+func (s *ProxyServer) verifyTokenRemote(userID, token string) bool {
 	apiURL := fmt.Sprintf("%s/api/v1/public/login", s.verifyURL)
 
 	// Try token login
 	body := fmt.Sprintf(`{"token":"%s"}`, token)
-	resp, err := client.Post(apiURL, "application/json", strings.NewReader(body))
+	resp, err := sharedClient.Post(apiURL, "application/json", strings.NewReader(body))
 	if err != nil {
 		log.Printf("[proxy] verify: token login failed: %v", err)
 		return false
@@ -422,7 +541,7 @@ func (s *ProxyServer) verifyToken(userID, token string) bool {
 	// Fallback: try user/pass login
 	if userID != "" {
 		body = fmt.Sprintf(`{"username":"%s","password":"%s"}`, userID, token)
-		resp, err = client.Post(apiURL, "application/json", strings.NewReader(body))
+		resp, err = sharedClient.Post(apiURL, "application/json", strings.NewReader(body))
 		if err != nil {
 			return false
 		}
@@ -445,14 +564,13 @@ type AuthResponse struct {
 
 // verifyTokenFromManager is an alternative verification that checks subscription status
 func verifyTokenFromManager(verifyURL, token string) bool {
-	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/client/subscription", verifyURL), nil)
 	if err != nil {
 		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(req)
 	if err != nil {
 		return false
 	}

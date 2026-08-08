@@ -61,8 +61,12 @@ func ReportNodeTraffic(c *fiber.Ctx) error {
 	// not drop the whole batch.
 	validUsers := eligibleUserIDs(ctx, req.Traffic, now.Unix())
 
+	// Collect all eligible records and aggregate per-user traffic deltas so the
+	// whole batch is written with a single multi-row INSERT and each user's
+	// counter is bumped with a single UPDATE.
+	var records []model.TrafficRecord
+	userDeltas := make(map[uint]int64)
 	totalUp, totalDown := int64(0), int64(0)
-	recorded := 0
 	for _, entry := range req.Traffic {
 		if entry.UserID == 0 || !validUsers[entry.UserID] {
 			continue
@@ -75,23 +79,37 @@ func ReportNodeTraffic(c *fiber.Ctx) error {
 		}
 		totalUp += entry.UploadBytes
 		totalDown += entry.DownloadBytes
+		userDeltas[entry.UserID] += entry.UploadBytes + entry.DownloadBytes
 
-		record := model.TrafficRecord{
+		records = append(records, model.TrafficRecord{
 			NodeID:        req.NodeID,
 			UserID:        entry.UserID,
 			UploadBytes:   entry.UploadBytes,
 			DownloadBytes: entry.DownloadBytes,
 			RecordedAt:    now,
+		})
+	}
+
+	recorded := 0
+	if len(records) > 0 {
+		// One multi-row INSERT instead of one INSERT per entry.
+		if err := db.DB.WithContext(ctx).Create(&records).Error; err == nil {
+			recorded = len(records)
+		} else {
+			// The whole batch failed to persist; do not credit any user
+			// traffic so counters and records cannot diverge.
+			userDeltas = nil
 		}
-		if err := db.DB.WithContext(ctx).Create(&record).Error; err != nil {
-			// A single failed record should not drop the whole batch.
+	}
+
+	// Accumulate each user's total usage with a single UPDATE per user (only
+	// eligible users with a real delta appear in the map).
+	for userID, delta := range userDeltas {
+		if delta == 0 {
 			continue
 		}
-		recorded++
-
-		// Accumulate the user's total usage.
-		db.DB.WithContext(ctx).Model(&model.User{}).Where("id = ?", entry.UserID).
-			Update("traffic_used_bytes", gorm.Expr("traffic_used_bytes + ?", entry.UploadBytes+entry.DownloadBytes))
+		db.DB.WithContext(ctx).Model(&model.User{}).Where("id = ?", userID).
+			Update("traffic_used_bytes", gorm.Expr("traffic_used_bytes + ?", delta))
 	}
 
 	// Update node cumulative counters atomically.

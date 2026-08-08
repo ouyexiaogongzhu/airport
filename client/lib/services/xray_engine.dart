@@ -267,13 +267,19 @@ class XrayConfigBuilder {
 
   /// Build a mobile Xray config using a `tun` inbound. The native bridge
   /// injects `env["xray.tun.fd"]` with the VpnService file descriptor.
-  static Map<String, dynamic> buildTunClientConfig(String nodeUri) {
-    final node = parseUri(nodeUri);
-    if (node == null) {
+  ///
+  /// An already-parsed [node] may be supplied to reuse a previous
+  /// [parseUri] result and avoid re-parsing the URI.
+  static Map<String, dynamic> buildTunClientConfig(
+    String nodeUri, {
+    XrayNodeConfig? node,
+  }) {
+    final parsed = node ?? parseUri(nodeUri);
+    if (parsed == null) {
       throw ArgumentError('Cannot parse node URI');
     }
 
-    final outbound = node.toOutbound();
+    final outbound = parsed.toOutbound();
     outbound['mux'] = {
       'enabled': true,
       'concurrency': 8,
@@ -312,7 +318,7 @@ class XrayConfigBuilder {
           {
             'type': 'field',
             'inboundTag': ['tun-in'],
-            'outboundTag': 'proxy-${node.name}',
+            'outboundTag': 'proxy-${parsed.name}',
           },
         ],
       },

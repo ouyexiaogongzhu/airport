@@ -25,6 +25,8 @@ import (
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	ResetRegisterLimits()
+	ResetNodeConfigCache()
+	ResetActiveNodesCache()
 	os.Setenv("CAPTCHA_DISABLED", "1")
 	dbPath := t.TempDir() + "/test.db"
 	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})

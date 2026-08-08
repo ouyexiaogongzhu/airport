@@ -3,7 +3,7 @@
     <header class="topbar">
       <h2>Products</h2>
       <div class="topbar-right">
-        <button class="btn-sm" @click="loadProducts">🔄 Refresh</button>
+        <button class="btn-sm" @click="loadProducts(true)">🔄 Refresh</button>
         <button class="btn-primary" @click="openAddModal">+ Add Product</button>
       </div>
     </header>
@@ -129,11 +129,13 @@ function closeModal() {
   resetForm()
 }
 
-async function loadProducts() {
+// `skipCache` is set by the explicit Refresh button so a manual refresh
+// always talks to the server instead of reusing the TTL cache.
+async function loadProducts(skipCache = false) {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get('/admin/products')
+    const res = await api.get('/admin/products', { cache: skipCache ? { skipCache: true } : undefined })
     products.value = Array.isArray(res.data.products) ? res.data.products : []
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to load products'

@@ -5,12 +5,14 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/db"
 	"github.com/ouyexiaogongzhu/airport/manager/internal/model"
+	"gorm.io/gorm"
 )
 
 // createActiveUser inserts a user with an active, unexpired subscription.
@@ -147,5 +149,86 @@ func TestReportNodeTraffic_TooManyEntries(t *testing.T) {
 	}
 	if resp.StatusCode != fiber.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestReportNodeTraffic_BatchWrite verifies the N+1 elimination: the whole
+// batch is persisted with a single INSERT statement and each user's traffic
+// counter is bumped with one aggregated UPDATE, while the response and row
+// counts stay identical to the previous per-row behaviour.
+func TestReportNodeTraffic_BatchWrite(t *testing.T) {
+	setupTestDB(t)
+	node := createTestNodeInDB(t)
+	u1 := createActiveUser(t, "batch_u1")
+	u2 := createActiveUser(t, "batch_u2")
+	u3 := createActiveUser(t, "batch_u3") // entries cancel to a zero delta
+
+	var insertStatements atomic.Int64
+	db.DB.Callback().Create().After("gorm:create").
+		Register("count_create_statements", func(tx *gorm.DB) {
+			insertStatements.Add(1)
+		})
+	t.Cleanup(func() {
+		db.DB.Callback().Create().Remove("count_create_statements")
+	})
+
+	app := fiber.New()
+	app.Post("/node/:token/traffic/report", func(c *fiber.Ctx) error {
+		c.Locals("node", node)
+		return ReportNodeTraffic(c)
+	})
+
+	body := `{"node_id":` + strconv.Itoa(int(node.ID)) + `,"traffic":[` +
+		`{"user_id":` + strconv.Itoa(int(u1.ID)) + `,"upload_bytes":100,"download_bytes":50},` +
+		`{"user_id":` + strconv.Itoa(int(u1.ID)) + `,"upload_bytes":100,"download_bytes":50},` +
+		`{"user_id":` + strconv.Itoa(int(u1.ID)) + `,"upload_bytes":-5,"download_bytes":0},` + // clamped to 0
+		`{"user_id":` + strconv.Itoa(int(u2.ID)) + `,"upload_bytes":30,"download_bytes":10},` +
+		`{"user_id":` + strconv.Itoa(int(u3.ID)) + `,"upload_bytes":0,"download_bytes":0},` +
+		`{"user_id":` + strconv.Itoa(int(u3.ID)) + `,"upload_bytes":0,"download_bytes":0}` + // net delta 0
+		`]}`
+	req := httptest.NewRequest("POST", "/node/whatever/traffic/report", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		bodyBytes := make([]byte, 512)
+		n, _ := resp.Body.Read(bodyBytes)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(bodyBytes[:n]))
+	}
+
+	// All six eligible entries land in one multi-row INSERT.
+	if got := insertStatements.Load(); got != 1 {
+		t.Fatalf("expected 1 INSERT statement for the whole batch, got %d", got)
+	}
+	var recordCount int64
+	if err := db.DB.Model(&model.TrafficRecord{}).Count(&recordCount).Error; err != nil {
+		t.Fatalf("failed to count traffic records: %v", err)
+	}
+	if recordCount != 6 {
+		t.Fatalf("expected 6 traffic records, got %d", recordCount)
+	}
+
+	// u1's two positive entries aggregate: (100+50)*2 = 300. The negative
+	// entry is clamped to zero and the zero-delta user is not written.
+	expectTrafficUsed := map[string]int64{u1.Username: 300, u2.Username: 40, u3.Username: 0}
+	for name, want := range expectTrafficUsed {
+		var u model.User
+		if err := db.DB.Where("username = ?", name).First(&u).Error; err != nil {
+			t.Fatalf("failed to load %s: %v", name, err)
+		}
+		if u.TrafficUsedBytes != want {
+			t.Fatalf("expected %s traffic_used_bytes %d, got %d", name, want, u.TrafficUsedBytes)
+		}
+	}
+
+	// Node counters reflect every non-negative delta.
+	var updatedNode model.Node
+	if err := db.DB.First(&updatedNode, node.ID).Error; err != nil {
+		t.Fatalf("failed to reload node: %v", err)
+	}
+	if updatedNode.TrafficUp != 230 || updatedNode.TrafficDown != 110 {
+		t.Fatalf("expected node traffic up=230 down=110, got up=%d down=%d", updatedNode.TrafficUp, updatedNode.TrafficDown)
 	}
 }

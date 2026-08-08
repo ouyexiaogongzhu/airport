@@ -2,17 +2,32 @@ package ratelimit
 
 import (
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"golang.org/x/time/rate"
 )
 
+// idleEvictAfter is how long a limiter must be unused before Cleanup may drop
+// it when the map is already at or below the cap. Idle entries are recreated
+// lazily on the next access.
+const idleEvictAfter = 10 * time.Minute
+
+// userEntry holds a user's rate limiter plus the time of its last access.
+// lastAccess stores unix nanoseconds so it can be updated atomically on the
+// read path without taking the map's write lock for every Allow call.
+type userEntry struct {
+	limiter    *rate.Limiter
+	lastAccess atomic.Int64
+}
+
 // UserRateLimiter provides per-user token-bucket rate limiting.
 // Each user gets their own rate.Limiter created on first access.
 type UserRateLimiter struct {
-	mu       sync.RWMutex
-	users    map[string]*rate.Limiter
-	rate     rate.Limit
-	burst    int
+	mu    sync.RWMutex
+	users map[string]*userEntry
+	rate  rate.Limit
+	burst int
 }
 
 // NewUserRateLimiter creates a new per-user rate limiter.
@@ -20,7 +35,7 @@ type UserRateLimiter struct {
 // b: maximum burst size (bucket capacity).
 func NewUserRateLimiter(r float64, b int) *UserRateLimiter {
 	return &UserRateLimiter{
-		users: make(map[string]*rate.Limiter),
+		users: make(map[string]*userEntry),
 		rate:  rate.Limit(r),
 		burst: b,
 	}
@@ -52,8 +67,8 @@ func (ul *UserRateLimiter) SetRate(r float64) {
 	defer ul.mu.Unlock()
 	ul.rate = rate.Limit(r)
 	// Update existing limiters
-	for _, limiter := range ul.users {
-		limiter.SetLimit(ul.rate)
+	for _, entry := range ul.users {
+		entry.limiter.SetLimit(ul.rate)
 	}
 }
 
@@ -62,50 +77,79 @@ func (ul *UserRateLimiter) SetBurst(b int) {
 	ul.mu.Lock()
 	defer ul.mu.Unlock()
 	ul.burst = b
-	for _, limiter := range ul.users {
-		limiter.SetBurst(b)
+	for _, entry := range ul.users {
+		entry.limiter.SetBurst(b)
 	}
 }
 
 // Cleanup removes limiters that have been idle for long periods.
-// maxUsers caps the map size to prevent unbounded memory growth.
+// maxUsers caps the map size to prevent unbounded memory growth. When the map
+// exceeds maxUsers, the least-recently-used entries are evicted first; below
+// the cap, entries idle beyond idleEvictAfter are dropped.
 func (ul *UserRateLimiter) Cleanup(maxUsers int) {
 	ul.mu.Lock()
 	defer ul.mu.Unlock()
-	if len(ul.users) <= maxUsers {
+
+	if len(ul.users) > maxUsers {
+		ul.evictOldest(len(ul.users) - maxUsers)
 		return
 	}
-	// Simple eviction: remove half the entries
-	// A production system would use an LRU or similar strategy.
-	count := 0
-	toRemove := len(ul.users) - maxUsers
-	for userID := range ul.users {
-		if count >= toRemove {
-			break
+
+	// Under the cap: drop entries idle beyond the threshold. They are
+	// recreated lazily on the next access.
+	idleCutoff := time.Now().Add(-idleEvictAfter).UnixNano()
+	for userID, entry := range ul.users {
+		if entry.lastAccess.Load() < idleCutoff {
+			delete(ul.users, userID)
 		}
-		delete(ul.users, userID)
-		count++
 	}
 }
 
-// getLimiter returns (or creates) the rate.Limiter for the given userID.
+// evictOldest removes the n least-recently-used entries. Each pass locates
+// the oldest entry with a single linear scan; n is small in practice because
+// Cleanup is invoked periodically, so no full sort is needed.
+func (ul *UserRateLimiter) evictOldest(n int) {
+	for i := 0; i < n && len(ul.users) > 0; i++ {
+		var oldestID string
+		var oldestTS int64
+		first := true
+		for userID, entry := range ul.users {
+			ts := entry.lastAccess.Load()
+			if first || ts < oldestTS {
+				oldestTS = ts
+				oldestID = userID
+				first = false
+			}
+		}
+		delete(ul.users, oldestID)
+	}
+}
+
+// getLimiter returns (or creates) the rate.Limiter for the given userID,
+// stamping the entry as recently used.
 func (ul *UserRateLimiter) getLimiter(userID string) *rate.Limiter {
+	now := time.Now().UnixNano()
+
 	ul.mu.RLock()
-	limiter, exists := ul.users[userID]
+	entry, exists := ul.users[userID]
 	ul.mu.RUnlock()
 	if exists {
-		return limiter
+		entry.lastAccess.Store(now)
+		return entry.limiter
 	}
 
 	ul.mu.Lock()
 	defer ul.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if limiter, exists = ul.users[userID]; exists {
-		return limiter
+	if entry, exists = ul.users[userID]; exists {
+		entry.lastAccess.Store(now)
+		return entry.limiter
 	}
 
-	limiter = rate.NewLimiter(ul.rate, ul.burst)
-	ul.users[userID] = limiter
+	limiter := rate.NewLimiter(ul.rate, ul.burst)
+	entry = &userEntry{limiter: limiter}
+	entry.lastAccess.Store(now)
+	ul.users[userID] = entry
 	return limiter
 }

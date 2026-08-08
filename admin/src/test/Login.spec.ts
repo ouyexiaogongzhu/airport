@@ -14,6 +14,7 @@ vi.mock('../api/index', () => ({
       response: { use: vi.fn() },
     },
   },
+  setOnUnauthorized: vi.fn(),
 }))
 
 // Mock vue-router

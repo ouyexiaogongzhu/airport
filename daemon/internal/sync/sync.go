@@ -35,6 +35,10 @@ type Syncer struct {
 	lastName     string
 	// lastAppliedConfigHash is the hash of the last config applied to xray.
 	lastAppliedHash string
+	// lastAppliedVersion is the _meta.version of the last config applied to
+	// xray; combined with lastAppliedHash it lets applyConfig skip marshalling
+	// and writing when nothing has changed.
+	lastAppliedVersion int64
 	// running tracks whether the managed xray process is considered up.
 	running bool
 	// xrayCmd is the currently managed xray process, if any.
@@ -66,11 +70,11 @@ type TrafficDelta struct {
 
 // SyncResult holds the result of a sync operation.
 type SyncResult struct {
-	Success     bool   `json:"success"`
-	NodeCount   int    `json:"node_count"`
-	Message     string `json:"message"`
-	SyncedAt    string `json:"synced_at"`
-	ConfigVersion int64 `json:"config_version"`
+	Success       bool   `json:"success"`
+	NodeCount     int    `json:"node_count"`
+	Message       string `json:"message"`
+	SyncedAt      string `json:"synced_at"`
+	ConfigVersion int64  `json:"config_version"`
 }
 
 // NewSyncer creates a new Syncer.
@@ -214,8 +218,22 @@ func nodeHMACSecret(token string) []byte {
 }
 
 // applyConfig writes the Xray config to disk and reloads the local Xray process.
-// If the config hash is unchanged, no restart is triggered.
+// If the config is unchanged, no write or restart is triggered.
 func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
+	// Fast path: _meta.version is a stable fingerprint derived by the manager
+	// from the active user id set, so an equal version implies identical
+	// content. When it matches the last applied version we can skip
+	// marshalling the whole config and writing it again.
+	version, hasVersion := configVersion(cfg)
+	if hasVersion {
+		s.mu.Lock()
+		unchanged := version == s.lastAppliedVersion && s.lastAppliedHash != ""
+		s.mu.Unlock()
+		if unchanged {
+			return nil
+		}
+	}
+
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -226,6 +244,11 @@ func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 
 	s.mu.Lock()
 	changed := hash != s.lastAppliedHash
+	if !changed && hasVersion {
+		// Content identical (e.g. a version bump without content change):
+		// remember the version so the fast path works on subsequent ticks.
+		s.lastAppliedVersion = version
+	}
 	s.mu.Unlock()
 	if !changed {
 		return nil
@@ -258,8 +281,33 @@ func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 
 	s.mu.Lock()
 	s.lastAppliedHash = hash
+	if hasVersion {
+		s.lastAppliedVersion = version
+	}
 	s.mu.Unlock()
 	return nil
+}
+
+// configVersion extracts the stable _meta.version from a config map. The
+// version is derived by the manager from the active user id set, so it is
+// unchanged whenever the config content is unchanged. It returns ok=false
+// when the config carries no version; callers then fall back to content
+// hashing.
+func configVersion(cfg map[string]interface{}) (int64, bool) {
+	meta, ok := cfg["_meta"].(map[string]interface{})
+	if !ok {
+		return 0, false
+	}
+	switch v := meta["version"].(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // restartXray stops any running xray process and starts a new one with the
@@ -311,8 +359,8 @@ func (s *Syncer) reportTraffic(nodeID uint) error {
 
 	// Compute deltas from the last snapshot.
 	type reportEntry struct {
-		UserID       uint  `json:"user_id"`
-		UploadBytes  int64 `json:"upload_bytes"`
+		UserID        uint  `json:"user_id"`
+		UploadBytes   int64 `json:"upload_bytes"`
 		DownloadBytes int64 `json:"download_bytes"`
 	}
 	var entries []reportEntry
@@ -395,11 +443,11 @@ func (s *Syncer) readTrafficStats() (map[uint]TrafficDelta, error) {
 
 	out := make(map[uint]TrafficDelta, len(raw))
 	for k, v := range raw {
-		var id uint
-		if _, err := fmt.Sscanf(k, "%d", &id); err != nil {
+		id, err := strconv.ParseUint(k, 10, 64)
+		if err != nil {
 			continue
 		}
-		out[id] = TrafficDelta{Upload: v.Upload, Download: v.Download}
+		out[uint(id)] = TrafficDelta{Upload: v.Upload, Download: v.Download}
 	}
 	return out, nil
 }

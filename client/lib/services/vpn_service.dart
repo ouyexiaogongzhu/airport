@@ -185,9 +185,10 @@ class VpnService extends ChangeNotifier {
 
     _activeSubscription = subscription;
     _activeNodes = nodes;
+    _activeNodesByName =
+        _indexNodesByName(_activeSubscription?.nodes ?? _activeNodes);
 
-    final activeNodes =
-        _activeSubscription?.nodes ?? _activeNodes ?? const <VpnNode>[];
+    final activeNodes = _activeNodeList;
 
     // Pre-connection checks
     if (subscription == null && (nodes == null || nodes.isEmpty)) {
@@ -235,6 +236,23 @@ class VpnService extends ChangeNotifier {
   List<VpnNode> get _activeNodeList =>
       _activeSubscription?.nodes ?? _activeNodes ?? const <VpnNode>[];
 
+  /// name → node lookup for the currently active node list. Rebuilt once per
+  /// [connect] instead of re-scanning the list for the selected node on every
+  /// connect path.
+  Map<String, VpnNode>? _activeNodesByName;
+
+  /// Index a node list by name. Duplicate names keep the first occurrence to
+  /// match the previous `where((n) => n.name == selected).first` linear-scan
+  /// semantics.
+  static Map<String, VpnNode>? _indexNodesByName(List<VpnNode>? nodes) {
+    if (nodes == null || nodes.isEmpty) return null;
+    final index = <String, VpnNode>{};
+    for (final node in nodes) {
+      index.putIfAbsent(node.name, () => node);
+    }
+    return index;
+  }
+
   /// Desktop: run libXray via FFI with a local SOCKS/HTTP inbound.
   Future<bool> _connectDesktop() async {
     if (_selectedNode == null) {
@@ -245,10 +263,7 @@ class VpnService extends ChangeNotifier {
     }
 
     // Find the selected node URI and build a local-port config.
-    final nodeUri = _activeNodeList
-        .where((n) => n.name == _selectedNode)
-        .map((n) => n.uri)
-        .firstOrNull;
+    final nodeUri = _activeNodesByName?[_selectedNode]?.uri;
 
     if (nodeUri == null) {
       _state = VpnState.error;
@@ -288,10 +303,7 @@ class VpnService extends ChangeNotifier {
     }
 
     // Find the selected node's URI from the active node list.
-    final nodeUri = _activeNodeList
-        .where((n) => n.name == _selectedNode)
-        .map((n) => n.uri)
-        .firstOrNull;
+    final nodeUri = _activeNodesByName?[_selectedNode]?.uri;
 
     if (nodeUri == null) {
       _state = VpnState.error;
@@ -300,10 +312,14 @@ class VpnService extends ChangeNotifier {
       return false;
     }
 
-    // Build a standard Xray config from the node URI.
+    // Parse the node URI once and reuse it for both the Xray config build and
+    // the native bridge host/port (previously parsed up to three times).
+    XrayNodeConfig? parsed;
     String? configJson;
     try {
-      configJson = jsonEncode(XrayConfigBuilder.buildTunClientConfig(nodeUri));
+      parsed = XrayConfigBuilder.parseUri(nodeUri);
+      configJson =
+          jsonEncode(XrayConfigBuilder.buildTunClientConfig(nodeUri, node: parsed));
     } catch (e) {
       debugPrint('[VpnService] failed to build xray config: $e');
     }
@@ -311,8 +327,8 @@ class VpnService extends ChangeNotifier {
     // Try to start the native VPN service via MethodChannel
     try {
       final result = await _channel.invokeMethod('startVpn', {
-        'host': _proxyHostFromUri(nodeUri) ?? 'proxy.example.com',
-        'port': _proxyPortFromUri(nodeUri) ?? 443,
+        'host': parsed?.host ?? 'proxy.example.com',
+        'port': parsed?.port ?? 443,
         'name': 'RFPlay - $_selectedNode',
         'config': configJson,
       });
@@ -356,16 +372,6 @@ class VpnService extends ChangeNotifier {
 
   /// store 模式下手动导入的节点（无 SubscriptionInfo 时使用）。
   List<VpnNode>? _activeNodes;
-
-  String? _proxyHostFromUri(String uri) {
-    final node = XrayConfigBuilder.parseUri(uri);
-    return node?.host;
-  }
-
-  int? _proxyPortFromUri(String uri) {
-    final node = XrayConfigBuilder.parseUri(uri);
-    return node?.port;
-  }
 
   /// Connect by opening external VPN app (v2rayNG, Clash, etc.)
   Future<bool> _connectExternal() async {

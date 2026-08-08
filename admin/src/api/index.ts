@@ -1,4 +1,11 @@
 import axios from 'axios'
+import {
+  applyGetCache,
+  buildCachedResponse,
+  clearApiCache,
+  isCacheHit,
+  storeCachedResponse,
+} from './cache'
 
 // Auth is cookie-based: session lives in httpOnly `admin_session`/`admin_refresh`
 // cookies set by the backend, and CSRF protection uses double-submit via the
@@ -33,13 +40,27 @@ api.interceptors.request.use(cfg => {
     if (csrfToken) {
       cfg.headers['X-CSRF-Token'] = csrfToken
     }
+    // Any state change invalidates previously cached GET data.
+    clearApiCache()
   }
   return cfg
 })
 
+// Serve fresh GET responses from the in-memory TTL cache before hitting the
+// network. Cached responses resolve through the error path below.
+api.interceptors.request.use(cfg => applyGetCache(cfg))
+
 api.interceptors.response.use(
-  res => res,
+  res => {
+    if (res.status >= 200 && res.status < 300) {
+      storeCachedResponse(res.config, res.data)
+    }
+    return res
+  },
   err => {
+    if (isCacheHit(err)) {
+      return Promise.resolve(buildCachedResponse(err))
+    }
     if (err.response?.status === 401) {
       const url = err.config?.url || ''
       const excluded =
@@ -47,6 +68,7 @@ api.interceptors.response.use(
         url.includes('/auth/csrf') ||
         url.includes('/auth/validate')
       if (!excluded) {
+        clearApiCache()
         onUnauthorized?.()
         window.location.href = '/'
       }

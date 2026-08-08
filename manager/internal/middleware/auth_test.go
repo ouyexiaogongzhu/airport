@@ -22,6 +22,7 @@ func init() {
 // setupTestDB points db.DB at an in-memory test database.
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	ResetNodeTokenCache()
 	database, err := gorm.Open(sqlite.Open(t.TempDir()+"/test.db"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to connect test DB: %v", err)

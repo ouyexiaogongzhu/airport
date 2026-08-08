@@ -14,7 +14,7 @@
             <option value="refunded">Refunded</option>
           </select>
           <input v-model="search" placeholder="Search order…" class="search-input" />
-          <button class="btn-sm" @click="loadOrders">🔄 Refresh</button>
+          <button class="btn-sm" @click="loadOrders(true)">🔄 Refresh</button>
         </div>
       </header>
 
@@ -102,16 +102,17 @@ function formatAmount(amount: any): string {
   return isNaN(n) ? '0.00' : n.toFixed(2)
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  paid: 'Paid',
+  pending: 'Pending',
+  failed: 'Failed',
+  expired: 'Expired',
+  cancelled: 'Cancelled',
+  refunded: 'Refunded',
+}
+
 function statusLabel(status?: string): string {
-  switch (status) {
-    case 'paid': return 'Paid'
-    case 'pending': return 'Pending'
-    case 'failed': return 'Failed'
-    case 'expired': return 'Expired'
-    case 'cancelled': return 'Cancelled'
-    case 'refunded': return 'Refunded'
-    default: return status || 'Unknown'
-  }
+  return status ? (STATUS_LABELS[status] ?? status) : 'Unknown'
 }
 
 function canRefund(o: any): boolean {
@@ -139,7 +140,9 @@ function mockOrders() {
   ]
 }
 
-async function loadOrders() {
+// `skipCache` is set by the explicit Refresh button so a manual refresh
+// always talks to the server instead of reusing the TTL cache.
+async function loadOrders(skipCache = false) {
   loading.value = true
   error.value = ''
   try {
@@ -148,6 +151,7 @@ async function loadOrders() {
         status: filterStatus.value || undefined,
         search: search.value || undefined,
       },
+      cache: skipCache ? { skipCache: true } : undefined,
     })
     // Backend returns { data, total, page, per_page }
     const data = res.data
@@ -183,16 +187,18 @@ async function refundOrder(o: any) {
   }
 }
 
-const filteredOrders = computed(() =>
-  orders.value.filter((o: any) => {
+const filteredOrders = computed(() => {
+  const q = search.value.toLowerCase()
+  const status = filterStatus.value
+  return orders.value.filter((o: any) => {
     const matchSearch = !search.value ||
       String(o.id).includes(search.value) ||
-      (o.username || '').toLowerCase().includes(search.value.toLowerCase()) ||
-      (o.customer || '').toLowerCase().includes(search.value.toLowerCase())
-    const matchStatus = !filterStatus.value || o.status === filterStatus.value
+      (o.username || '').toLowerCase().includes(q) ||
+      (o.customer || '').toLowerCase().includes(q)
+    const matchStatus = !status || o.status === status
     return matchSearch && matchStatus
   })
-)
+})
 
 onMounted(loadOrders)
 </script>

@@ -3,7 +3,7 @@
       <header class="topbar">
         <h2>Settings</h2>
         <div class="topbar-right">
-          <button class="btn-sm" @click="loadAll">🔄 Refresh</button>
+          <button class="btn-sm" @click="loadAll(true)">🔄 Refresh</button>
         </div>
       </header>
 
@@ -264,18 +264,21 @@ const security = reactive<SecurityConfig>({
   loginAttempts: 5,
 })
 
-async function loadUsersCount(): Promise<number> {
+async function loadUsersCount(skipCache = false): Promise<number> {
   try {
-    const res = await api.get('/admin/users', { params: { limit: 1 } })
+    const res = await api.get('/admin/users', {
+      params: { limit: 1 },
+      cache: skipCache ? { skipCache: true } : undefined,
+    })
     return res.data?.total ?? res.data?.users?.length ?? 0
   } catch {
     return 0
   }
 }
 
-async function loadNodesCount(): Promise<number> {
+async function loadNodesCount(skipCache = false): Promise<number> {
   try {
-    const res = await api.get('/admin/nodes')
+    const res = await api.get('/admin/nodes', { cache: skipCache ? { skipCache: true } : undefined })
     const data = res.data
     const nodes: any[] = Array.isArray(data) ? data : (Array.isArray(data.data) ? data.data : [])
     return nodes.filter(n => n.status === 'active').length
@@ -284,9 +287,9 @@ async function loadNodesCount(): Promise<number> {
   }
 }
 
-async function loadTrafficStats() {
+async function loadTrafficStats(skipCache = false) {
   try {
-    const res = await api.get('/admin/traffic/stats')
+    const res = await api.get('/admin/traffic/stats', { cache: skipCache ? { skipCache: true } : undefined })
     const d = res.data
     if (d) {
       systemStats.todayTraffic = formatBytes(d.today_traffic ?? d.today ?? 0)
@@ -299,9 +302,9 @@ async function loadTrafficStats() {
   }
 }
 
-async function loadProductsCount(): Promise<number> {
+async function loadProductsCount(skipCache = false): Promise<number> {
   try {
-    const res = await api.get('/admin/products')
+    const res = await api.get('/admin/products', { cache: skipCache ? { skipCache: true } : undefined })
     const products: any[] = Array.isArray(res.data?.products) ? res.data.products : []
     return products.length
   } catch {
@@ -321,17 +324,19 @@ function formatBytes(bytes: number): string {
   return val.toFixed(i > 0 ? 2 : 0) + ' ' + units[i]
 }
 
-async function loadAll() {
+// `skipCache` is set by the explicit Refresh button so a manual refresh
+// always talks to the server instead of reusing the TTL cache.
+async function loadAll(skipCache = false) {
   loading.value = true
   error.value = ''
 
   // Try hitting a health/status endpoint
   try {
     const [usersCount, nodesCount, productsCount] = await Promise.all([
-      loadUsersCount(),
-      loadNodesCount(),
-      loadProductsCount(),
-      loadTrafficStats(),
+      loadUsersCount(skipCache),
+      loadNodesCount(skipCache),
+      loadProductsCount(skipCache),
+      loadTrafficStats(skipCache),
     ])
 
     systemStats.totalUsers = usersCount

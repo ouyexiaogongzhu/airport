@@ -4,7 +4,7 @@
       <header class="topbar">
         <h2>Plans</h2>
         <div class="topbar-right">
-          <button class="btn-sm" @click="loadPlans">🔄 Refresh</button>
+          <button class="btn-sm" @click="loadPlans(true)">🔄 Refresh</button>
           <button class="btn-primary" @click="openAddModal">+ Add Plan</button>
         </div>
       </header>
@@ -166,11 +166,13 @@ function formatDate(dateStr: string | undefined): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-async function loadPlans() {
+// `skipCache` is set by the explicit Refresh button so a manual refresh
+// always talks to the server instead of reusing the TTL cache.
+async function loadPlans(skipCache = false) {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get('/admin/products')
+    const res = await api.get('/admin/products', { cache: skipCache ? { skipCache: true } : undefined })
     plans.value = Array.isArray(res.data.products) ? res.data.products : []
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to load plans'

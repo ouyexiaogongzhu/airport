@@ -4,7 +4,7 @@
       <header class="topbar">
         <h2>Nodes</h2>
         <div class="topbar-right">
-          <button class="btn-sm" @click="loadNodes">🔄 Refresh</button>
+          <button class="btn-sm" @click="loadNodes(true)">🔄 Refresh</button>
           <button class="btn-primary" @click="openAddModal">+ Add Node</button>
         </div>
       </header>
@@ -183,11 +183,13 @@ function formatBytes(bytes: number | undefined): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
 }
 
-async function loadNodes() {
+// `skipCache` is set by the explicit Refresh button so a manual refresh
+// always talks to the server instead of reusing the TTL cache.
+async function loadNodes(skipCache = false) {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get('/admin/nodes')
+    const res = await api.get('/admin/nodes', { cache: skipCache ? { skipCache: true } : undefined })
     // Backend returns { data, total, page, per_page }
     const data = res.data
     nodes.value = Array.isArray(data) ? data :

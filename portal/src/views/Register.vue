@@ -26,7 +26,7 @@
           <div class="captcha-row">
             <span class="captcha-question">{{ captchaQuestion }}</span>
             <input v-model="captchaAnswer" type="text" placeholder="Answer" class="captcha-input" required />
-            <button type="button" class="btn-refresh" @click="fetchCaptcha" :disabled="captchaLoading">⟳</button>
+            <button type="button" class="btn-refresh" @click="fetchCaptcha(true)" :disabled="captchaLoading">⟳</button>
           </div>
         </div>
         <p v-if="error" class="error">{{ error }}</p>
@@ -65,10 +65,12 @@ const captchaToken = ref('')
 const captchaAnswer = ref('')
 const captchaLoading = ref(false)
 
-async function fetchCaptcha() {
+// `skipCache` is set by the refresh button so a new captcha is always
+// requested from the server.
+async function fetchCaptcha(skipCache = false) {
   captchaLoading.value = true
   try {
-    const res = await api.get('/captcha')
+    const res = await api.get('/captcha', { cache: skipCache ? { skipCache: true } : undefined })
     captchaQuestion.value = res.data.question
     captchaToken.value = res.data.token
     captchaAnswer.value = ''

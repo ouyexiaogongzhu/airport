@@ -5,7 +5,7 @@
         <h2>Users</h2>
         <div class="topbar-right">
           <input v-model="search" placeholder="Search users…" class="search-input" />
-          <button class="btn-sm" @click="loadUsers">🔄 Refresh</button>
+          <button class="btn-sm" @click="loadUsers(true)">🔄 Refresh</button>
         </div>
       </header>
 
@@ -105,11 +105,13 @@ async function copyToken(token?: string) {
   }
 }
 
-async function loadUsers() {
+// `skipCache` is set by the explicit Refresh button so a manual refresh
+// always talks to the server instead of reusing the TTL cache.
+async function loadUsers(skipCache = false) {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get('/admin/users')
+    const res = await api.get('/admin/users', { cache: skipCache ? { skipCache: true } : undefined })
     const data = res.data
     users.value = Array.isArray(data) ? data :
                   Array.isArray(data.data) ? data.data : []
@@ -134,11 +136,12 @@ async function toggleActive(u: any) {
   }
 }
 
-const filteredUsers = computed(() =>
-  users.value.filter((u: any) =>
-    u.username?.toLowerCase().includes(search.value.toLowerCase())
+const filteredUsers = computed(() => {
+  const q = search.value.toLowerCase()
+  return users.value.filter((u: any) =>
+    u.username?.toLowerCase().includes(q)
   )
-)
+})
 
 onMounted(loadUsers)
 </script>

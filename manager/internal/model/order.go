@@ -7,10 +7,10 @@ type Order struct {
 	UserID    uint      `gorm:"index;not null" json:"user_id"`
 	ProductID uint      `gorm:"index;not null" json:"product_id"`
 	Amount    float64   `gorm:"not null" json:"amount"`
-	Status    string    `gorm:"size:16;default:pending;not null" json:"status"`
+	Status    string    `gorm:"size:16;default:pending;not null;index:idx_orders_status_created,priority:1" json:"status"`
 	Provider  string    `gorm:"size:32;default:mock" json:"provider"`
 	PaymentURL string   `gorm:"size:512" json:"payment_url"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `gorm:"index:idx_orders_status_created,priority:2" json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 

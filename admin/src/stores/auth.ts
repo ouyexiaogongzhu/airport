@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api, { setOnUnauthorized } from '../api/index'
+import { clearApiCache } from '../api/cache'
 
 export const useAuthStore = defineStore('auth', () => {
   // Session state lives in memory only — the backend holds the actual session
@@ -13,6 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Clear in-memory state when the API layer observes a 401.
   setOnUnauthorized(() => {
+    clearApiCache()
     user.value = null
     role.value = null
   })
@@ -35,6 +37,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // Best-effort server-side session invalidation — clear local state regardless.
     } finally {
+      clearApiCache()
       user.value = null
       role.value = null
     }
@@ -42,12 +45,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function init() {
     try {
-      await api.get('/auth/csrf')
+      // Always hit the server: these bootstrap calls decide the auth state.
+      await api.get('/auth/csrf', { cache: { skipCache: true } })
     } catch {
       // CSRF bootstrap failure should not prevent the validate attempt below.
     }
     try {
-      const res = await api.get('/auth/validate')
+      const res = await api.get('/auth/validate', { cache: { skipCache: true } })
       user.value = res.data.user ?? null
       role.value = res.data.role ?? null
     } catch {
