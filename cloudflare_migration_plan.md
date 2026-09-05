@@ -554,3 +554,40 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 - [ ] TG bot：查流量/續費鏈接/到期提醒/節點狀態/廣播（§11.3）
 - [ ] 節點撥測 → 自動摘除 + TG 告警（#11）
 - [ ] 額度監控 >80% 告警（#13）
+
+---
+
+## 14. 上線狀態（2026-09-06 更新）
+
+### 14.1 關鍵發現：這是首次上線，不是切換
+
+`api.rfplay.uk` **無 DNS 記錄（NXDOMAIN）**——Go manager 從未上線生產。因此：
+- §12.3 的「Go↔Worker 對拍」**不適用**（無 Go 實例可比）
+- 無生產流量保護需求，`api.rfplay.uk` 可直接掛 Worker route（風險遠低於原評估）
+- 舊 Go `.env` 若存在正式 `JWT_SECRET`/BEPUSDT 值，切換日仍需搬運；若從未生成，則用新值即可
+
+### 14.2 已上線（workers.dev = staging+生產候選）
+
+| 項 | 狀態 |
+| :--- | :--- |
+| Worker `rfplay-api` | ✅ CI 綠，`https://rfplay-api.vincent4flamewings.workers.dev` |
+| 訂閱三格式 + Userinfo 頭 | ✅ 真機驗證（testuser seed 數據） |
+| 登錄/bcrypt/cookie 會話/CSRF | ✅ 真機驗證 |
+| mock 支付全閉環 | ✅ 建產品→下單→回調→expire +30 天順延→冪等 |
+| admin 17+4 條路由 | ✅ stats/products 真機驗證 |
+| D1 schema + seed | ✅ 遠端已應用（testuser/basic-monthly 產品） |
+| `MOCK_PAY_ENABLED=1` | ⚠️ 暫開（對齊 Go 生產常開）；正式收款前評估改 "0" |
+
+### 14.3 剩餘必須人工的清單（最短集）
+
+| # | 事項 | 阻塞什麼 |
+| :--- | :--- | :--- |
+| 1 | Turnstile Spin 鑰匙 → Pages env + `wrangler secret put TURNSTILE_SECRET` | 註冊/登錄防灌水生效 |
+| 2 | PayPal developer 建應用 → 3 個 secrets → 沙箱對拍 | PayPal 通道可用 |
+| 3 | BEPUSDT_*/JWT_SECRET 正式值（若舊 .env 有）→ `deploy/cloudflare/push-secrets.sh` | BEpusdt 通道 + 正式會話 |
+| 4 | api.rfplay.uk DNS 記錄（proxied A 或 CNAME）+ wrangler.jsonc routes 解註 → `wrangler deploy` | 正式域名上線 |
+| 5 | VPS：dashboard Tunnel token + 公共主機名（pay/node） | BEpusdt 可達 + 節點回源 |
+| 6 | Access 套 admin、Email Routing、backup.sh R2 憑證 | 運維三件套 |
+| 7 | 真實用戶數據：VPS `manager.db`（若存在）→ `dump-to-seed.sh` → `d1 import` | 老用戶遷移（無則跳過） |
+
+以上完成後：`wrangler.jsonc` routes 解註解 → deploy → `www.rfplay.uk` portal 環境變量（`VITE_SUBSCRIPTION_BASE_URL` 指 api 域名）→ 上線完成。

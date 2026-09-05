@@ -629,6 +629,85 @@ export function adminRoutes() {
     return c.json({ data: rs.results });
   });
 
+  // ── Products CRUD（product.go ListProducts/CreateProduct/UpdateProduct/DeleteProduct）──
+  // 主線補缺：首輪遺漏；刪除=歸檔（status→archived），契約對齊 Go
+
+  app.get('/admin/products', ...guard, async (c) => {
+    const { offset, limit } = parsePagination(c);
+    const total = await db_count(c.env.DB, 'SELECT COUNT(*) AS n FROM products');
+    const rs = await c.env.DB.prepare(
+      'SELECT id, name, type, price, stock, status, currency, created_at, updated_at FROM products ORDER BY id ASC LIMIT ? OFFSET ?',
+    )
+      .bind(limit, offset)
+      .all<Record<string, unknown>>();
+    return c.json({ products: rs.results, total, page: offset / limit + 1, per_page: limit });
+  });
+
+  app.post('/admin/products', ...guard, adminCsrf, async (c) => {
+    const req = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!req) return c.json({ error: 'invalid request body' }, 400);
+    const name = typeof req.name === 'string' ? req.name : '';
+    const price = typeof req.price === 'number' ? req.price : 0;
+    if (!name || price <= 0) return c.json({ error: 'name and price are required' }, 400);
+    const validTypes = ['subscription', 'monthly', 'quarterly', 'half-yearly', 'yearly', 'one-time', 'trial'];
+    const type = typeof req.type === 'string' ? req.type : '';
+    if (type && !validTypes.includes(type)) {
+      return c.json(
+        { error: 'type must be one of: subscription, monthly, quarterly, half-yearly, yearly, one-time, trial' },
+        400,
+      );
+    }
+    const validStatuses = ['active', 'inactive', 'archived'];
+    const status = typeof req.status === 'string' ? req.status : '';
+    if (status && !validStatuses.includes(status)) {
+      return c.json({ error: 'status must be one of: active, inactive, archived' }, 400);
+    }
+    const now = new Date().toISOString();
+    const stock = typeof req.stock === 'number' ? Math.trunc(req.stock) : 0;
+    const currency = typeof req.currency === 'string' ? req.currency : null;
+    const rs = await c.env.DB.prepare(
+      'INSERT INTO products (name, type, price, stock, status, currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+      .bind(name, type, price, stock, status || 'active', currency, now, now)
+      .run();
+    const product = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(rs.meta.last_row_id).first();
+    return c.json({ product }, 201);
+  });
+
+  app.put('/admin/products/:id', ...guard, adminCsrf, async (c) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id)) return c.json({ error: 'invalid product id' }, 400);
+    const product = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first<Record<string, unknown>>();
+    if (!product) return c.json({ error: 'product not found' }, 404);
+    const req = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!req) return c.json({ error: 'invalid request body' }, 400);
+    const updates: string[] = [];
+    const binds: unknown[] = [];
+    if (req.name !== undefined) { updates.push('name = ?'); binds.push(req.name); }
+    if (req.type !== undefined) { updates.push('type = ?'); binds.push(req.type); }
+    if (req.price !== undefined) { updates.push('price = ?'); binds.push(req.price); }
+    if (req.stock !== undefined) { updates.push('stock = ?'); binds.push(Math.trunc(Number(req.stock))); }
+    if (req.status !== undefined) { updates.push('status = ?'); binds.push(req.status); }
+    if (updates.length === 0) return c.json({ product });
+    updates.push('updated_at = ?');
+    binds.push(new Date().toISOString(), id);
+    await c.env.DB.prepare(`UPDATE products SET ${updates.join(', ')} WHERE id = ?`).bind(...binds).run();
+    const updated = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+    return c.json({ product: updated });
+  });
+
+  app.delete('/admin/products/:id', ...guard, adminCsrf, async (c) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id)) return c.json({ error: 'invalid product id' }, 400);
+    const product = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first<Record<string, unknown>>();
+    if (!product) return c.json({ error: 'product not found' }, 404);
+    // Go DeleteProduct：歸檔而非物理刪除
+    await c.env.DB.prepare("UPDATE products SET status = 'archived', updated_at = ? WHERE id = ?")
+      .bind(new Date().toISOString(), id)
+      .run();
+    return c.json({ message: 'product archived' });
+  });
+
   return app;
 }
 
