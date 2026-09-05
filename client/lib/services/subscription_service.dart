@@ -1,104 +1,53 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-import '../config.dart';
 import '../models/subscription.dart';
-import 'api_service.dart';
 
+/// 无账号的订阅导入服务。
+///
+/// 客户端只认「订阅 URL / 节点链接」：粘贴或扫码导入后解析节点列表，
+/// 并把原始链接持久化到系统安全存储，重启后自动重新导入。
 class SubscriptionService extends ChangeNotifier {
-  final ApiService _api = ApiService();
+  /// Key used to persist the imported subscription/node source string.
+  static const String _sourceKey = 'imported_source';
 
-  SubscriptionInfo? _subscription;
-  bool _isLoading = false;
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
-  // Config from /client/config
-  String? _portalUrl;
-  String? _renewalPath;
-  bool _configLoaded = false;
+  /// In-memory fallback when the secure storage backend is unavailable
+  /// (e.g. Linux without libsecret, or unit tests without platform channels).
+  String? _memorySource;
 
-  // Subscription status (parsed from 403 errors)
-  String? _statusError; // 'SUBSCRIPTION_PENDING', 'SUBSCRIPTION_EXPIRED', or null
-
-  // Imported subscription (from manual URL / QR code)
-  List<VpnNode> _importedNodes = [];
+  List<VpnNode> _nodes = [];
   bool _importing = false;
   String? _importError;
+  String? _savedSource;
 
-  SubscriptionInfo? get subscription => _subscription;
-  bool get isLoading => _isLoading;
-  String? get portalUrl => _portalUrl;
-  String? get renewalPath => _renewalPath;
-  bool get configLoaded => _configLoaded;
-  String? get statusError => _statusError;
-  List<VpnNode> get importedNodes => _importedNodes;
+  List<VpnNode> get nodes => _nodes;
   bool get importing => _importing;
   String? get importError => _importError;
+  bool get hasSavedSource => _savedSource != null && _savedSource!.isNotEmpty;
 
-  /// 有效节点列表：优先使用服务器下发的订阅节点；
-  /// store 模式（无账号体系）下使用手动导入的节点。
-  List<VpnNode> get effectiveNodes => _subscription?.nodes ?? _importedNodes;
+  /// 启动时读取已保存的链接（不联网）。
+  Future<void> init() async {
+    _savedSource = await _loadSource();
+    notifyListeners();
+  }
 
-  /// Load client config (public, no auth needed)
-  Future<void> loadConfig() async {
-    try {
-      final data = await _api.get('/client/config');
-      _portalUrl = data['portal_url'] as String?;
-      _renewalPath = data['renewal_path'] as String?;
-      _configLoaded = true;
-      notifyListeners();
-    } catch (_) {
-      // Default fallback
-      _portalUrl = 'https://www.rfplay.uk';
-      _renewalPath = '/plans';
-      _configLoaded = true;
-      notifyListeners();
+  /// 重新导入已保存的链接（联网刷新节点）。
+  Future<void> restore() async {
+    final source = _savedSource;
+    if (source == null || source.isEmpty) return;
+    if (source.startsWith('http://') || source.startsWith('https://')) {
+      await importFromUrl(source);
+    } else {
+      await importFromLink(source);
     }
   }
 
-  /// Load subscription from real API (requires JWT).
+  /// 从 URL 导入订阅。
   ///
-  /// store 模式没有账号体系，直接跳过，避免发起无意义的认证请求。
-  Future<void> loadSubscription() async {
-    if (AppConfig.storeMode) return;
-
-    _isLoading = true;
-    _statusError = null;
-    notifyListeners();
-
-    try {
-      final data = await _api.get('/client/subscription');
-      _subscription = SubscriptionInfo.fromJson(data);
-      _statusError = null;
-    } on ApiException catch (e) {
-      _subscription = null;
-      final msg = e.message;
-      if (msg == 'SUBSCRIPTION_PENDING') {
-        _statusError = 'SUBSCRIPTION_PENDING';
-      } else if (msg == 'SUBSCRIPTION_EXPIRED') {
-        _statusError = 'SUBSCRIPTION_EXPIRED';
-      } else {
-        _statusError = msg;
-      }
-    } catch (_) {
-      _subscription = null;
-      _statusError = '网络错误';
-    }
-
-    _isLoading = false;
-    notifyListeners();
-  }
-
-  /// Clear error
-  void clearError() {
-    _statusError = null;
-    notifyListeners();
-  }
-
-  /// Import subscription from a URL (manual paste or QR scan).
-  ///
-  /// Fetches the URL, decodes base64 response, and parses node URIs.
-  /// On success, [_importedNodes] is populated and [importing] = false.
-  /// On error, [importError] is set.
+  /// 抓取内容、base64 解码并解析节点 URI。成功时把 URL 持久化。
   Future<bool> importFromUrl(String url) async {
     _importing = true;
     _importError = null;
@@ -125,8 +74,9 @@ class SubscriptionService extends ChangeNotifier {
         return false;
       }
 
-      final body = response.body.trim();
-      return _parseSubscriptionData(body);
+      final ok = _parseSubscriptionData(response.body.trim());
+      if (ok) await _saveSource(url);
+      return ok;
     } catch (e) {
       _importError = '导入失败: ${e.toString()}';
       _importing = false;
@@ -135,13 +85,14 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
-  /// Import subscription from decoded text (QR scanned text that is the URL itself).
+  /// 从文本导入（节点链接，或已是解码后的订阅内容）。
   Future<bool> importFromLink(String link) async {
     if (link.startsWith('http://') || link.startsWith('https://')) {
       return importFromUrl(link);
     }
-    // Maybe it's already decoded subscription data
-    return _parseSubscriptionData(link);
+    final ok = _parseSubscriptionData(link);
+    if (ok) await _saveSource(link);
+    return ok;
   }
 
   /// Parse raw subscription data (base64-decoded or plain text with node URIs).
@@ -186,7 +137,7 @@ class SubscriptionService extends ChangeNotifier {
       return false;
     }
 
-    _importedNodes = uris
+    _nodes = uris
         .asMap()
         .entries
         .map((e) => VpnNode.fromUri(e.value, e.key))
@@ -197,22 +148,24 @@ class SubscriptionService extends ChangeNotifier {
     return true;
   }
 
-  /// Clear imported nodes
-  void clearImport() {
-    _importedNodes = [];
-    _importError = null;
-    _importing = false;
-    notifyListeners();
+  Future<String?> _loadSource() async {
+    if (kIsWeb) return _memorySource;
+    try {
+      return await _storage.read(key: _sourceKey) ?? _memorySource;
+    } catch (e) {
+      debugPrint('[SubscriptionService] Failed to load source: $e');
+      return _memorySource;
+    }
   }
 
-  /// Get full renewal URL.
-  ///
-  /// store 模式为通用代理客户端，禁止携带/跳转官网续费地址，一律返回 null。
-  String? get renewalUrl {
-    if (AppConfig.storeMode) return null;
-    if (_portalUrl != null && _renewalPath != null) {
-      return '$_portalUrl$_renewalPath';
+  Future<void> _saveSource(String source) async {
+    _memorySource = source;
+    _savedSource = source;
+    if (kIsWeb) return;
+    try {
+      await _storage.write(key: _sourceKey, value: source);
+    } catch (e) {
+      debugPrint('[SubscriptionService] Failed to save source: $e');
     }
-    return 'https://www.rfplay.uk/plans';
   }
 }

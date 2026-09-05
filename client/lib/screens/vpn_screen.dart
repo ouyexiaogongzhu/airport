@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import '../config.dart';
 import '../models/subscription.dart';
 import '../services/subscription_service.dart';
 import '../services/vpn_service.dart';
-import '../widgets/loading_overlay.dart';
 import '../widgets/node_card.dart';
 import '../widgets/vpn_button.dart';
 
@@ -17,32 +15,12 @@ class VpnScreen extends StatefulWidget {
 }
 
 class _VpnScreenState extends State<VpnScreen> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // store 模式无账号体系，节点来自手动导入，跳过订阅 API 加载。
-      if (AppConfig.storeMode) return;
-      final sub = context.read<SubscriptionService>();
-      if (sub.subscription == null && !sub.isLoading) {
-        sub.loadSubscription();
-      }
-    });
-  }
-
   Future<void> _refresh() async {
     final subService = context.read<SubscriptionService>();
     final vpn = context.read<VpnService>();
-    if (AppConfig.storeMode) {
-      final nodes = subService.effectiveNodes;
-      if (nodes.isNotEmpty) {
-        await vpn.pingAllNodesList(nodes);
-      }
-      return;
-    }
-    await subService.loadSubscription();
-    if (subService.subscription != null) {
-      await vpn.pingAllNodes(subService.subscription!);
+    final nodes = subService.nodes;
+    if (nodes.isNotEmpty) {
+      await vpn.pingAllNodesList(nodes);
     }
   }
 
@@ -62,145 +40,121 @@ class _VpnScreenState extends State<VpnScreen> {
       appBar: AppBar(
         title: const Text('VPN 控制'),
       ),
-      body: Stack(
-        children: [
-          Consumer<SubscriptionService>(
-            builder: (context, subService, _) {
-              final subscription = subService.subscription;
-              final nodes = AppConfig.storeMode
-                  ? subService.effectiveNodes
-                  : (subscription?.nodes ?? []);
+      body: Consumer<SubscriptionService>(
+        builder: (context, subService, _) {
+          final nodes = subService.nodes;
 
-              return RefreshIndicator(
-                onRefresh: _refresh,
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _buildConnectionCard(vpn, nodes),
+                const SizedBox(height: 16),
+                Row(
                   children: [
-                    _buildConnectionCard(vpn, subscription, nodes),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _SpeedCard(
-                            title: '下载',
-                            speed: vpn.downloadSpeed,
-                            icon: Icons.arrow_downward,
-                            color: Colors.green,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _SpeedCard(
-                            title: '上传',
-                            speed: vpn.uploadSpeed,
-                            icon: Icons.arrow_upward,
-                            color: Colors.blue,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '可用节点',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                        ),
-                        if (nodes.isNotEmpty)
-                          TextButton.icon(
-                            onPressed: () => _refresh(),
-                            icon: const Icon(Icons.refresh, size: 16),
-                            label: const Text('测速'),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (nodes.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            subService.isLoading
-                                ? ''
-                                : (AppConfig.storeMode
-                                    ? '暂无可用节点\n请先导入订阅'
-                                    : '暂无可用节点\n请先购买套餐'),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[500]),
-                          ),
-                        ),
-                      )
-                    else
-                      ...nodes.map(
-                        (node) => NodeCard(
-                          node: node,
-                          latency: vpn.latencies[node.name],
-                          isSelected: vpn.selectedNode == node.name,
-                          isConnected: vpn.connectedNode == node.name && vpn.isConnected,
-                          onTap: () => vpn.selectNode(node.name),
-                          onPing: () => _pingNode(vpn, node),
-                          onCopy: () => _copyToClipboard(node.uri),
-                        ),
+                    Expanded(
+                      child: _SpeedCard(
+                        title: '下载',
+                        speed: vpn.downloadSpeed,
+                        icon: Icons.arrow_downward,
+                        color: Colors.green,
                       ),
-                    const SizedBox(height: 16),
-                    if (vpn.isConnected && vpn.connectedNode != null)
-                      Center(
-                        child: Text(
-                          '已连接至: ${vpn.connectedNode}',
-                          style: TextStyle(color: Colors.grey[400], fontSize: 12),
-                        ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _SpeedCard(
+                        title: '上传',
+                        speed: vpn.uploadSpeed,
+                        icon: Icons.arrow_upward,
+                        color: Colors.blue,
                       ),
-                    const SizedBox(height: 8),
-                    if (vpn.errorMessage != null)
-                      Card(
-                        color: Colors.red.withAlpha(15),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          side: BorderSide(color: Colors.red.withAlpha(60)),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            children: [
-                              Icon(Icons.error_outline, color: Colors.red[300], size: 18),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  vpn.errorMessage!,
-                                  style: TextStyle(color: Colors.red[300], fontSize: 13),
-                                ),
-                              ),
-                            ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '可用节点',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
                           ),
-                        ),
+                    ),
+                    if (nodes.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () => _refresh(),
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label: const Text('测速'),
                       ),
                   ],
                 ),
-              );
-            },
-          ),
-          Consumer<SubscriptionService>(
-            builder: (context, subService, _) {
-              final nodes = subService.subscription?.nodes ?? [];
-              return LoadingOverlay(
-                isLoading: subService.isLoading && nodes.isEmpty,
-                message: '加载节点...',
-              );
-            },
-          ),
-        ],
+                const SizedBox(height: 8),
+                if (nodes.isEmpty)
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        '暂无可用节点\n请先导入订阅',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[500]),
+                      ),
+                    ),
+                  )
+                else
+                  ...nodes.map(
+                    (node) => NodeCard(
+                      node: node,
+                      latency: vpn.latencies[node.name],
+                      isSelected: vpn.selectedNode == node.name,
+                      isConnected: vpn.connectedNode == node.name && vpn.isConnected,
+                      onTap: () => vpn.selectNode(node.name),
+                      onPing: () => _pingNode(vpn, node),
+                      onCopy: () => _copyToClipboard(node.uri),
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                if (vpn.isConnected && vpn.connectedNode != null)
+                  Center(
+                    child: Text(
+                      '已连接至: ${vpn.connectedNode}',
+                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                if (vpn.errorMessage != null)
+                  Card(
+                    color: Colors.red.withAlpha(15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(color: Colors.red.withAlpha(60)),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline, color: Colors.red[300], size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              vpn.errorMessage!,
+                              style: TextStyle(color: Colors.red[300], fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildConnectionCard(
-    VpnService vpn,
-    SubscriptionInfo? subscription,
-    List<VpnNode> nodes,
-  ) {
+  Widget _buildConnectionCard(VpnService vpn, List<VpnNode> nodes) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -208,13 +162,7 @@ class _VpnScreenState extends State<VpnScreen> {
           children: [
             VpnButton(
               state: vpn.state,
-              onTap: () {
-                if (AppConfig.storeMode) {
-                  vpn.toggle(nodes: nodes);
-                } else {
-                  vpn.toggle(subscription: subscription);
-                }
-              },
+              onTap: () => vpn.toggle(nodes: nodes),
               errorMessage: vpn.errorMessage,
             ),
             if (vpn.isConnected) ...[

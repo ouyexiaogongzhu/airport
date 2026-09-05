@@ -1,42 +1,32 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'config.dart';
-import 'services/api_service.dart';
-import 'services/auth_service.dart';
 import 'services/subscription_service.dart';
 import 'services/vpn_service.dart';
-import 'screens/login_screen.dart';
-import 'screens/register_screen.dart';
 import 'screens/main_shell.dart';
-import 'screens/order_history_screen.dart';
-import 'screens/traffic_screen.dart';
-import 'screens/payment/webview_page.dart';
 import 'screens/subscription/input_page.dart';
 import 'screens/subscription/qr_scanner_page.dart';
-import 'screens/devices/device_list.dart';
-import 'screens/account/account_subscription.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Configure API base URL from --dart-define at build time.
-  const apiBaseUrl = String.fromEnvironment('API_BASE_URL');
-  if (apiBaseUrl.isNotEmpty) {
-    ApiService.configure(baseUrl: apiBaseUrl);
-  }
+  final subService = SubscriptionService();
+  await subService.init(); // 读取已保存的订阅/节点链接（不联网）
 
-  final authService = AuthService();
-  await authService.init();
+  // 已有保存的链接：直接进主界面，后台刷新节点。
+  final initialRoute = subService.hasSavedSource ? '/main' : '/subscription/input';
+  if (subService.hasSavedSource) {
+    unawaited(subService.restore());
+  }
 
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider.value(value: authService),
-        ChangeNotifierProvider(create: (_) => SubscriptionService()),
+        ChangeNotifierProvider.value(value: subService),
         ChangeNotifierProvider(create: (_) => VpnService()),
       ],
-      child: RFPlayApp(authService: authService),
+      child: RFPlayApp(initialRoute: initialRoute),
     ),
   );
 }
@@ -45,16 +35,16 @@ Future<void> main() async {
 // Extract strings to an i18n/l10n system (e.g. flutter_localizations +
 // intl) before adding multi-language support.
 class RFPlayApp extends StatelessWidget {
-  final AuthService authService;
+  final String initialRoute;
 
-  const RFPlayApp({super.key, required this.authService});
+  const RFPlayApp({super.key, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {
     final app = MaterialApp(
-      title: 'RFPlay Airport',
+      title: 'RFPlay Proxy',
       debugShowCheckedModeBanner: false,
-      initialRoute: _initialRoute,
+      initialRoute: initialRoute,
       routes: _buildRoutes(),
       theme: _buildTheme(),
     );
@@ -85,54 +75,12 @@ class RFPlayApp extends StatelessWidget {
     return app;
   }
 
-  /// 首屏路由。
-  ///
-  /// App Store 版（storeMode）直接进入订阅导入页，无需登录；
-  /// 普通版保持原有的「已登录进主界面 / 未登录进登录页」行为。
-  String get _initialRoute {
-    if (AppConfig.storeMode) return '/subscription/input';
-    return authService.isLoggedIn ? '/main' : '/login';
-  }
-
-  /// 路由表。
-  ///
-  /// App Store 版为通用代理客户端：账号、金流、官网相关路由一律不注册，
-  /// 改为导向订阅导入页，确保任何旧入口都无法进入这些页面。
+  /// 路由表：无账号通用代理客户端，仅订阅导入 + 主界面。
   Map<String, WidgetBuilder> _buildRoutes() {
-    if (AppConfig.storeMode) {
-      return {
-        '/main': (context) => const MainShell(),
-        '/subscription/input': (context) => const SubscriptionInputPage(),
-        '/subscription/qr': (context) => const QrScannerPage(),
-        '/login': (context) => const _StoreModeRedirect(),
-        '/register': (context) => const _StoreModeRedirect(),
-        '/orders': (context) => const _StoreModeRedirect(),
-        '/traffic': (context) => const _StoreModeRedirect(),
-        '/devices': (context) => const _StoreModeRedirect(),
-        '/account/subscription': (context) => const _StoreModeRedirect(),
-        '/payment': (context) => const _StoreModeRedirect(),
-      };
-    }
     return {
-      '/login': (context) => const LoginScreen(),
-      '/register': (context) => const RegisterScreen(),
       '/main': (context) => const MainShell(),
-      '/orders': (context) => const OrderHistoryScreen(),
-      '/traffic': (context) => const TrafficScreen(),
-      '/devices': (context) => const DeviceList(),
-      '/account/subscription': (context) => const AccountSubscription(),
       '/subscription/input': (context) => const SubscriptionInputPage(),
       '/subscription/qr': (context) => const QrScannerPage(),
-      '/payment': (context) {
-        final args = ModalRoute.of(context)?.settings.arguments;
-        if (args is String) {
-          return PaymentWebViewPage(url: args);
-        }
-        return const PaymentWebViewPage(
-          url: 'https://www.rfplay.uk/plans',
-          title: '支付中心',
-        );
-      },
     };
   }
 
@@ -216,22 +164,3 @@ class RFPlayApp extends StatelessWidget {
     );
   }
 }
-
-/// App Store 版（storeMode）中被隐藏的账号/金流/官网路由的占位页。
-///
-/// 任何旧入口 push 到这些路由时都会立即替换到订阅导入页，
-/// 保证通用代理客户端内永远无法进入登录、购买、订单等页面。
-class _StoreModeRedirect extends StatelessWidget {
-  const _StoreModeRedirect();
-
-  @override
-  Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Navigator.of(context).pushReplacementNamed('/subscription/input');
-    });
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
-    );
-  }
-}
-

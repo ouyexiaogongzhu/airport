@@ -38,7 +38,6 @@ class _QrScannerPageState extends State<QrScannerPage> {
 
     final text = _linkController.text.trim();
     final subService = context.read<SubscriptionService>();
-    subService.clearImport();
 
     bool success;
     if (text.startsWith('http://') || text.startsWith('https://')) {

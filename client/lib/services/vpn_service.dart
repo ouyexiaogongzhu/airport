@@ -3,8 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../config.dart';
 import '../models/subscription.dart';
 import 'xray_engine.dart';
 import 'xray_ffi.dart';
@@ -140,12 +138,7 @@ class VpnService extends ChangeNotifier {
     }
   }
 
-  /// Ping all nodes in a subscription
-  Future<void> pingAllNodes(SubscriptionInfo sub) async {
-    await pingAllNodesList(sub.nodes);
-  }
-
-  /// Ping an arbitrary node list (store 模式下对导入节点测速)。
+  /// Ping an arbitrary node list（对导入节点测速）。
   Future<void> pingAllNodesList(List<VpnNode> nodes) async {
     for (final node in nodes) {
       final parsed = _parseNodeAddress(node.uri);
@@ -180,31 +173,25 @@ class VpnService extends ChangeNotifier {
   }
 
   // --- Connect ---
-  Future<bool> connect({SubscriptionInfo? subscription, List<VpnNode>? nodes}) async {
+  Future<bool> connect({List<VpnNode>? nodes}) async {
     if (_state == VpnState.connected || _state == VpnState.connecting) return false;
 
-    _activeSubscription = subscription;
     _activeNodes = nodes;
-    _activeNodesByName =
-        _indexNodesByName(_activeSubscription?.nodes ?? _activeNodes);
+    _activeNodesByName = _indexNodesByName(_activeNodes);
 
     final activeNodes = _activeNodeList;
 
     // Pre-connection checks
-    if (subscription == null && (nodes == null || nodes.isEmpty)) {
+    if (nodes == null || nodes.isEmpty) {
       _state = VpnState.error;
-      _errorMessage = AppConfig.storeMode
-          ? '未找到可用节点，请先导入订阅'
-          : '未找到订阅信息，请先购买套餐';
+      _errorMessage = '未找到可用节点，请先导入订阅';
       notifyListeners();
       return false;
     }
 
     if (activeNodes.isEmpty) {
       _state = VpnState.error;
-      _errorMessage = AppConfig.storeMode
-          ? '暂无可用的节点，请先导入订阅'
-          : '套餐暂无可用节点，请联系管理员';
+      _errorMessage = '暂无可用的节点，请先导入订阅';
       notifyListeners();
       return false;
     }
@@ -232,9 +219,8 @@ class VpnService extends ChangeNotifier {
     }
   }
 
-  /// 当前可用的节点列表（服务器订阅节点或 store 模式导入节点）。
-  List<VpnNode> get _activeNodeList =>
-      _activeSubscription?.nodes ?? _activeNodes ?? const <VpnNode>[];
+  /// 当前可用的节点列表（手动导入的节点）。
+  List<VpnNode> get _activeNodeList => _activeNodes ?? const <VpnNode>[];
 
   /// name → node lookup for the currently active node list. Rebuilt once per
   /// [connect] instead of re-scanning the list for the selected node on every
@@ -368,9 +354,7 @@ class VpnService extends ChangeNotifier {
     }
   }
 
-  SubscriptionInfo? _activeSubscription;
-
-  /// store 模式下手动导入的节点（无 SubscriptionInfo 时使用）。
+  /// 手动导入的节点列表。
   List<VpnNode>? _activeNodes;
 
   /// Connect by opening external VPN app (v2rayNG, Clash, etc.)
@@ -382,62 +366,12 @@ class VpnService extends ChangeNotifier {
       return false;
     }
 
-    // Try to open subscription in external VPN apps
-    // Priority: v2rayNG > Clash > Sing-box > generic
-    bool launched = false;
-
-    // v2rayNG: v2rayng://install-subscribe?url=...
-    final subscriptionUrl = _buildSubscriptionUrl();
-    if (subscriptionUrl != null) {
-      final v2rayUri = Uri.parse(
-        'v2rayng://install-subscribe?url=${Uri.encodeComponent(subscriptionUrl)}',
-      );
-      if (await canLaunchUrl(v2rayUri)) {
-        await launchUrl(v2rayUri, mode: LaunchMode.externalApplication);
-        launched = true;
-      }
-    }
-
-    if (!launched) {
-      // Fallback: copy subscription URL to clipboard and let user paste
-      // The UI will show a dialog
-      _state = VpnState.disconnected;
-      _errorMessage = '复制订阅链接到剪贴板';
-      notifyListeners();
-      return false;
-    }
-
-    // After launching external app, we show "connected" in the app
-    // but the actual VPN connection is managed by the external app
-    _state = VpnState.connected;
-    _connectedNode = _selectedNode;
-    _startTrafficMonitor();
+    // 无内置引擎的平台：复制订阅链接到剪贴板，交由外部代理 App 处理。
+    _state = VpnState.disconnected;
+    _errorMessage = '复制订阅链接到剪贴板';
     notifyListeners();
-    return true;
+    return false;
   }
-
-  // TODO(L6): This method always returns null, causing external VPN launch to
-  // always fall back to clipboard copy. Implement by returning
-  // _configuredSubscriptionUrl or fetching from the API.
-  String? _buildSubscriptionUrl() {
-    return _configuredSubscriptionUrl;
-  }
-
-  /// Configure subscription URL from API
-  String? _configuredSubscriptionUrl;
-
-  void configure(String? subscriptionUrl) {
-    _configuredSubscriptionUrl = subscriptionUrl;
-    notifyListeners();
-  }
-
-  /// Set subscription URL (no notify, for use after loading subscription data)
-  void setSubscriptionUrl(String url) {
-    _configuredSubscriptionUrl = url;
-  }
-
-  /// Get configured subscription URL
-  String? get configuredSubscriptionUrl => _configuredSubscriptionUrl;
 
   // --- Disconnect ---
   Future<void> disconnect() async {
@@ -472,11 +406,11 @@ class VpnService extends ChangeNotifier {
   }
 
   // --- Toggle ---
-  Future<void> toggle({SubscriptionInfo? subscription, List<VpnNode>? nodes}) async {
+  Future<void> toggle({List<VpnNode>? nodes}) async {
     if (isConnected || isConnecting) {
       await disconnect();
     } else {
-      await connect(subscription: subscription, nodes: nodes);
+      await connect(nodes: nodes);
     }
   }
 

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import '../../config.dart';
 import '../../services/subscription_service.dart';
 import 'qr_scanner_page.dart';
 
@@ -62,53 +61,26 @@ class _SubscriptionInputPageState extends State<SubscriptionInputPage> {
     setState(() => _isLoading = true);
 
     try {
-      // Call subscription service to parse the URL
+      // 无账号模式：直接解析订阅链接 / 节点链接。
       final subService = context.read<SubscriptionService>();
-
-      if (AppConfig.storeMode) {
-        // store 模式：无账号体系，直接解析订阅链接 / 节点链接。
-        final success = await subService.importFromLink(url);
-        if (!mounted) return;
-        if (success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('订阅导入成功')),
-          );
-          if (Navigator.canPop(context)) {
-            // 从主界面进入的更新订阅场景：直接返回，节点列表实时刷新。
-            Navigator.of(context).pop(true);
-          } else {
-            // 首次启动进入的导入场景：进入主界面。
-            Navigator.of(context).pushReplacementNamed('/main');
-          }
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(subService.importError ?? '导入失败'),
-              backgroundColor: Colors.red.shade800,
-            ),
-          );
-        }
-        return;
-      }
-
-      // For subscription URL import, we load the subscription
-      // If the service supports importing from URL, use that;
-      // otherwise, load subscription after any config setup
-      await subService.loadConfig();
-      await subService.loadSubscription();
-
+      final success = await subService.importFromLink(url);
       if (!mounted) return;
-
-      if (subService.subscription != null) {
+      if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('订阅导入成功')),
         );
-        Navigator.of(context).pop(true);
-      } else if (subService.statusError != null) {
+        if (Navigator.canPop(context)) {
+          // 从主界面进入的更新订阅场景：直接返回，节点列表实时刷新。
+          Navigator.of(context).pop(true);
+        } else {
+          // 首次启动进入的导入场景：进入主界面。
+          Navigator.of(context).pushReplacementNamed('/main');
+        }
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('订阅状态: ${subService.statusError}'),
-            backgroundColor: Colors.orange.shade800,
+            content: Text(subService.importError ?? '导入失败'),
+            backgroundColor: Colors.red.shade800,
           ),
         );
       }

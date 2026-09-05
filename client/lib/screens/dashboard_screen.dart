@@ -1,12 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../config.dart';
-import '../models/subscription.dart' show SubscriptionInfo;
 import '../services/subscription_service.dart';
-import '../widgets/loading_overlay.dart';
-import '../widgets/status_badge.dart';
-import '../widgets/traffic_bar.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -17,437 +11,93 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // store 模式无账号体系，跳过订阅 API 加载。
-      if (AppConfig.storeMode) return;
-      final sub = context.read<SubscriptionService>();
-      if (sub.subscription == null && sub.statusError == null && !sub.isLoading) {
-        sub.loadSubscription();
-      }
-    });
-  }
-
-  Future<void> _loadAll() async {
-    final subscriptionService = context.read<SubscriptionService>();
-    if (AppConfig.storeMode) return;
-    await Future.wait([
-      subscriptionService.loadConfig(),
-      subscriptionService.loadSubscription(),
-    ]);
-  }
-
-  Future<void> _openRenewalPortal(SubscriptionService subService) async {
-    final url = subService.renewalUrl;
-    if (url == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('续费链接暂不可用')),
-      );
-      return;
-    }
-
-    // Open URL via url_launcher (cross-platform)
-    try {
-      final uri = Uri.parse(url);
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('无法打开链接: $url')),
-        );
-      }
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('请手动访问: $url')),
-      );
-    }
-  }
-
-  String _formatExpireTime(int unixTs) {
-    if (unixTs <= 0) return '—';
-    final dt = DateTime.fromMillisecondsSinceEpoch(unixTs * 1000);
-    final month = dt.month.toString().padLeft(2, '0');
-    final day = dt.day.toString().padLeft(2, '0');
-    return '${dt.year}-$month-$day';
-  }
-
-  String _formatTrafficGb(double gb) {
-    if (gb >= 100) return gb.toStringAsFixed(0);
-    if (gb >= 10) return gb.toStringAsFixed(1);
-    return gb.toStringAsFixed(2);
-  }
-
-  StatusBadge _statusBadge(String? status) {
-    switch (status) {
-      case null:
-      case 'SUBSCRIPTION_ACTIVE':
-        return StatusBadge.active(label: '已激活');
-      case 'SUBSCRIPTION_PENDING':
-        return StatusBadge.warning(label: '待订阅');
-      case 'SUBSCRIPTION_EXPIRED':
-        return StatusBadge.expired(label: '已过期');
-      default:
-        return StatusBadge(label: status, color: Colors.grey, showDot: true);
-    }
-  }
-
-  Color _statusColor(String? status) {
-    switch (status) {
-      case null:
-      case 'SUBSCRIPTION_ACTIVE':
-        return Colors.green;
-      case 'SUBSCRIPTION_PENDING':
-        return Colors.orange;
-      case 'SUBSCRIPTION_EXPIRED':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  // TODO(M4): _statusBadge, _formatTrafficGb, _trafficEstimateBytes, and traffic
-  // bar logic are duplicated across DashboardScreen, HomeDashboard, and
-  // AccountSubscription. Extract to a shared utility or widget.
-  // TODO(M7): Traffic estimate is hardcoded at 100 GB. Fetch the actual plan
-  // limit from the API or subscription config instead.
-  static const int _trafficEstimateBytes = 100 * 1024 * 1024 * 1024;
-
-  @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        RefreshIndicator(
-          onRefresh: _loadAll,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Text(
-                'VPN 仪表盘',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '订阅状态与流量概览',
-                style: TextStyle(color: Colors.grey[400]),
-              ),
-              const SizedBox(height: 24),
-              Consumer<SubscriptionService>(
-                builder: (context, subService, _) {
-                  if (AppConfig.storeMode) {
-                    return _buildStoreModeSummary(context, subService);
-                  }
+    return Consumer<SubscriptionService>(
+      builder: (context, subService, _) {
+        final nodes = subService.nodes;
+        final hasNodes = nodes.isNotEmpty;
 
-                  final sub = subService.subscription;
-                  final statusError = subService.statusError;
-                  final statusColor = _statusColor(statusError);
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Card(
-                        color: statusColor.withAlpha(20),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: statusColor.withAlpha(80)),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '订阅状态',
-                                      style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    _statusBadge(statusError),
-                                  ],
-                                ),
-                              ),
-                              if (statusError == 'SUBSCRIPTION_PENDING' ||
-                                  statusError == 'SUBSCRIPTION_EXPIRED')
-                                FilledButton.icon(
-                                  onPressed: () => _openRenewalPortal(subService),
-                                  icon: const Icon(Icons.open_in_new, size: 18),
-                                  label: const Text('续费'),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (sub != null) ...[
-                        Card(
-                          color: Colors.cyanAccent.withAlpha(20),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: Colors.cyanAccent.withAlpha(60)),
-                          ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(12),
-                            onTap: () => Navigator.pushNamed(context, '/account/subscription'),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.workspace_premium, color: Colors.cyanAccent, size: 24),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text('套餐等级', style: TextStyle(color: Colors.grey[400], fontSize: 13)),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          sub.tier.isNotEmpty ? sub.tier.toUpperCase() : '—',
-                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Icon(Icons.chevron_right, color: Colors.grey[500]),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        _InfoCard(
-                          title: '到期时间',
-                          value: _formatExpireTime(sub.expireTime),
-                          icon: Icons.event,
-                          color: Colors.blue,
-                        ),
-                        const SizedBox(height: 12),
-                        _buildTrafficSection(sub),
-                      ] else if (statusError == 'SUBSCRIPTION_PENDING' ||
-                          statusError == 'SUBSCRIPTION_EXPIRED') ...[
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Text(
-                              statusError == 'SUBSCRIPTION_PENDING'
-                                  ? '您尚未购买订阅，请点击续费前往官网选择套餐。'
-                                  : '您的订阅已过期，请续费后继续使用 VPN 服务。',
-                              style: TextStyle(color: Colors.grey[300]),
-                            ),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 24),
-                      Center(
-                        child: Text(
-                          '下拉刷新数据',
-                          style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-        Consumer<SubscriptionService>(
-          builder: (context, subService, _) {
-            final showLoading = subService.isLoading &&
-                subService.subscription == null &&
-                subService.statusError == null;
-            return LoadingOverlay(
-              isLoading: showLoading,
-              message: '加载中...',
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTrafficSection(SubscriptionInfo subscription) {
-    final remainingBytes = subscription.trafficRemainingBytes;
-    final usedBytes = (_trafficEstimateBytes - remainingBytes).clamp(0, _trafficEstimateBytes);
-    final remainingGb = remainingBytes / (1024 * 1024 * 1024);
-
-    return Card(
-      color: Colors.cyanAccent.withAlpha(20),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.cyanAccent.withAlpha(60)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        return ListView(
+          padding: const EdgeInsets.all(16),
           children: [
-            Row(
-              children: [
-                const Icon(Icons.data_usage, color: Colors.cyanAccent, size: 24),
-                const SizedBox(width: 8),
-                const Text(
-                  '流量使用',
-                  style: TextStyle(
-                    fontSize: 18,
+            Text(
+              'VPN 仪表盘',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.bold,
-                    color: Colors.cyanAccent,
                   ),
-                ),
-              ],
             ),
-            const SizedBox(height: 16),
-            TrafficBar(
-              usedBytes: usedBytes,
-              totalBytes: _trafficEstimateBytes,
-              label: '剩余 ${_formatTrafficGb(remainingGb)} GB',
+            const SizedBox(height: 8),
+            Text(
+              '节点导入与连接状态',
+              style: TextStyle(color: Colors.grey[400]),
+            ),
+            const SizedBox(height: 24),
+            Card(
+              color: (hasNodes ? Colors.green : Colors.orange).withAlpha(15),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(
+                  color: (hasNodes ? Colors.green : Colors.orange).withAlpha(80),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(
+                      hasNodes ? Icons.cloud_done : Icons.cloud_queue,
+                      size: 28,
+                      color: hasNodes ? Colors.green : Colors.orange,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '节点状态',
+                            style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            hasNodes ? '已导入 ${nodes.length} 个节点' : '尚未导入订阅',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  hasNodes
+                      ? '节点已就绪，前往「VPN」页选择节点并连接。'
+                      : '请通过订阅链接导入节点后使用。节点信息由您的订阅服务商提供。',
+                  style: TextStyle(color: Colors.grey[300]),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => Navigator.pushNamed(context, '/traffic'),
-                icon: const Icon(Icons.bar_chart, size: 18),
-                label: const Text('查看详细统计'),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(
-                    color: Colors.cyanAccent.withAlpha(100),
-                  ),
-                  foregroundColor: Colors.cyanAccent,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.pushNamed(context, '/subscription/input'),
+                icon: const Icon(Icons.link, size: 20),
+                label: Text(hasNodes ? '更新订阅' : '导入订阅'),
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  /// store 模式的仪表盘概览：不展示账号/订阅/流量相关入口，
-  /// 仅展示导入状态并提供导入/更新订阅的入口。
-  Widget _buildStoreModeSummary(
-    BuildContext context,
-    SubscriptionService subService,
-  ) {
-    final nodes = subService.effectiveNodes;
-    final hasNodes = nodes.isNotEmpty;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Card(
-          color: (hasNodes ? Colors.green : Colors.orange).withAlpha(15),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(
-              color: (hasNodes ? Colors.green : Colors.orange).withAlpha(80),
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Icon(
-                  hasNodes ? Icons.cloud_done : Icons.cloud_queue,
-                  size: 28,
-                  color: hasNodes ? Colors.green : Colors.orange,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '节点状态',
-                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        hasNodes ? '已导入 ${nodes.length} 个节点' : '尚未导入订阅',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              hasNodes
-                  ? '节点已就绪，前往「VPN」页选择节点并连接。'
-                  : '请通过订阅链接导入节点后使用。节点信息由您的订阅服务商提供。',
-              style: TextStyle(color: Colors.grey[300]),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          height: 48,
-          child: ElevatedButton.icon(
-            onPressed: () => Navigator.pushNamed(context, '/subscription/input'),
-            icon: const Icon(Icons.link, size: 20),
-            label: Text(hasNodes ? '更新订阅' : '导入订阅'),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _InfoCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  const _InfoCard({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: TextStyle(color: Colors.grey[400], fontSize: 13)),
-                  const SizedBox(height: 4),
-                  Text(
-                    value,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 }
