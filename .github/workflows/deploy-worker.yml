@@ -24,7 +24,7 @@ jobs:
 
       - name: Apply D1 schema (idempotent)
         working-directory: workers/api
-        run: npx wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql
+        run: npx wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql -y
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: d3376ef411a0e5f321acb1ee848d2ec1
