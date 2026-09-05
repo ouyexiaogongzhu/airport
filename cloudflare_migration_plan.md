@@ -484,3 +484,73 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 | 7 | `JWT_SECRET` 現值 | 舊 Go `.env` 原樣複製 | `wrangler secret put` |
 | 8 | `BEPUSDT_API_URL/TOKEN/SECRET` 現值 | 舊 VPS `.env` 原樣複製 | `wrangler secret put` |
 | 9 | PayPal Client ID/Secret/Webhook ID | PayPal developer dashboard | `wrangler secret put` |
+
+### 12.8 自動化清單（2026-09-06 決策：能自動化就自動化）
+
+| # | 事項 | 自動化方式 | 檔 |
+| :--- | :--- | :--- | :--- |
+| 1 | Worker 部署 | GH Actions + wrangler-action，push main 即部署 | ✅ 已在 §12.6 |
+| 2 | Pages（portal/admin） | CF Pages git 集成自動構建 | ✅ 已就緒 |
+| 3 | D1 schema 遷移 | CI 內 `wrangler d1 execute --remote --file=migrations/*`，隨部署執行 | 🆕 併入 #1 的 workflow |
+| 4 | 節點註冊 | admin API 建節點 + 產 token（`setup_nodes.py` 已有） | ✅ 已有 |
+| 5 | 節點 VPS 供應 | `deploy-node-cf-ws.sh --manager-url --node-token`（裝 xray+daemon+systemd） | ✅ 已有 |
+| 6 | **Tunnel 公共主機名 + DNS**（新增節點的第③步） | 腳本調 CF API：`PUT /cfd_tunnel/{id}/configurations` 加 ingress + `POST dns_records` 加 CNAME→`<tunnel-id>.cfargotunnel.com`；與 #4/#5 合併成 **`add-node.sh` 一條命令新增節點** | 🆕 方案內 |
+| 7 | Secrets 供應 | `script: 讀 .env 逐個 wrangler secret put`（一次性執行，不進 git 的本地 .env） | 🆕 方案內 |
+| 8 | 數據遷移 dump→seed | 腳本：`sqlite3 .dump` → 過濾 sqlite 內部表/觸發器整理成 D1 可導入 SQL | 🆕 方案內 |
+| 9 | Go↔Worker 對拍 | 同請求雙打 diff 腳本，進 CI（過渡期每次部署跑） | 🆕 方案內 |
+| 10 | R2 備份 + 輪轉 | backup.sh cron + `rclone delete >30d` | 🆕 併入 backup.sh |
+| 11 | 節點撥測→自動摘除 | Worker Cron 撥測失敗 → 自動置 `status=inactive` → 訂閱不再下發（「訂閱即切換」的自動版）+ TG 告警 | 🆕 P2 後（TG bot 一部分） |
+| 12 | 流量彙總寫 D1 | Workers Cron 批量 UPSERT（§8-P2 已設計） | 🆕 P2 |
+| 13 | 額度監控告警 | CF GraphQL Analytics API 每日查 D1 寫入/Workers 請求，>80% TG 告警 | 🆕 P2 後 |
+| 14 | 被牆自動換 IP | 撥測失敗→供應商 API 換 IP→更新 D1→訂閱自動生效 | ⛔ 先不做（節點全走 CF 邊緣，IP 不暴露，需求本身弱化） |
+| 15 | 證書續期 | CF 全託管 | ✅ 天然自動 |
+| 16 | Secrets 輪換 | 手動（低頻高危，不自動） | ⛔ 保持手動 |
+
+> 落地順序：#6/#7/#8 在 P1 腳手架時順手寫；#9 過渡期必備；#11-13 跟 TG bot（§11.3）一起。
+
+---
+
+## 13. 開發計劃（執行清單，2026-09-06）
+
+> 依賴順序：M1 → M2 → M3 → M4；M5 非阻塞可並行。每項有明確驗收，全綠才進下一項。
+
+### M0 環境與憑證（人工，接近完成）
+- [x] wrangler login / cloudflared cert.pem
+- [x] D1 `rfplay` / KV `CACHE` / R2 `rfplay-backups` 建立並記錄 ID
+- [ ] Turnstile Spin：拿 Site Key + Secret
+- [ ] VPS：dashboard 建 Tunnel → token 裝 cloudflared → connector 綠 → 公共主機名（pay / node-xx / api 過渡回源），先 `tunnel-test` 驗證再切 A 記錄
+- [ ] Access 套 `admin.rfplay.uk`；Email Routing 開啟
+
+### M1 訂閱讀路徑上 Worker（P1，~2–3 天）
+- [ ] `workers/api` 腳手架收尾：npm install、`wrangler dev` 本地 `/health` 200（半成品已落：wrangler.jsonc/index.ts/0001_schema.sql）
+- [ ] schema 導入本地 D1 + `d1 import` 演練（dump→seed 腳本，自動化 #8）
+- [ ] `lib/subformats.ts`：base64 / Clash YAML / sing-box 生成 + `Subscription-Userinfo` 頭（對拍 `subscription.go`）
+- [ ] 端點：`/client/links/:token{,/clash,/singbox}`、`/client/config`（D1 讀 + KV 60s 緩存）
+- [ ] 對拍腳本（自動化 #9）：Go vs Worker 同請求 diff
+- [ ] **驗收**：三格式與 Go 逐字節一致；route `api.rfplay.uk/api/v1/client/*` 灰度上線，舊訂閱 URL 不死
+
+### M2 節點面上 Worker（P2，~1–2 天）
+- [ ] `/node/:token/config`（HMAC 對拍 `node_auth.go` 逐字節）
+- [ ] `/node/:token/traffic/report`：KV 聚合 + Cron 批量 UPSERT（寫入合併，§8-P2 公式）
+- [ ] daemon 改 `DAEMON_MANAGER_URL` → 24h soak
+- [ ] `add-node.sh` 一條命令新增節點（自動化 #6：admin API + CF API ingress/DNS）
+- [ ] **驗收**：節點配置與流量數字兩邊一致；D1 日寫入 <80% 額度
+
+### M3 會話 + 管理面 + 支付（P3，~3–4 天）
+- [ ] `lib/jwt.ts`（同 `JWT_SECRET` 驗舊 token）+ cookies.ts + csrf.ts
+- [ ] `/public/register|login` + Turnstile siteverify（M0 的鑰匙接入）；刪圖形驗證碼
+- [ ] `/auth/*`、`/admin/auth/*`、`/user/*`、`/web/*`、`/admin/*` 全量端點
+- [ ] 支付：`md5.ts` + BEpusdt provider；`provider_paypal.ts`（sandbox 對拍）；D1 batch 激活事務（冪等 + 順延）
+- [ ] portal 小改：subscriptionUrl 雙格式、Turnstile 組件、支付頁 provider=USDT/PayPal
+- [ ] **驗收**：portal/admin 全功能過關（cookie 屬性/CSRF 頭不變）；支付沙箱全流程 + 重複回調冪等
+
+### M4 切換與退役（P4，~1 天）
+- [ ] 維護窗口：api 全量 route 切 Worker → `docker compose down manager nginx certbot`
+- [ ] 觀察 72h → 刪 `manager/`（git 留檔）→ manager-data volume 最後備份推 R2
+- [ ] CI/CD：GH Actions wrangler workflow + D1 migration 步驟（自動化 #1/#3）+ R2 備份 cron/輪轉（#10）
+- [ ] **驗收**：§12.4 上線清單全勾
+
+### M5 增強（非阻塞，M2 後任意時間）
+- [ ] TG bot：查流量/續費鏈接/到期提醒/節點狀態/廣播（§11.3）
+- [ ] 節點撥測 → 自動摘除 + TG 告警（#11）
+- [ ] 額度監控 >80% 告警（#13）
