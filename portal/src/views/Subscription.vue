@@ -50,23 +50,26 @@
       <!-- Subscription Link -->
       <section class="card-section">
         <h3>Subscription Link</h3>
-        <p class="link-hint">Paste this link or scan the QR code in your proxy app (V2rayNG, Shadowrocket, Clash, RFPlay) to import all nodes.</p>
+        <p class="link-hint">Clash clients (Clash Verge / Stash) use the Clash link. V2rayNG / v2rayA / OpenWrt routers use the Base64 link.</p>
 
-        <template v-if="subscriptionUrl">
+        <template v-if="clashSubscriptionUrl">
           <div class="token-display">
-            <code class="token-text block">{{ subscriptionUrl }}</code>
+            <code class="token-text block">{{ clashSubscriptionUrl }}</code>
           </div>
           <div class="token-actions">
-            <button class="btn-outline" @click="copySubscriptionUrl">
-              {{ urlCopied ? 'Copied!' : 'Copy Subscription Link' }}
+            <button class="btn-outline" @click="copySubscriptionUrl(clashSubscriptionUrl, 'clash')">
+              {{ copiedKind === 'clash' ? 'Copied!' : 'Copy Clash Subscription' }}
+            </button>
+            <button class="btn-outline" @click="copySubscriptionUrl(subscriptionUrl, 'base64')">
+              {{ copiedKind === 'base64' ? 'Copied!' : 'Copy Base64 Link (v2rayA / OpenWrt)' }}
             </button>
             <button class="btn-outline" @click="showLinkQr = !showLinkQr">
               {{ showLinkQr ? 'Hide QR Code' : 'Show QR Code' }}
             </button>
           </div>
           <div v-if="showLinkQr" class="qr-area">
-            <QrCode :url="subscriptionUrl" />
-            <p class="qr-hint">Scan with V2rayNG or import the URL</p>
+            <QrCode :url="clashSubscriptionUrl" />
+            <p class="qr-hint">Scan with Clash Verge or import the URL</p>
           </div>
         </template>
         <template v-else>
@@ -105,9 +108,9 @@
               {{ showQr ? 'Hide QR' : 'Show QR' }}
             </button>
           </div>
-          <div v-if="showQr && subscriptionUrl" class="qr-area">
-            <QrCode :url="subscriptionUrl" />
-            <p class="qr-hint">Scan with V2rayNG or Shadowrocket</p>
+          <div v-if="showQr && clashSubscriptionUrl" class="qr-area">
+            <QrCode :url="clashSubscriptionUrl" />
+            <p class="qr-hint">Scan with Clash Verge or Shadowrocket</p>
           </div>
         </div>
         <div v-if="!tokenData && !tokenLoading" class="no-token">
@@ -189,7 +192,7 @@ const tokenError = ref('')
 const copied = ref(false)
 const showQr = ref(false)
 const showLinkQr = ref(false)
-const urlCopied = ref(false)
+const copiedKind = ref('')
 
 // Regenerate
 const showConfirm = ref(false)
@@ -220,6 +223,7 @@ const trafficPercent = computed(() => {
 const fullSubscriptionToken = computed(() => newToken.value || profile.value.client_token || '')
 
 const subscriptionUrl = computed(() => buildSubscriptionUrl(fullSubscriptionToken.value))
+const clashSubscriptionUrl = computed(() => buildSubscriptionUrl(fullSubscriptionToken.value, 'clash'))
 
 function formatBytes(bytes: number | undefined | null): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -285,11 +289,12 @@ async function copyToken() {
   setTimeout(() => { copied.value = false }, 2000)
 }
 
-async function copySubscriptionUrl() {
-  if (!subscriptionUrl.value) return
-  await navigator.clipboard.writeText(subscriptionUrl.value)
-  urlCopied.value = true
-  setTimeout(() => { urlCopied.value = false }, 2000)
+// Copy a subscription URL ('clash' or 'base64' format)
+async function copySubscriptionUrl(url: string, kind: 'clash' | 'base64') {
+  if (!url) return
+  await navigator.clipboard.writeText(url)
+  copiedKind.value = kind
+  setTimeout(() => { copiedKind.value = '' }, 2000)
 }
 
 function confirmRegenerate() {

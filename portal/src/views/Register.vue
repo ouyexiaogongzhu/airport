@@ -29,6 +29,7 @@
             <button type="button" class="btn-refresh" @click="fetchCaptcha(true)" :disabled="captchaLoading">⟳</button>
           </div>
         </div>
+        <Turnstile v-model="turnstileToken" />
         <p v-if="error" class="error">{{ error }}</p>
         <button type="submit" class="btn" :disabled="loading">
           {{ loading ? 'Creating account…' : 'Create Account' }}
@@ -48,6 +49,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
+import Turnstile from '../components/Turnstile.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -56,6 +58,7 @@ const username = ref('')
 const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+const turnstileToken = ref('')
 const error = ref('')
 const loading = ref(false)
 
@@ -98,7 +101,7 @@ async function handleRegister() {
     return
   }
   loading.value = true
-  const res = await auth.register(username.value, email.value, password.value, captchaToken.value, captchaAnswer.value)
+  const res = await auth.register(username.value, email.value, password.value, captchaToken.value, captchaAnswer.value, turnstileToken.value)
   loading.value = false
   if (res.success) {
     router.push('/dashboard')

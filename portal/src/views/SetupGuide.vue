@@ -16,6 +16,28 @@
       <h2>Setup Guide</h2>
       <p class="subtitle">Follow the steps for your device to get connected.</p>
 
+      <!-- Subscription links (Clash + Base64) -->
+      <div v-if="clashUrl" class="sub-links">
+        <div class="sub-link-row">
+          <div class="sub-link-info">
+            <span class="sub-link-label">Clash Subscription — Clash Verge (clash-verge-rev) / Stash</span>
+            <code class="sub-link-url">{{ clashUrl }}</code>
+          </div>
+          <button class="method-btn" @click="copyUrl(clashUrl, 'clash')">
+            {{ copiedKind === 'clash' ? 'Copied!' : 'Copy' }}
+          </button>
+        </div>
+        <div class="sub-link-row">
+          <div class="sub-link-info">
+            <span class="sub-link-label">Base64 Subscription — V2rayNG / v2rayA / OpenWrt</span>
+            <code class="sub-link-url">{{ base64Url }}</code>
+          </div>
+          <button class="method-btn" @click="copyUrl(base64Url, 'base64')">
+            {{ copiedKind === 'base64' ? 'Copied!' : 'Copy' }}
+          </button>
+        </div>
+      </div>
+
       <div class="tabs">
         <button
           v-for="t in tabs"
@@ -41,7 +63,7 @@
           <li>Open V2rayNG app</li>
           <li>Tap <strong>+</strong> icon in the top-right corner</li>
           <li>Select <strong>Import subscription from clipboard</strong></li>
-          <li>Paste your subscription URL (copied from Account page)</li>
+          <li>Paste your <strong>Base64</strong> subscription URL (copied above or from the Account page)</li>
           <li>Tap <strong>✓</strong> to confirm</li>
           <li>Select a node and tap <strong>Connect</strong></li>
         </ol>
@@ -142,8 +164,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import api from '../api/index'
+import { buildSubscriptionUrl } from '../utils/subscriptionUrl'
 
 const auth = useAuthStore()
 
@@ -156,6 +180,29 @@ const tabs = [
   { key: 'singbox', label: 'Sing-box' },
   { key: 'flutter', label: 'Flutter App' },
 ]
+
+// Subscription links for the copy buttons at the top of the guide. Hidden
+// until the client token loads (not logged in / no token yet).
+const clientToken = ref('')
+const clashUrl = computed(() => buildSubscriptionUrl(clientToken.value, 'clash'))
+const base64Url = computed(() => buildSubscriptionUrl(clientToken.value))
+const copiedKind = ref('')
+
+async function copyUrl(url: string, kind: 'clash' | 'base64') {
+  if (!url) return
+  await navigator.clipboard.writeText(url)
+  copiedKind.value = kind
+  setTimeout(() => { copiedKind.value = '' }, 2000)
+}
+
+onMounted(async () => {
+  try {
+    const res = await api.get('/user/profile')
+    clientToken.value = res.data.client_token || ''
+  } catch {
+    // Links stay hidden for unauthenticated visitors
+  }
+})
 </script>
 
 <style scoped>
@@ -180,6 +227,24 @@ const tabs = [
 .content { max-width: 800px; margin: 0 auto; padding: 2rem; }
 h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .subtitle { color: #a0a0b0; margin: 0.25rem 0 1.5rem; font-size: 0.9rem; }
+.sub-links {
+  background: #16213e;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2rem;
+  display: grid;
+  gap: 1rem;
+}
+.sub-link-row { display: flex; align-items: center; gap: 1rem; }
+.sub-link-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.sub-link-label { color: #a0a0b0; font-size: 0.8rem; font-weight: 600; }
+.sub-link-url {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.85rem;
+  color: #e0e0e0;
+  word-break: break-all;
+  user-select: all;
+}
 .tabs { display: flex; gap: 0.5rem; margin-bottom: 2rem; flex-wrap: wrap; }
 .tab {
   padding: 0.5rem 1rem;

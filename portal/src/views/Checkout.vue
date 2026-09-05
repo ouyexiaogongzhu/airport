@@ -77,14 +77,14 @@
                 <span class="option-check">✓</span>
               </label>
               <label
-                :class="['payment-option', { selected: selectedProvider === 'payoneer' }]"
-                @click="selectedProvider = 'payoneer'"
+                :class="['payment-option', { selected: selectedProvider === 'paypal' }]"
+                @click="selectedProvider = 'paypal'"
               >
-                <input type="radio" name="provider" value="payoneer" v-model="selectedProvider" />
+                <input type="radio" name="provider" value="paypal" v-model="selectedProvider" />
                 <span class="option-icon">💳</span>
                 <div class="option-info">
-                  <span class="option-name">Credit / Debit Card</span>
-                  <span class="option-desc">Visa, Mastercard via Payoneer Checkout</span>
+                  <span class="option-name">PayPal</span>
+                  <span class="option-desc">Pay with your PayPal account or card</span>
                 </div>
                 <span class="option-check">✓</span>
               </label>

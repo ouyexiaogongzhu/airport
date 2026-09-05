@@ -13,9 +13,11 @@ const API_V1_PREFIX = '/api/v1'
 //
 // If the base does not already end with "/api/v1" the prefix is appended, so
 // the result always targets the real manager endpoint
-// /api/v1/client/links/{token}. Relative bases are resolved against the page
-// origin to produce an absolute URL (e.g. https://api.rfplay.uk/api/v1/...).
-export function buildSubscriptionUrl(token: string): string {
+// /api/v1/client/links/{token}[{/clash}]. Relative bases are resolved against
+// the page origin to produce an absolute URL (e.g. https://api.rfplay.uk/api/v1/...).
+export type SubscriptionFormat = 'base64' | 'clash'
+
+export function buildSubscriptionUrl(token: string, format: SubscriptionFormat = 'base64'): string {
   if (!token) return ''
   const base = (
     import.meta.env.VITE_SUBSCRIPTION_BASE_URL || api.defaults.baseURL || API_V1_PREFIX
@@ -23,7 +25,8 @@ export function buildSubscriptionUrl(token: string): string {
     .trim()
     .replace(/\/+$/, '')
   const withPrefix = base.endsWith(API_V1_PREFIX) ? base : `${base}${API_V1_PREFIX}`
-  const url = `${withPrefix}/client/links/${token}`
+  const suffix = format === 'clash' ? '/clash' : ''
+  const url = `${withPrefix}/client/links/${token}${suffix}`
   if (/^https?:\/\//i.test(url)) return url
   return `${window.location.origin}${url}`
 }

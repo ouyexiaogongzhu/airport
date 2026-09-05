@@ -13,6 +13,7 @@
           <label>Password</label>
           <input v-model="password" type="password" placeholder="Enter password" required />
         </div>
+        <Turnstile v-model="turnstileToken" />
         <p v-if="error" class="error">{{ error }}</p>
         <button type="submit" class="btn" :disabled="loading">
           {{ loading ? 'Signing in…' : 'Sign In' }}
@@ -31,19 +32,21 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import Turnstile from '../components/Turnstile.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
 
 const username = ref('')
 const password = ref('')
+const turnstileToken = ref('')
 const error = ref('')
 const loading = ref(false)
 
 async function handleLogin() {
   error.value = ''
   loading.value = true
-  const res = await auth.login(username.value, password.value)
+  const res = await auth.login(username.value, password.value, turnstileToken.value)
   loading.value = false
   if (res.success) {
     router.push('/dashboard')

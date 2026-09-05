@@ -48,4 +48,29 @@ describe('buildSubscriptionUrl', () => {
   it('returns an empty string for an empty token', () => {
     expect(buildSubscriptionUrl('')).toBe('')
   })
+
+  it('appends /clash for the clash format', () => {
+    vi.stubEnv('VITE_SUBSCRIPTION_BASE_URL', 'https://api.rfplay.uk')
+    expect(buildSubscriptionUrl('tok_1', 'clash')).toBe(
+      'https://api.rfplay.uk/api/v1/client/links/tok_1/clash',
+    )
+  })
+
+  it('resolves the clash format against the origin for a relative base', () => {
+    api.defaults.baseURL = '/api/v1'
+    expect(buildSubscriptionUrl('tok_1', 'clash')).toBe(
+      'https://portal.rfplay.uk/api/v1/client/links/tok_1/clash',
+    )
+  })
+
+  it('does not duplicate /api/v1 for the clash format either', () => {
+    api.defaults.baseURL = 'https://api.rfplay.uk/api/v1'
+    expect(buildSubscriptionUrl('tok_1', 'clash')).toBe(
+      'https://api.rfplay.uk/api/v1/client/links/tok_1/clash',
+    )
+  })
+
+  it('returns an empty string for an empty token in clash format', () => {
+    expect(buildSubscriptionUrl('', 'clash')).toBe('')
+  })
 })
