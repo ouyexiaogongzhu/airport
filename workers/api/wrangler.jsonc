@@ -1,0 +1,29 @@
+{
+  "name": "rfplay-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rfplay",
+      "database_id": "e2e30fd5-d9b7-415b-a39d-3352cef000fa"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "8acd30a4721e43a584f252cbacd6526b"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "rfplay-backups"
+    }
+  ]
+  // 灰度 routes（對拍全綠後啟用，见 cloudflare_migration_plan.md §8-P1）：
+  // "routes": [
+  //   { "pattern": "api.rfplay.uk/api/v1/client/*", "zone_name": "rfplay.uk" },
+  //   { "pattern": "api.rfplay.uk/health", "zone_name": "rfplay.uk" }
+  // ]
+}

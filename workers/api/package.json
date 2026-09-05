@@ -1,0 +1,19 @@
+{
+  "name": "rfplay-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:schema": "wrangler d1 execute rfplay --local --file=migrations/0001_schema.sql",
+    "db:schema:remote": "wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "typescript": "^5.6.0",
+    "@cloudflare/workers-types": "^5.0.0"
+  }
+}
