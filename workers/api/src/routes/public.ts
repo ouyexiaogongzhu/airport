@@ -145,17 +145,12 @@ export function publicRoutes() {
       created_at: now,
     };
 
-    // Flutter keeps the Bearer JWT flow; browsers get httpOnly session cookies.
-    if (c.req.header('X-Client') === 'flutter') {
-      const token = await signBearer(c.env, user);
-      if (!token) return c.json({ error: 'failed to generate token' }, 500);
-      return c.json({ token, user: sanitizedUser(user) }, 201);
-    }
-
+    // Go 同樣永遠返回 token；跨站前端靠它 Bearer 兜底
     const ok = await issueCookieGroup(c, user, 'session', 'refresh', 'csrf');
     if (!ok) return c.json({ error: 'failed to establish session' }, 500);
-
-    return c.json({ user: sanitizedUser(user) }, 201);
+    const token = await signBearer(c.env, user);
+    if (!token) return c.json({ error: 'failed to generate token' }, 500);
+    return c.json({ token, user: sanitizedUser(user) }, 201);
   });
 
   app.post('/public/login', async (c) => {
@@ -196,17 +191,12 @@ export function publicRoutes() {
       return c.json({ error: 'account is not active' }, 403);
     }
 
-    // Flutter keeps the Bearer JWT flow; browsers get httpOnly session cookies.
-    if (c.req.header('X-Client') === 'flutter') {
-      const token = await signBearer(c.env, user);
-      if (!token) return c.json({ error: 'failed to generate token' }, 500);
-      return c.json({ token, user: sanitizedUser(user) });
-    }
-
+    // Go AuthResponse 永遠含 token；跨站前端（pages.dev）靠它做 Bearer 兜底
     const ok = await issueCookieGroup(c, user, 'session', 'refresh', 'csrf');
     if (!ok) return c.json({ error: 'failed to establish session' }, 500);
-
-    return c.json({ user: sanitizedUser(user) });
+    const token = await signBearer(c.env, user);
+    if (!token) return c.json({ error: 'failed to generate token' }, 500);
+    return c.json({ token, user: sanitizedUser(user) });
   });
 
   return app;
