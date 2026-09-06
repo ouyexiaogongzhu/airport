@@ -22,6 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username: string, password: string) {
     try {
       const res = await api.post('/admin/auth/login', { username, password })
+      if (res.data.token) localStorage.setItem('auth_token', res.data.token)
       user.value = res.data.user ?? null
       role.value = res.data.role ?? null
       return { success: true }
@@ -37,6 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // Best-effort server-side session invalidation — clear local state regardless.
     } finally {
+      localStorage.removeItem('auth_token')
       clearApiCache()
       user.value = null
       role.value = null

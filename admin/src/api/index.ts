@@ -33,7 +33,14 @@ const api = axios.create({
   withCredentials: true,
 })
 
+// 跨站前端（pages.dev）第三方 cookie 被丟棄 → localStorage Bearer 兜底
+const AUTH_TOKEN_KEY = 'auth_token'
+
 api.interceptors.request.use(cfg => {
+  const bearer = localStorage.getItem(AUTH_TOKEN_KEY)
+  if (bearer) {
+    cfg.headers['Authorization'] = `Bearer ${bearer}`
+  }
   const method = (cfg.method || 'get').toLowerCase()
   if (UNSAFE_METHODS.has(method)) {
     const csrfToken = readCookie('admin_csrf')

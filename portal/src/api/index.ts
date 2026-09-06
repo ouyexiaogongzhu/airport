@@ -39,7 +39,14 @@ const api = axios.create({
 // CSRF double-submit: echo the `csrf` cookie value in the X-CSRF-Token header
 // on state-changing requests. The backend validates the header against the
 // cookie and rejects with 403 on mismatch.
+// 跨站前端（pages.dev）第三方 cookie 被丟棄 → localStorage Bearer 兜底
+export const AUTH_TOKEN_KEY = 'auth_token'
+
 api.interceptors.request.use(cfg => {
+  const bearer = localStorage.getItem(AUTH_TOKEN_KEY)
+  if (bearer) {
+    cfg.headers.set('Authorization', `Bearer ${bearer}`)
+  }
   const method = (cfg.method || 'get').toLowerCase()
   if (UNSAFE_METHODS.includes(method)) {
     const csrfToken = readCookie('csrf')

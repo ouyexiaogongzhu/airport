@@ -46,7 +46,9 @@ export function authRoutes() {
   // middleware.WebAuth("session")
   const webAuth = createMiddleware<AppEnv>(async (c, next) => {
     const secret = c.env.JWT_SECRET;
-    const token = secret ? getCookie(c, 'session') : undefined;
+    // 跨站前端（pages.dev）第三方 cookie 被瀏覽器丟棄 → Bearer 兜底（同 JWT/密鑰）
+    const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
+    const token = (secret ? getCookie(c, 'session') : undefined) || bearer;
     if (!secret || !token) {
       return c.json({ error: 'SESSION_EXPIRED' }, 401);
     }
@@ -153,7 +155,12 @@ export function authRoutes() {
     const ok = await issueAdminCookies(c, user);
     if (!ok) return c.json({ error: 'failed to establish session' }, 500);
 
-    return c.json({ user: sanitizedUser(user), role: user.role });
+    // 跨站前端（pages.dev）cookie 存不住 → 附 Bearer token 供 localStorage 兜底
+    const secret = c.env.JWT_SECRET;
+    const token = secret
+      ? await signJwt({ user_id: user.id, username: user.username, role: user.role }, secret, 24 * 3600)
+      : undefined;
+    return c.json({ user: sanitizedUser(user), role: user.role, ...(token ? { token } : {}) });
   });
 
   // AdminLogout：只清 admin 三件套

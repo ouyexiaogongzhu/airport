@@ -49,6 +49,11 @@ export function webRoutes() {
       await next();
       return;
     }
+    // Bearer 認證不依賴 cookie，天然免疫 CSRF → 跳過雙提交
+    if (c.req.header('Authorization')) {
+      await next();
+      return;
+    }
     const header = c.req.header('X-CSRF-Token');
     const cookie = getCookie(c, 'csrf');
     if (!header || !cookie || !constantTimeEqual(header, cookie)) {

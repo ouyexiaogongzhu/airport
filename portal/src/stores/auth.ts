@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import api from '../api/index'
+import api, { AUTH_TOKEN_KEY } from '../api/index'
 import { clearApiCache } from '../api/cache'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -36,6 +36,7 @@ export const useAuthStore = defineStore('auth', () => {
         password,
         ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
       })
+      if (res.data.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
       user.value = res.data.user
       return { success: true }
     } catch (e: any) {
@@ -68,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
       // Clear local state regardless of the server response.
     }
     clearApiCache()
+    localStorage.removeItem(AUTH_TOKEN_KEY)
     user.value = null
   }
 
