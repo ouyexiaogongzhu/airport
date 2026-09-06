@@ -109,7 +109,10 @@ export function adminRoutes() {
   // middleware.WebAuth("admin_session")：對齊 webauth.go，cookie 缺失/驗簽失敗 → 401 SESSION_EXPIRED
   const adminAuth = createMiddleware<AppEnv>(async (c, next) => {
     const secret = c.env.JWT_SECRET;
-    const token = secret ? getCookie(c, 'admin_session') : undefined;
+    // 跨站前端（pages.dev）第三方 cookie 被瀏覽器丟棄 → Bearer 兜底（/admin/auth/login
+    // 回傳 token 供 localStorage 即為此用；admin axios 攔截器每個請求都附 Bearer）
+    const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
+    const token = (secret ? getCookie(c, 'admin_session') : undefined) || bearer;
     if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     const claims = await verifyJwt(token, secret);
     if (!claims || typeof claims.user_id !== 'number') return c.json({ error: 'SESSION_EXPIRED' }, 401);

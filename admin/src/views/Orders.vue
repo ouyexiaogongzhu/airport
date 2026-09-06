@@ -41,7 +41,7 @@
               <td>{{ o.username || o.customer || '—' }}</td>
               <td>{{ o.product_name || o.product || '—' }}</td>
               <td>${{ formatAmount(o.amount) }}</td>
-              <td><span class="tag">{{ o.payment_provider || o.gateway || '—' }}</span></td>
+              <td><span class="tag">{{ o.provider || '—' }}</span></td>
               <td><span :class="['status', 'status-' + (o.status || 'unknown')]">{{ statusLabel(o.status) }}</span></td>
               <td>{{ formatDate(o.created_at || o.date) }}</td>
               <td class="actions-cell">
@@ -68,7 +68,7 @@
           <div class="detail-row"><span class="dl">Product</span><span class="dv">{{ detailOrder.product_name || detailOrder.product || '—' }}</span></div>
           <div class="detail-row"><span class="dl">Amount</span><span class="dv">${{ formatAmount(detailOrder.amount) }}</span></div>
           <div class="detail-row"><span class="dl">Status</span><span :class="['status', 'status-' + (detailOrder.status || 'unknown')]">{{ statusLabel(detailOrder.status) }}</span></div>
-          <div class="detail-row"><span class="dl">Provider</span><span class="dv">{{ detailOrder.payment_provider || detailOrder.gateway || '—' }}</span></div>
+          <div class="detail-row"><span class="dl">Provider</span><span class="dv">{{ detailOrder.provider || '—' }}</span></div>
           <div class="detail-row"><span class="dl">Created</span><span class="dv">{{ formatDate(detailOrder.created_at || detailOrder.date) }}</span></div>
           <div class="detail-row"><span class="dl">Updated</span><span class="dv">{{ formatDate(detailOrder.updated_at) }}</span></div>
           <div v-if="detailOrder.payment_url" class="detail-row">
@@ -127,17 +127,6 @@ function formatDate(d: any): string {
     return dt.toISOString().split('T')[0]
   }
   return String(d).slice(0, 10)
-}
-
-/* ---------- Mock data fallback ---------- */
-function mockOrders() {
-  return [
-    { id: 1, username: 'john.doe', product_name: 'Pro VPN', amount: 19.99, payment_provider: 'stripe', status: 'paid', created_at: '2026-06-20T10:30:00Z' },
-    { id: 2, username: 'jane.smith', product_name: 'Starter VPN', amount: 9.99, payment_provider: 'alipay', status: 'pending', created_at: '2026-06-21T14:00:00Z' },
-    { id: 3, username: 'bob.wilson', product_name: 'Proxy Pack M', amount: 39.99, payment_provider: 'stripe', status: 'paid', created_at: '2026-06-22T09:15:00Z' },
-    { id: 4, username: 'alice.j', product_name: 'Dedicated IP', amount: 4.99, payment_provider: 'paypal', status: 'expired', created_at: '2026-06-18T16:45:00Z' },
-    { id: 5, username: 'charlie.k', product_name: 'Pro VPN', amount: 19.99, payment_provider: 'stripe', status: 'refunded', created_at: '2026-06-15T08:00:00Z' },
-  ]
 }
 
 // `skipCache` is set by the explicit Refresh button so a manual refresh

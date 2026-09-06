@@ -312,19 +312,32 @@ export async function activateSubscription(
   if (!row) throw new Error('order or product not found');
 
   const now = Math.floor(Date.now() / 1000);
-  // 逐字对齐 Go activateSubscriptionTx：traffic_limit = int64(amount * 1GiB)，rate/used 清零，
-  // period_start = now；SQL MAX() 落「顺延」语义（活跃续费 max(now, 旧值)+30d）
+  // 冪等閘門：用戶更新以「訂單仍為 pending」為前提（EXISTS），且放在訂單翻轉【之前】。
+  // D1 batch 是單一事務，併發重複回調（BEpusdt/PayPal 重試同時到達）時，後到的事務
+  // 看到已翻轉的 status，兩條語句全部空轉；若訂單先翻、用戶無條件更新（舊順序），
+  // 併發回調會對同一筆訂單雙重順延 30 天。
+  // traffic_limit = int64(amount * 1GiB)，rate/used 清零，period_start = now；
+  // SQL MAX() 落「顺延」語義（活躍續費 max(now, 舊值)+30d）
   await db.batch([
-    db
-      .prepare("UPDATE orders SET status='paid', updated_at=? WHERE id=? AND status='pending'")
-      .bind(new Date().toISOString(), orderId),
     db
       .prepare(
         "UPDATE users SET subscription_status='active', subscription_tier=?," +
           ' traffic_limit_bytes=?, rate_limit_bps=0, traffic_used_bytes=0, traffic_period_start=?,' +
-          ' expire_time = MAX(?, COALESCE(expire_time, 0)) + ? WHERE id=?',
+          ' expire_time = MAX(?, COALESCE(expire_time, 0)) + ? WHERE id = ? AND EXISTS' +
+          " (SELECT 1 FROM orders WHERE id = ? AND status = 'pending')",
       )
-      .bind(row.name, Math.trunc(row.amount * GB_BYTES), now, now, SUBSCRIPTION_DURATION_SECONDS, userId),
+      .bind(
+        row.name,
+        Math.trunc(row.amount * GB_BYTES),
+        now,
+        now,
+        SUBSCRIPTION_DURATION_SECONDS,
+        userId,
+        orderId,
+      ),
+    db
+      .prepare("UPDATE orders SET status='paid', updated_at=? WHERE id=? AND status='pending'")
+      .bind(new Date().toISOString(), orderId),
   ]);
 }
 

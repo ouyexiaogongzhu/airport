@@ -84,13 +84,6 @@
                 </div>
               </div>
               <div class="stat-card">
-                <span class="stat-icon">🛒</span>
-                <div class="stat-body">
-                  <span class="stat-num">{{ systemStats.todayOrders }}</span>
-                  <span class="stat-label">Today's Orders</span>
-                </div>
-              </div>
-              <div class="stat-card">
                 <span class="stat-icon">📦</span>
                 <div class="stat-body">
                   <span class="stat-num">{{ systemStats.totalProducts }}</span>
@@ -123,10 +116,6 @@
                 <div class="traffic-item">
                   <span class="traffic-label">Total Traffic This Month</span>
                   <span class="traffic-val">{{ systemStats.monthTraffic }}</span>
-                </div>
-                <div class="traffic-item">
-                  <span class="traffic-label">Peak Concurrent</span>
-                  <span class="traffic-val">{{ systemStats.peakConcurrent }}</span>
                 </div>
               </div>
             </div>
@@ -209,13 +198,11 @@ interface ServiceHealth {
 interface SystemStats {
   totalUsers: number
   activeNodes: number
-  todayOrders: number
   totalProducts: number
   dbSize: string
   uptime: string
   todayTraffic: string
   monthTraffic: string
-  peakConcurrent: number
 }
 
 interface SecurityConfig {
@@ -235,23 +222,19 @@ const general = reactive({
   appVersion: '0.0.1',
 })
 
+// Real health check against the Worker's /health endpoint (baseURL minus /api/v1).
 const services = ref<ServiceHealth[]>([
-  { name: 'Manager',  status: 'healthy' },
-  { name: 'Database', status: 'healthy' },
-  { name: 'Xray',     status: 'healthy' },
-  { name: 'Daemon',   status: 'healthy' },
+  { name: 'API', status: 'unreachable' },
 ])
 
 const systemStats = reactive<SystemStats>({
   totalUsers: 0,
   activeNodes: 0,
-  todayOrders: 0,
   totalProducts: 0,
   dbSize: '—',
   uptime: '—',
   todayTraffic: '—',
   monthTraffic: '—',
-  peakConcurrent: 0,
 })
 
 const security = reactive<SecurityConfig>({
@@ -287,18 +270,42 @@ async function loadNodesCount(skipCache = false): Promise<number> {
   }
 }
 
+// /admin/traffic/stats returns { data: [{ node_id, user_id, total_upload, total_download }] }
+// aggregated over the since/until window — sum the rows for today / this month.
 async function loadTrafficStats(skipCache = false) {
+  const dayStart = new Date()
+  dayStart.setHours(0, 0, 0, 0)
+  const monthStart = new Date()
+  monthStart.setDate(1)
+  monthStart.setHours(0, 0, 0, 0)
+  const opts = (since: Date) => ({
+    params: { since: since.toISOString() },
+    cache: skipCache ? { skipCache: true } : undefined,
+  })
+  const sum = (res: any) =>
+    (res.data?.data ?? []).reduce(
+      (acc: number, r: any) => acc + Number(r.total_upload ?? 0) + Number(r.total_download ?? 0),
+      0,
+    )
   try {
-    const res = await api.get('/admin/traffic/stats', { cache: skipCache ? { skipCache: true } : undefined })
-    const d = res.data
-    if (d) {
-      systemStats.todayTraffic = formatBytes(d.today_traffic ?? d.today ?? 0)
-      systemStats.monthTraffic = formatBytes(d.month_traffic ?? d.month ?? 0)
-      systemStats.peakConcurrent = d.peak_concurrent ?? d.peak ?? 0
-      systemStats.todayOrders = d.today_orders ?? d.orders_today ?? 0
-    }
+    const [today, month] = await Promise.all([
+      api.get('/admin/traffic/stats', opts(dayStart)),
+      api.get('/admin/traffic/stats', opts(monthStart)),
+    ])
+    systemStats.todayTraffic = formatBytes(sum(today))
+    systemStats.monthTraffic = formatBytes(sum(month))
   } catch {
-    // use fallbacks
+    // keep '—' placeholders
+  }
+}
+
+async function checkHealth() {
+  try {
+    const healthURL = (general.apiBase.replace(/\/+$/, '').replace(/\/api\/v1$/, '') || '') + '/health'
+    const res = await api.get(healthURL, { cache: { skipCache: true } })
+    services.value[0].status = res.data?.status === 'ok' ? 'healthy' : 'degraded'
+  } catch {
+    services.value[0].status = 'unreachable'
   }
 }
 
@@ -337,6 +344,7 @@ async function loadAll(skipCache = false) {
       loadNodesCount(skipCache),
       loadProductsCount(skipCache),
       loadTrafficStats(skipCache),
+      checkHealth(),
     ])
 
     systemStats.totalUsers = usersCount

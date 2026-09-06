@@ -33,7 +33,10 @@ export function webRoutes() {
   // middleware.WebAuth("session")（webauth.go）：cookie 缺失/驗簽失敗 → 401 SESSION_EXPIRED
   const webAuth = createMiddleware<AppEnv>(async (c, next) => {
     const secret = c.env.JWT_SECRET;
-    const token = secret ? getCookie(c, 'session') : undefined;
+    // 跨站前端（pages.dev）第三方 cookie 被瀏覽器丟棄 → Bearer 兜底（同 auth.ts webAuth：
+    // portal axios 攔截器對每個請求都附 localStorage Bearer，僅認 cookie 會讓 /user/* 全 401）
+    const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
+    const token = (secret ? getCookie(c, 'session') : undefined) || bearer;
     if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     const claims = await verifyJwt(token, secret);
     if (!claims || typeof claims.user_id !== 'number') return c.json({ error: 'SESSION_EXPIRED' }, 401);
@@ -114,11 +117,16 @@ export function webRoutes() {
     }
 
     const product = await db
-      .prepare('SELECT id, name, price, stock, status FROM products WHERE id = ?')
+      .prepare('SELECT id, name, price, stock, status, currency FROM products WHERE id = ?')
       .bind(productId)
-      .first<{ id: number; name: string; price: number; stock: number; status: string }>();
+      .first<{ id: number; name: string; price: number; stock: number; status: string; currency: string | null }>();
     if (!product) return c.json({ error: 'product not found' }, 404);
     if (product.status !== 'active') return c.json({ error: 'product is not available' }, 400);
+
+    // PayPal 以 USD 計價（§5.2）：非 USD 產品拒走 paypal，否則 CNY 定價會以同數字美元扣款
+    if (typeof body.provider === 'string' && body.provider === 'paypal' && product.currency !== 'USD') {
+      return c.json({ error: 'product does not support paypal payment' }, 400);
+    }
 
     const provider = typeof body.provider === 'string' && body.provider !== '' ? body.provider : 'mock';
     if (!VALID_PROVIDERS.has(provider)) {

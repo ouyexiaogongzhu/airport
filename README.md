@@ -6,7 +6,7 @@ Proxy service platform for **rfplay.uk**.
 | :--- | :--- | :--- |
 | User Portal (官网) | https://www.rfplay.uk | Cloudflare Pages |
 | Admin Dashboard | https://admin.rfplay.uk | Cloudflare Pages |
-| Manager API | https://api.rfplay.uk | VPS `:443` + CF Proxy |
+| Manager API | https://api.rfplay.uk | **Cloudflare Workers**（TS，`workers/api`） |
 | 客户端 | 用户自备通用 Clash（Meta/mihomo 系） | 无自研 App，订阅 URL 导入 |
 
 ## Key Decisions (Summary)
@@ -18,7 +18,7 @@ Proxy service platform for **rfplay.uk**.
 | **官网/Admin 登录** | httpOnly cookie + CSRF；**禁止** localStorage JWT |
 | **客户端** | 无自研客户端；portal 复制订阅 URL（`/clash`）→ 通用 Clash 导入 |
 | **节点认证** | 连接时 `POST /api/node/verify-token`；sync **无** user_list |
-| **支付** | BEpusdt + Payoneer；仅官网；webhook → `api.rfplay.uk` |
+| **支付** | BEpusdt(USDT) + PayPal；webhook → Worker |
 
 Full spec: [airport_system_design.md](airport_system_design.md)
 
@@ -26,16 +26,14 @@ Full spec: [airport_system_design.md](airport_system_design.md)
 
 ```
 airport-system/
-├── manager/             # Go Fiber API → api.rfplay.uk
+├── workers/api/         # Manager API（TS/Hono on Workers）→ api.rfplay.uk
 ├── portal/              # Vue 3 官网 → CF Pages
 ├── admin/               # Vue 3 后台 → CF Pages
-├── daemon/              # Node agent（verify + sync + Loki）
-├── client/              # （已退役）原 Flutter 客户端 → 通用 Clash 客户端替代
-├── xray-core/           # Fork of XTLS/Xray-core
-├── shared/              # Portal & Admin 共用代码 (types, api, utils)
-├── deploy/              # 部署脚本
-├── .env.example files   # 各服务环境变量模板
-└── docs/                # airport_system_design.md, PLAN.md, task.md
+├── daemon/              # 节点代理（Go：拉配置 + 流量上報）→ 部署於節點 VPS
+├── xray-core/           # Fork of XTLS/Xray-core（節點內核）
+├── deploy/              # 部署/運維腳本（含 cloudflare/ 自動化）
+├── admin.env.example / portal.env.example
+└── cloudflare_migration_plan.md  # 遷移與上線文檔（§12 上線手冊）
 ```
 
 ### Cloudflare Pages

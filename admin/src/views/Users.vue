@@ -46,7 +46,7 @@
               <td>{{ formatExpiry(u.expire_time) }}</td>
               <td class="actions-cell">
                 <button class="btn-tiny" @click="toggleActive(u)" :disabled="activatingId === u.id">
-                  {{ u.subscription_status === 'active' ? '⏸ Deactivate' : '✅ Activate' }}
+                  {{ u.status === 'active' ? '⏸ Suspend' : '✅ Activate' }}
                 </button>
               </td>
             </tr>
@@ -125,10 +125,11 @@ async function loadUsers(skipCache = false) {
 async function toggleActive(u: any) {
   activatingId.value = u.id
   try {
-    const newStatus = u.subscription_status === 'active' ? 'disabled' : 'active'
+    // Backend only accepts status in { active, suspended, banned }.
+    const newStatus = u.status === 'active' ? 'suspended' : 'active'
     await api.put(`/admin/users/${u.id}`, { status: newStatus })
     // TODO: Direct mutation of reactive array item — should re-fetch from server instead
-    u.subscription_status = newStatus
+    u.status = newStatus
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to update'
   } finally {

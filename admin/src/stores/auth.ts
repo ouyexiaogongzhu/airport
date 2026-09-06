@@ -55,7 +55,8 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await api.get('/auth/validate', { cache: { skipCache: true } })
       user.value = res.data.user ?? null
-      role.value = res.data.role ?? null
+      // /auth/validate returns { user } only — role lives on the user object.
+      role.value = res.data.user?.role ?? null
     } catch {
       user.value = null
       role.value = null

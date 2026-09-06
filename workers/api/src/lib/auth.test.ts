@@ -42,6 +42,18 @@ describe('jwt round-trip', () => {
   it('rejects malformed token', async () => {
     expect(await verifyJwt('not-a-jwt', SECRET)).toBeNull();
   });
+
+  it('rejects token without exp claim (never-expiring token)', async () => {
+    const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const payload = btoa(JSON.stringify({ user_id: 1, username: 'a', role: 'user', iat: 1 }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const data = `${header}.${payload}`;
+    const sig = await crypto.subtle.sign('HMAC', await crypto.subtle.importKey('raw', new TextEncoder().encode(SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']), new TextEncoder().encode(data));
+    const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    expect(await verifyJwt(`${data}.${sigB64}`, SECRET)).toBeNull();
+  });
 });
 
 describe('csrf', () => {
@@ -60,14 +72,15 @@ describe('csrf', () => {
 });
 
 describe('cookies (對齊 auth.go)', () => {
-  it('session cookie: 30d, HttpOnly, Secure, SameSite=Strict, Path=/', () => {
+  it('session cookie: 30d, HttpOnly, Secure, SameSite=None（跨站 pages.dev 前端需 None）, Path=/', () => {
     const v = sessionCookie('session', 'tok', undefined);
     expect(v).toContain('session=tok');
     expect(v).toContain(`Max-Age=${SESSION_TTL}`);
     expect(SESSION_TTL).toBe(30 * 24 * 3600);
     expect(v).toContain('HttpOnly');
     expect(v).toContain('Secure');
-    expect(v).toContain('SameSite=Strict');
+    expect(v).toContain('SameSite=None');
+    expect(v).not.toContain('SameSite=Strict');
     expect(v).toContain('Path=/');
     expect(v).not.toContain('Domain=');
   });

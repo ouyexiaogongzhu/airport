@@ -45,14 +45,16 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function register(username: string, email: string, password: string, _captchaToken?: string, _captchaAnswer?: string, turnstileToken?: string) {
+  async function register(username: string, password: string, turnstileToken?: string) {
     try {
       const res = await api.post('/public/register', {
         username,
-        email,
         password,
         ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
       })
+      // Backend always returns a token (parity with login) — store it so the
+      // Bearer fallback works on cross-site frontends (pages.dev).
+      if (res.data.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
       user.value = res.data.user
       return { success: true }
     } catch (e: any) {

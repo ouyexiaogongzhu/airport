@@ -16,7 +16,7 @@ declare module '../stores/auth' {
     username: string
     init(): Promise<void>
     login(username: string, password: string): Promise<{ success: boolean; error?: string }>
-    register(username: string, email: string, password: string, captchaToken?: string, captchaAnswer?: string): Promise<{ success: boolean; error?: string }>
+    register(username: string, password: string, turnstileToken?: string): Promise<{ success: boolean; error?: string }>
     logout(): Promise<void>
   }
   export function useAuthStore(): AuthStore

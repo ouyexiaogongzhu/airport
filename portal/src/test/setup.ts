@@ -6,6 +6,20 @@ Object.defineProperty(globalThis, 'location', {
   writable: true,
 })
 
+// jsdom in this env exposes no localStorage — stub the Storage API surface
+// used by the axios interceptors (auth Bearer fallback).
+if (typeof globalThis.localStorage === 'undefined') {
+  const store = new Map<string, string>()
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => void store.clear(),
+    },
+  })
+}
+
 // Mock matchMedia
 Object.defineProperty(globalThis, 'matchMedia', {
   value: vi.fn().mockImplementation(() => ({

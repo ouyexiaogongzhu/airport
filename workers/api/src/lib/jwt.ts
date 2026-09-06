@@ -59,7 +59,8 @@ export async function verifyJwt(token: string, secret: string): Promise<Claims |
     );
     if (!ok) return null;
     const claims = JSON.parse(new TextDecoder().decode(b64urlDecode(payload))) as Claims;
-    if (typeof claims.exp === 'number' && Math.floor(Date.now() / 1000) >= claims.exp) return null;
+    // exp 必填：缺失 exp 的 token 視為無效（否則偽造的無 exp token 永不過期）
+    if (typeof claims.exp !== 'number' || Math.floor(Date.now() / 1000) >= claims.exp) return null;
     return claims;
   } catch {
     return null;

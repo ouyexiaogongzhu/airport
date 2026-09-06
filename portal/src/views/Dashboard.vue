@@ -18,7 +18,6 @@
 
       <div v-if="loading" class="loading">Loading…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
-      <div v-if="error" class="error-msg">{{ error }}</div>
 
       <div class="cards">
         <div class="card">

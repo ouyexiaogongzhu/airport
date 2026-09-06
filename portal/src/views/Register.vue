@@ -10,24 +10,12 @@
           <input v-model="username" type="text" placeholder="Choose a username" required />
         </div>
         <div class="field">
-          <label>Email</label>
-          <input v-model="email" type="email" placeholder="Enter your email" required />
-        </div>
-        <div class="field">
           <label>Password</label>
           <input v-model="password" type="password" placeholder="Create a password" required />
         </div>
         <div class="field">
           <label>Confirm Password</label>
           <input v-model="confirmPassword" type="password" placeholder="Confirm your password" required />
-        </div>
-        <div v-if="captchaQuestion" class="field captcha-field">
-          <label>Security Check</label>
-          <div class="captcha-row">
-            <span class="captcha-question">{{ captchaQuestion }}</span>
-            <input v-model="captchaAnswer" type="text" placeholder="Answer" class="captcha-input" required />
-            <button type="button" class="btn-refresh" @click="fetchCaptcha(true)" :disabled="captchaLoading">⟳</button>
-          </div>
         </div>
         <Turnstile v-model="turnstileToken" />
         <p v-if="error" class="error">{{ error }}</p>
@@ -45,46 +33,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import api from '../api/index'
 import Turnstile from '../components/Turnstile.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
 
 const username = ref('')
-const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const turnstileToken = ref('')
 const error = ref('')
 const loading = ref(false)
-
-// Captcha
-const captchaQuestion = ref('')
-const captchaToken = ref('')
-const captchaAnswer = ref('')
-const captchaLoading = ref(false)
-
-// `skipCache` is set by the refresh button so a new captcha is always
-// requested from the server.
-async function fetchCaptcha(skipCache = false) {
-  captchaLoading.value = true
-  try {
-    const res = await api.get('/captcha', { cache: skipCache ? { skipCache: true } : undefined })
-    captchaQuestion.value = res.data.question
-    captchaToken.value = res.data.token
-    captchaAnswer.value = ''
-  } catch {
-    // Captcha unavailable, allow registration without it
-    captchaQuestion.value = ''
-    captchaToken.value = ''
-  } finally {
-    captchaLoading.value = false
-  }
-}
 
 async function handleRegister() {
   error.value = ''
@@ -92,26 +54,19 @@ async function handleRegister() {
     error.value = 'Passwords do not match'
     return
   }
-  if (password.value.length < 6) {
-    error.value = 'Password must be at least 6 characters'
-    return
-  }
-  if (captchaToken.value && !captchaAnswer.value) {
-    error.value = 'Please answer the security question'
+  if (password.value.length < 8) {
+    error.value = 'Password must be at least 8 characters'
     return
   }
   loading.value = true
-  const res = await auth.register(username.value, email.value, password.value, captchaToken.value, captchaAnswer.value, turnstileToken.value)
+  const res = await auth.register(username.value, password.value, turnstileToken.value)
   loading.value = false
   if (res.success) {
     router.push('/dashboard')
   } else {
     error.value = res.error || 'Registration failed'
-    if (captchaToken.value) fetchCaptcha() // Refresh captcha on failure
   }
 }
-
-onMounted(fetchCaptcha)
 </script>
 
 <style scoped>
@@ -181,11 +136,4 @@ h1 {
 .error { color: #d93025; font-size: 0.85rem; margin: 0.5rem 0; }
 .switch { text-align: center; margin-top: 1.25rem; font-size: 0.85rem; color: #666; }
 .switch a { color: #1a73e8; text-decoration: none; font-weight: 500; }
-.captcha-field { margin-bottom: 0.5rem; }
-.captcha-row { display: flex; align-items: center; gap: 0.5rem; }
-.captcha-question { background: #f0f4ff; border: 1px solid #d0d8e8; border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.95rem; font-weight: 600; color: #333; white-space: nowrap; }
-.captcha-input { flex: 1; padding: 0.55rem 0.75rem; border: 1px solid #d0d8e8; border-radius: 6px; font-size: 0.9rem; outline: none; }
-.captcha-input:focus { border-color: #1a73e8; }
-.btn-refresh { background: transparent; border: 1px solid #d0d8e8; border-radius: 6px; padding: 0.45rem 0.65rem; font-size: 1.1rem; cursor: pointer; }
-.btn-refresh:hover { border-color: #1a73e8; color: #1a73e8; }
 </style>
