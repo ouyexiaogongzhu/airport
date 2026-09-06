@@ -24,10 +24,9 @@
   // 對齊 Go：mock 回調路由在 Go 生產常開；上 api.rfplay.uk 前評估改 "0"（hardening）
   "vars": {
     "MOCK_PAY_ENABLED": "1"
-  }
-  // 灰度 routes（對拍全綠後啟用，见 cloudflare_migration_plan.md §8-P1）：
-  // "routes": [
-  //   { "pattern": "api.rfplay.uk/api/v1/client/*", "zone_name": "rfplay.uk" },
-  //   { "pattern": "api.rfplay.uk/health", "zone_name": "rfplay.uk" }
-  // ]
+  },
+  // 正式域名：custom_domain=true 時 wrangler 自動建 DNS + 證書（首次上線，直接全量）
+  "routes": [
+    { "pattern": "api.rfplay.uk", "custom_domain": true }
+  ]
 }

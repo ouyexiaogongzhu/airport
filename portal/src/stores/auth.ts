@@ -29,9 +29,13 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string, turnstileToken?: string) {
     try {
-      const res = await api.post('/public/login', { username, password })
+      const res = await api.post('/public/login', {
+        username,
+        password,
+        ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
+      })
       user.value = res.data.user
       return { success: true }
     } catch (e: any) {
@@ -40,9 +44,14 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function register(username: string, email: string, password: string, _captchaToken?: string, _captchaAnswer?: string) {
+  async function register(username: string, email: string, password: string, _captchaToken?: string, _captchaAnswer?: string, turnstileToken?: string) {
     try {
-      const res = await api.post('/public/register', { username, email, password })
+      const res = await api.post('/public/register', {
+        username,
+        email,
+        password,
+        ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
+      })
       user.value = res.data.user
       return { success: true }
     } catch (e: any) {
