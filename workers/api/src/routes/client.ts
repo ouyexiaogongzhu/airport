@@ -63,14 +63,21 @@ async function requireJwt(c: { env: Env; req: { header: (k: string) => string | 
     });
   }
   const authHeader = c.req.header('Authorization');
+  let tokenStr: string;
   if (!authHeader) {
-    return Response.json({ error: 'missing authorization header' }, { status: 401 });
-  }
-  const idx = authHeader.indexOf(' '); // Go strings.SplitN(header, " ", 2)
-  const scheme = idx === -1 ? authHeader : authHeader.slice(0, idx);
-  const tokenStr = idx === -1 ? '' : authHeader.slice(idx + 1);
-  if (idx === -1 || scheme.toLowerCase() !== 'bearer') {
-    return Response.json({ error: 'invalid authorization header format' }, { status: 401 });
+    // Portal（純 cookie 會話）兜底：同一 JWT/密鑰，僅傳輸通道不同（Go 設計缺陷修補）
+    const m = (c.req.header('Cookie') ?? '').match(/(?:^|;\s*)session=([^;]+)/);
+    tokenStr = m ? m[1] : '';
+    if (!tokenStr) {
+      return Response.json({ error: 'missing authorization header' }, { status: 401 });
+    }
+  } else {
+    const idx = authHeader.indexOf(' '); // Go strings.SplitN(header, " ", 2)
+    const scheme = idx === -1 ? authHeader : authHeader.slice(0, idx);
+    tokenStr = idx === -1 ? '' : authHeader.slice(idx + 1);
+    if (idx === -1 || scheme.toLowerCase() !== 'bearer') {
+      return Response.json({ error: 'invalid authorization header format' }, { status: 401 });
+    }
   }
   const claims = await verifyJwt(tokenStr, secret);
   if (!claims) {

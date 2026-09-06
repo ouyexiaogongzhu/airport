@@ -55,6 +55,9 @@ export function createApp() {
     c.json({ status: 'ok', service: 'rfplay-api' }),
   );
 
+  // API 根路徑：瀏覽器直開不給 404，重定向官網
+  app.get('/', (c) => c.redirect('https://www.rfplay.uk', 302));
+
   // M1/M3 路由（M2 節點面待接入）：clientRoutes 內部路徑不含 /client 前綴
   app.route('/api/v1/client', clientRoutes());
   app.route('/api/v1', authRoutes());
