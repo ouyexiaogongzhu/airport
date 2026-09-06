@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { clientRoutes } from './routes/client';
 import { authRoutes } from './routes/auth';
 import { publicRoutes } from './routes/public';
@@ -10,6 +11,7 @@ export type Env = {
   DB: D1Database;
   CACHE: KVNamespace;
   BACKUPS: R2Bucket;
+  CORS_ORIGINS?: string;
   JWT_SECRET?: string;
   BEPUSDT_API_URL?: string;
   BEPUSDT_TOKEN?: string;
@@ -23,6 +25,31 @@ export type Env = {
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env }>();
+
+  // 對齊 Go cors middleware：白名單 + credentials；env 未配時含 localhost 與 pages.dev 生產域
+  const defaultOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'https://rfplay.uk',
+    'https://www.rfplay.uk',
+    'https://admin.rfplay.uk',
+    'https://rfplay-portal.pages.dev',
+    'https://rfplay-admin.pages.dev',
+  ];
+  app.use(
+    '*',
+    cors({
+      origin: (o, c) => {
+        const configured = (c.env.CORS_ORIGINS ?? '')
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+        const allowed = new Set(configured.length ? configured : defaultOrigins);
+        return allowed.has(o) ? o : null;
+      },
+      credentials: true,
+    }),
+  );
 
   app.get('/health', (c) =>
     c.json({ status: 'ok', service: 'rfplay-api' }),
