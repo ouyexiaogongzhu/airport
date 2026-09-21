@@ -16,7 +16,7 @@ type OrderRow = {
 
 // Go os.Getenv("MOCK_PAY_ENABLED") == "1"；Env 暂无此绑定，主线加 vars 后可去掉 cast
 function mockPayEnabled(env: Env): boolean {
-  return (env as { MOCK_PAY_ENABLED?: unknown }).MOCK_PAY_ENABLED === '1';
+  return env.MOCK_PAY_ENABLED === '1';
 }
 
 // PayPal 官方验签五元组在 HTTP headers 上，合入 body 传给合约函数（payments.ts 约定 _headers）

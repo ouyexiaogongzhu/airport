@@ -8,6 +8,7 @@ import { webRoutes } from './routes/web';
 import { adminRoutes, publicProductRoutes } from './routes/admin';
 
 export type Env = {
+  MOCK_PAY_ENABLED?: string;
   DB: D1Database;
   CACHE: KVNamespace;
   BACKUPS: R2Bucket;
@@ -66,6 +67,19 @@ export function createApp() {
   app.route('/api/v1', webRoutes());
   app.route('/api/v1', adminRoutes());
   app.route('/api/v1', publicProductRoutes());
+
+  // 統一 JSON 錯誤處理 + 結構化日誌
+  app.onError((err, c) => {
+    console.error(JSON.stringify({
+      level: "error",
+      path: c.req.path,
+      method: c.req.method,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? (err.stack ?? "").split("\n").slice(0, 5).join(" | ") : undefined,
+    }));
+    return c.json({ error: "internal server error" }, 500);
+  });
+  app.notFound((c) => c.json({ error: "not found" }, 404));
 
   return app;
 }

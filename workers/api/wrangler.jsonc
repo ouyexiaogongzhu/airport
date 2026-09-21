@@ -1,7 +1,12 @@
 {
   "name": "rfplay-api",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-01",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "traces": { "enabled": true }
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -21,9 +26,9 @@
       "bucket_name": "rfplay-backups"
     }
   ],
-  // 對齊 Go：mock 回調路由在 Go 生產常開；上 api.rfplay.uk 前評估改 "0"（hardening）
+  // security: mock 回調生產關閉（fail-closed）；本地開發在 .dev.vars 設 "1" 才開啟
   "vars": {
-    "MOCK_PAY_ENABLED": "1"
+    "MOCK_PAY_ENABLED": "0"
   },
   // 正式域名：custom_domain=true 時 wrangler 自動建 DNS + 證書（首次上線，直接全量）
   "routes": [
