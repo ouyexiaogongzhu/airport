@@ -15,10 +15,12 @@ import {
   refreshCookie,
   csrfCookie,
   clearAuthCookies,
+  clearHostOnlyAuthCookies,
 } from '../lib/cookies';
 import { randomHex } from '../lib/csrf';
 import {
   authenticate,
+  authenticateAccessCandidates,
   bumpTokenVersion,
   signTokens,
   signAccess,
@@ -38,6 +40,12 @@ async function issueAdminCookies(c: Context<AppEnv>, user: SessionUser | UserWit
   if (!secret) return null;
   const domain = c.env.COOKIE_DOMAIN;
   const t = await signTokens(user, secret, 'admin');
+  // Domain cookie 不會覆蓋舊 host-only；登入前先清，避免雙份同名 session
+  if (domain) {
+    for (const v of clearHostOnlyAuthCookies(['admin_session', 'admin_refresh', 'admin_csrf'])) {
+      c.header('Set-Cookie', v, { append: true });
+    }
+  }
   c.header('Set-Cookie', sessionCookie('admin_session', t.session, domain), { append: true });
   c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh, domain), { append: true });
   c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32), domain), { append: true });
@@ -97,14 +105,14 @@ async function revokeFromRequest(c: Context<AppEnv>, names: string[]) {
 export function authRoutes() {
   const app = new Hono<AppEnv>();
 
-  // middleware.WebAuth(cookieName)：cookie 優先，跨站前端（pages.dev）第三方 cookie
-  // 被瀏覽器丟棄 → Bearer 兜底（同 JWT/密鑰）
+  // middleware.WebAuth(cookieName)：cookie 優先，失效時再試 Bearer（同 JWT/密鑰）
   const sessionAuth = (cookieName: string) =>
     createMiddleware<AppEnv>(async (c, next) => {
       const secret = c.env.JWT_SECRET;
-      const token = (secret ? getCookie(c, cookieName) : undefined) || bearerOf(c);
-      if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-      const r = await authenticate(c.env.DB, token, secret);
+      const r = await authenticateAccessCandidates(c.env.DB, secret, [
+        secret ? getCookie(c, cookieName) : undefined,
+        bearerOf(c),
+      ]);
       if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
       c.set('userId', r.user.id);
       c.set('role', r.user.role);

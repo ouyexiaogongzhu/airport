@@ -222,6 +222,49 @@ describe('/admin/auth/validate', () => {
     expect(await ok.json()).toMatchObject({ role: 'admin', user: { id: 1, username: 'admin' } });
   });
 
+  it('過期 / 錯誤 typ 的 cookie 不得擋住有效 Bearer（COOKIE_DOMAIN 遷移常見）', async () => {
+    const { req, bearer, tokens } = setup();
+    const u = await tokens(2);
+    const a = await tokens(1);
+    const expired = await signJwt({ user_id: 2, username: 'alice', role: 'user', tv: 0 }, SECRET, -10);
+    const refreshInSession = u.refresh;
+    expect(
+      (
+        await req('/auth/validate', {
+          headers: { Cookie: `session=${expired}`, Authorization: `Bearer ${u.bearer}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await req('/auth/validate', {
+          headers: { Cookie: `session=${refreshInSession}`, Authorization: `Bearer ${u.bearer}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await req('/user/profile', {
+          headers: { Cookie: `session=${expired}`, Authorization: `Bearer ${u.bearer}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await req('/admin/auth/validate', {
+          headers: { Cookie: `admin_session=${expired}`, Authorization: `Bearer ${a.bearer}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await req('/admin/users', {
+          headers: { Cookie: `admin_session=${expired}`, ...bearer(a.bearer).headers },
+        })
+      ).status,
+    ).toBe(200);
+  });
+
   it('普通用戶 403', async () => {
     const { req, bearer, tokens } = setup();
     expect((await req('/admin/auth/validate', bearer((await tokens(2)).bearer))).status).toBe(403);

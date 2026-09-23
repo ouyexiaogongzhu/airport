@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import bcrypt from 'bcryptjs';
 import { verifyTurnstile } from '../lib/turnstile';
-import { sessionCookie, refreshCookie, csrfCookie } from '../lib/cookies';
+import { sessionCookie, refreshCookie, csrfCookie, clearHostOnlyAuthCookies } from '../lib/cookies';
 import { randomHex } from '../lib/csrf';
 import { signTokens } from '../lib/session';
 import { sanitizedUser, type UserRow } from '../lib/user';
@@ -28,6 +28,12 @@ async function issueSession(
   if (!secret) return null;
   const domain = c.env.COOKIE_DOMAIN;
   const t = await signTokens(user, secret, 'portal');
+  // Domain cookie 不會覆蓋舊 host-only；登入前先清，避免雙份同名 session
+  if (domain) {
+    for (const v of clearHostOnlyAuthCookies(['session', 'refresh', 'csrf'])) {
+      c.header('Set-Cookie', v, { append: true });
+    }
+  }
   c.header('Set-Cookie', sessionCookie('session', t.session, domain), { append: true });
   c.header('Set-Cookie', refreshCookie('refresh', t.refresh, domain), { append: true });
   c.header('Set-Cookie', csrfCookie('csrf', randomHex(32), domain), { append: true });

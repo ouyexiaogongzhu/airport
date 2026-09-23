@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
-import { authenticate } from '../lib/session';
+import { authenticateAccessCandidates } from '../lib/session';
 import { constantTimeEqual } from '../lib/csrf';
 import { sanitizedUser, isValidEmail, USER_PROFILE_COLS, type UserRow } from '../lib/user';
 import { createPaymentURL } from '../lib/payments';
@@ -37,13 +37,12 @@ export function webRoutes() {
   // middleware.WebAuth("session")（webauth.go）：cookie 缺失/驗簽失敗 → 401 SESSION_EXPIRED
   const webAuth = createMiddleware<AppEnv>(async (c, next) => {
     const secret = c.env.JWT_SECRET;
-    // 跨站前端（pages.dev）第三方 cookie 被瀏覽器丟棄 → Bearer 兜底（同 auth.ts webAuth：
-    // portal axios 攔截器對每個請求都附 localStorage Bearer，僅認 cookie 會讓 /user/* 全 401）
+    // cookie 優先；失效時再試 Bearer（勿用 cookie||bearer：過期 Domain cookie 會擋住有效 Bearer）
     const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
-    const token = (secret ? getCookie(c, 'session') : undefined) || bearer;
-    if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    // 回庫比對 token_version / status；username、role 以庫為準
-    const r = await authenticate(c.env.DB, token, secret);
+    const r = await authenticateAccessCandidates(c.env.DB, secret, [
+      secret ? getCookie(c, 'session') : undefined,
+      bearer,
+    ]);
     if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     c.set('userId', r.user.id);
     c.set('username', r.user.username);

@@ -40,14 +40,29 @@ export function csrfCookie(name: string, token: string, domain?: string): string
   return buildSetCookie(name, token, { maxAge: accessTtlForCookie(name), httpOnly: false, domain });
 }
 
+function clearOne(name: string, domain?: string): string {
+  // SameSite=None 必須帶 Secure，否則瀏覽器拒收這條 Set-Cookie
+  const parts = [`${name}=`, 'Path=/', 'Max-Age=0', 'Secure', 'SameSite=None'];
+  if (!name.includes('csrf')) parts.push('HttpOnly');
+  if (domain) parts.push(`Domain=${domain}`);
+  return parts.join('; ');
+}
+
+/**
+ * 清掉全部 auth cookie。若配了 COOKIE_DOMAIN，同時清 host-only 與 Domain 兩份：
+ * 遷移到 Domain=rfplay.uk 之前寫入的 host-only cookie 不會被 Domain 版 Set-Cookie 覆蓋，
+ * 瀏覽器會同時帶上兩份同名 cookie，getCookie 可能拿到過期那份。
+ */
 export function clearAuthCookies(domain?: string): string[] {
   const out: string[] = [];
   for (const n of ['session', 'refresh', 'csrf', 'admin_session', 'admin_refresh', 'admin_csrf']) {
-    // SameSite=None 必須帶 Secure，否則瀏覽器拒收這條 Set-Cookie
-    const parts = [`${n}=`, 'Path=/', 'Max-Age=0', 'Secure', 'SameSite=None'];
-    if (!n.includes('csrf')) parts.push('HttpOnly');
-    if (domain) parts.push(`Domain=${domain}`);
-    out.push(parts.join('; '));
+    out.push(clearOne(n)); // host-only
+    if (domain) out.push(clearOne(n, domain));
   }
   return out;
+}
+
+/** 登入/發 session 前清掉 host-only 舊 cookie，避免與 Domain=… 新 cookie 並存 */
+export function clearHostOnlyAuthCookies(names: string[]): string[] {
+  return names.map((n) => clearOne(n));
 }

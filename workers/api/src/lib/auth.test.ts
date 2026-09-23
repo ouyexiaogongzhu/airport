@@ -105,12 +105,16 @@ describe('cookies (portal 2h / admin 30d / refresh 90d)', () => {
     expect(csrfCookie('admin_csrf', 'tok')).toContain(`Max-Age=${ADMIN_SESSION_TTL}`);
   });
 
-  it('clearAuthCookies covers all 6 names', () => {
+  it('clearAuthCookies covers all 6 names (host-only; +Domain pairs when set)', () => {
     const all = clearAuthCookies();
     expect(all).toHaveLength(6);
     for (const n of ['session', 'refresh', 'csrf', 'admin_session', 'admin_refresh', 'admin_csrf']) {
       expect(all.some((v) => v.startsWith(`${n}=`))).toBe(true);
     }
+    const withDomain = clearAuthCookies('rfplay.uk');
+    expect(withDomain).toHaveLength(12);
+    expect(withDomain.filter((v) => v.includes('Domain=rfplay.uk'))).toHaveLength(6);
+    expect(withDomain.filter((v) => !v.includes('Domain='))).toHaveLength(6);
   });
 
   it('clearAuthCookies always pairs SameSite=None with Secure (browsers reject otherwise)', () => {

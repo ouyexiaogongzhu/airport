@@ -44,6 +44,28 @@ export async function authenticate(
   return checkClaims(db, claims);
 }
 
+/**
+ * Cookie 優先、Bearer 兜底；但 cookie 無效（過期 / typ=refresh / token_version 不符）時必須繼續試 Bearer。
+ * 舊邏輯 `cookie || bearer` 在「過期 Domain cookie + 有效 localStorage Bearer」時會直接 401，
+ * 表現為登入成功後立刻被前端 401 interceptor 踢回登入頁。
+ */
+export async function authenticateAccessCandidates(
+  db: D1Database,
+  secret: string | undefined,
+  candidates: Array<string | undefined | null>,
+): Promise<SessionResult> {
+  if (!secret) return { error: 'invalid' };
+  let last: SessionResult = { error: 'invalid' };
+  const seen = new Set<string>();
+  for (const raw of candidates) {
+    if (!raw || seen.has(raw)) continue;
+    seen.add(raw);
+    last = await authenticate(db, raw, secret, 'access');
+    if ('user' in last) return last;
+  }
+  return last;
+}
+
 type Signable = { id: number; username: string; role: string; token_version?: number | null };
 
 function baseClaims(user: Signable) {
