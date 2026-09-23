@@ -95,7 +95,9 @@ describe('buildClash', () => {
     );
     expect(out.body).not.toContain('JP-01');
     expect(out.body.endsWith('rules:\n  - GEOIP,CN,DIRECT\n  - MATCH,Proxy\n')).toBe(true);
-    expect(out.body).toContain('proxy-groups:\n  - name: Proxy\n    type: url-test\n    proxies:\n      - HK-01\n    url:');
+    expect(out.body).toContain(
+      'proxy-groups:\n  - name: Proxy\n    type: select\n    proxies:\n      - Auto\n      - "HK-01"\n      - DIRECT\n  - name: Auto\n    type: url-test\n    proxies:\n      - "HK-01"\n    url:',
+    );
   });
 
   it('vless 節點：無 flow / reality-opts', () => {

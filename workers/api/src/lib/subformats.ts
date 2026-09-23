@@ -60,13 +60,22 @@ export function buildClash(user: UserCreds, allNodes: NodeRow[]): FormatOutput {
 
   sb.push('proxy-groups:\n');
   sb.push('  - name: Proxy\n');
+  sb.push('    type: select\n');
+  sb.push('    proxies:\n');
+  sb.push('      - Auto\n');
+  for (const node of nodes) {
+    sb.push(`      - "${node.name ?? ''}"\n`);
+  }
+  sb.push('      - DIRECT\n');
+  sb.push('  - name: Auto\n');
   sb.push('    type: url-test\n');
   sb.push('    proxies:\n');
   for (const node of nodes) {
-    sb.push(`      - ${node.name ?? ''}\n`);
+    sb.push(`      - "${node.name ?? ''}"\n`);
   }
   sb.push('    url: http://www.gstatic.com/generate_204\n');
-  sb.push('    interval: 300\n\n');
+  sb.push('    interval: 300\n');
+  sb.push('    tolerance: 50\n\n');
 
   sb.push('rules:\n');
   sb.push('  - GEOIP,CN,DIRECT\n');
