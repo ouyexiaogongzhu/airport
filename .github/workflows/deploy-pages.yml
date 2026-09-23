@@ -1,0 +1,53 @@
+name: deploy-pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portal/**"
+      - "admin/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: portal
+            project: rfplay-portal
+          - app: admin
+            project: rfplay-admin
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install deps
+        working-directory: ${{ matrix.app }}
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        working-directory: ${{ matrix.app }}
+        env:
+          VITE_API_BASE_URL: https://api.rfplay.uk
+          VITE_SUBSCRIPTION_BASE_URL: https://api.rfplay.uk
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: d3376ef411a0e5f321acb1ee848d2ec1
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: pages deploy ${{ matrix.app }}/dist --project-name=${{ matrix.project }} --branch=main --commit-dirty=true

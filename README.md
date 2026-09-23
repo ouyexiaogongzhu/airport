@@ -82,10 +82,19 @@ npx wrangler deploy
 
 | CF Pages 项目 | 根目录 | 域名 | 构建 |
 | :--- | :--- | :--- | :--- |
-| `rfplay-portal` | `portal` | `www.rfplay.uk` | `npm ci && npm run build` |
-| `rfplay-admin` | `admin` | `admin.rfplay.uk` | `npm ci && npm run build` |
+| `rfplay-portal` | `portal` | `xv.rfplay.uk`（及 `www`） | `npm ci && npm run build` → Direct Upload |
+| `rfplay-admin` | `admin` | `xva.rfplay.uk` | 同上 |
 
-环境变量模板：`portal.env.example`、`admin.env.example`。两者都需要 `VITE_API_BASE_URL=https://api.rfplay.uk`；portal 可用 `VITE_SUBSCRIPTION_BASE_URL` 覆盖订阅链接的基址。
+**部署方式**：不依赖 Pages 的 Git 集成。`main` 上 `portal/**` 或 `admin/**` 变更时，`.github/workflows/deploy-pages.yml` 构建静态资源并用 `wrangler pages deploy` 上传（与 Worker 同一套 `CLOUDFLARE_API_TOKEN`）。也可在 Actions 里手动 `workflow_dispatch`。
+
+环境变量模板：`portal.env.example`、`admin.env.example`。CI 构建注入 `VITE_API_BASE_URL=https://api.rfplay.uk`（portal 另有 `VITE_SUBSCRIPTION_BASE_URL`）。
+
+本地救急：
+
+```bash
+cd portal && npm ci && VITE_API_BASE_URL=https://api.rfplay.uk npm run build
+npx wrangler pages deploy dist --project-name=rfplay-portal --branch=main
+```
 
 ### 节点
 
