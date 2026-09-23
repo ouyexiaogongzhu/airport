@@ -6,6 +6,7 @@ import { publicRoutes } from './routes/public';
 import { paymentRoutes } from './routes/payment';
 import { webRoutes } from './routes/web';
 import { adminRoutes, publicProductRoutes } from './routes/admin';
+import { nodeRoutes } from './routes/node';
 import { runEntitlementMaintenance } from './lib/entitlement';
 
 export type Env = {
@@ -62,8 +63,9 @@ export function createApp() {
   // API 根路徑：瀏覽器直開不給 404，重定向官網
   app.get('/', (c) => c.redirect('https://www.rfplay.uk', 302));
 
-  // M1/M3 路由（M2 節點面待接入）：clientRoutes 內部路徑不含 /client 前綴
+  // clientRoutes 內部路徑不含 /client 前綴；nodeRoutes 為 daemon 節點面（HMAC 簽名）
   app.route('/api/v1/client', clientRoutes());
+  app.route('/api/v1', nodeRoutes());
   app.route('/api/v1', authRoutes());
   app.route('/api/v1', publicRoutes());
   app.route('/api/v1', paymentRoutes());

@@ -93,4 +93,4 @@
 - **JWT_SECRET 强制** — 移除所有 `dev-secret` fallback；缺环境变量时 manager 拒绝启动。
 - **无界 sync.Map 移除** — `ratelimit.go` 中声而未用的 `rateVisitors`/`regVisitors` 删除（会无限增长）；限流状态统一在 `globalLimiter.windows`（每分钟 prune）。
 - **context 传播** — 高流量写入路径（`ReportTraffic`/`ReportNodeTraffic`）改用 `db.DB.WithContext(c.Context())`，请求取消可中断 SQL。
-- **节点部署脚本** — `deploy/node-reality/deploy-node.sh`、`deploy/node-cf-ws/deploy-node-cf-ws.sh`：安装 Xray + rfplay-daemon + 两个 systemd unit，daemon 拉配置→写 `/var/lib/rfplay/xray.json`→重启 xray→上报流量。
+- **节点部署脚本** — `deploy/node-cf-ws/deploy-node-cf-ws.sh`（Reality 脚本已删除）：安装 Xray + rfplay-daemon + cloudflared（Tunnel token 注册为服务），daemon 拉配置→写 `/var/lib/rfplay/xray.json`→拉起并守护 xray→经 StatsService 上报流量。

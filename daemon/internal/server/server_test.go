@@ -105,7 +105,7 @@ func TestStatusEndpoint(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	// node_id should be 1 from DefaultConfig
+	// node_id comes from the manager's config response
 	if body["node_id"] != float64(1) {
 		t.Errorf("expected node_id=1, got %v", body["node_id"])
 	}

@@ -7,8 +7,8 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { authenticate } from '../lib/session';
 import { constantTimeEqual, randomHex } from '../lib/csrf';
-import { usesVision } from '../lib/xrayuri';
-import { SERVICEABLE_SQL, activationStatement, type ProductPlan } from '../lib/entitlement';
+import { activationStatement, type ProductPlan } from '../lib/entitlement';
+import { buildNodeXrayConfig, type NodeConfigRow } from '../lib/nodeconfig';
 import type { Env } from '../index';
 
 type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
@@ -60,7 +60,8 @@ const USER_COLS =
   'traffic_limit_bytes, traffic_used_bytes, expire_time, rate_limit_bps, traffic_period_start, ' +
   'vless_uuid, created_at, updated_at';
 
-// nodeJson — 對齊 Go model.Node 的 JSON 形狀：token 是 json:"-"，其餘全輸出。
+// nodeJson — token 不輸出。節點固定為 Tunnel 形態：address = 節點域名，port = 本機 Xray 端口；
+// network/security/server_name/reality_* 列已停用，不再輸出
 function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
   return {
     id: n.id,
@@ -73,12 +74,7 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
     traffic_up: n.traffic_up,
     traffic_down: n.traffic_down,
     user_id: n.user_id,
-    network: n.network,
-    security: n.security,
     ws_path: n.ws_path,
-    server_name: n.server_name,
-    reality_public_key: n.reality_public_key,
-    reality_short_id: n.reality_short_id,
     last_heartbeat: n.last_heartbeat,
     created_at: n.created_at,
     updated_at: n.updated_at,
@@ -88,44 +84,22 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
 const VALID_PROTOCOLS = new Set(['vmess', 'vless']);
 const PROTOCOL_ERROR = 'protocol must be one of: vmess, vless';
 
-// 節點傳輸層可選欄位；只收到的鍵才返回，字串 '' 存為 NULL
+// 傳輸層只剩 ws_path 可配；只收到時返回，'' 存為 NULL（即 "/"）
 function parseTransport(body: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
   const fields: Record<string, unknown> = {};
-  if (body.network !== undefined) {
-    if (body.network !== 'tcp' && body.network !== 'ws') return { error: 'network must be one of: tcp, ws' };
-    fields.network = body.network;
-  }
-  if (body.security !== undefined) {
-    if (body.security !== 'none' && body.security !== 'tls' && body.security !== 'reality') {
-      return { error: 'security must be one of: none, tls, reality' };
-    }
-    fields.security = body.security;
-  }
-  for (const key of ['ws_path', 'server_name', 'reality_public_key', 'reality_short_id'] as const) {
-    const v = body[key];
-    if (v === undefined) continue;
-    if (v !== null && typeof v !== 'string') return { error: `${key} must be a string` };
+  const v = body.ws_path;
+  if (v !== undefined) {
+    if (v !== null && typeof v !== 'string') return { error: 'ws_path must be a string' };
     const s = typeof v === 'string' ? v.trim() : '';
-    if (key === 'ws_path' && s !== '' && !s.startsWith('/')) return { error: 'ws_path must start with /' };
-    fields[key] = s === '' ? null : s;
+    if (s !== '' && !s.startsWith('/')) return { error: 'ws_path must start with /' };
+    fields.ws_path = s === '' ? null : s;
   }
   return { fields };
 }
 
 const NODE_COLS =
-  'id, name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, ' +
-  'network, security, ws_path, server_name, reality_public_key, reality_short_id, ' +
+  'id, name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, ws_path, ' +
   'last_heartbeat, created_at, updated_at';
-
-// userSetVersion — 對齊 Go userSetVersion（FNV-1a over uint64，回傳 int64 包裝值）
-function userSetVersion(userIDs: number[]): number {
-  let h = 14695981039346656037n;
-  for (const id of userIDs) {
-    h ^= BigInt(id);
-    h *= 1099511628211n;
-  }
-  return Number(BigInt.asIntN(64, h));
-}
 
 function isNonNegInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
@@ -155,11 +129,6 @@ function parseProductPlan(req: Record<string, unknown>): { fields: Record<string
     fields.description = req.description || null;
   }
   return { fields };
-}
-
-function firstNonEmpty(a: unknown, b: string): string {
-  const s = typeof a === 'string' ? a : '';
-  return s !== '' ? s : b;
 }
 
 export function adminRoutes() {
@@ -510,27 +479,15 @@ export function adminRoutes() {
       return c.json({ error: 'type must be one of: v2ray, xray' }, 400);
     }
 
-    const t = {
-      network: 'ws',
-      security: 'none',
-      ws_path: null,
-      server_name: null,
-      reality_public_key: null,
-      reality_short_id: null,
-      ...transport.fields,
-    };
+    const t = { ws_path: null, ...transport.fields };
     const now = new Date().toISOString();
     const token = 'nd_' + randomHex(32);
     const ins = await c.env.DB.prepare(
       "INSERT INTO nodes (name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, " +
-        'network, security, ws_path, server_name, reality_public_key, reality_short_id, token, created_at, updated_at) ' +
-        "VALUES (?, ?, ?, ?, ?, 'inactive', 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        'network, security, ws_path, token, created_at, updated_at) ' +
+        "VALUES (?, ?, ?, ?, ?, 'inactive', 0, 0, ?, 'ws', 'none', ?, ?, ?, ?)",
     )
-      .bind(
-        name, type, address, port, protocol, Number(body.user_id ?? 0),
-        t.network, t.security, t.ws_path, t.server_name, t.reality_public_key, t.reality_short_id,
-        token, now, now,
-      )
+      .bind(name, type, address, port, protocol, Number(body.user_id ?? 0), t.ws_path, token, now, now)
       .run();
     if ((ins.meta.changes ?? 0) === 0) return c.json({ error: 'failed to create node' }, 500);
 
@@ -645,24 +602,16 @@ export function adminRoutes() {
     return c.json({ token });
   });
 
-  // GenerateNodeConfig：逐字移植 node_config.go BuildNodeXrayConfig（省略進程內 per-node
-  // 快取 —— Workers isolate 間不共享記憶體，快取需 KV/DO，且 Go 快取僅是效能層不影響形狀）。
+  // 預覽節點 Xray 配置（與 daemon 拉取的 config 相同；只讀，不記心跳）
   app.get('/admin/nodes/:id/config', ...guard, async (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid node id' }, 400);
-    const node = await c.env.DB.prepare(
-      'SELECT id, address, port, protocol, status, network, security, ws_path, server_name, reality_short_id FROM nodes WHERE id = ?',
-    ).bind(id).first<Record<string, unknown>>();
+    const node = await c.env.DB.prepare('SELECT id, port, protocol, ws_path, status FROM nodes WHERE id = ?')
+      .bind(id)
+      .first<NodeConfigRow>();
     if (!node) return c.json({ error: 'node not found' }, 404);
     if (node.status !== 'active') return c.json({ error: 'NODE_DISABLED' }, 403);
-
-    const config = await buildNodeXrayConfig(c.env.DB, node);
-    // Touch heartbeat（非致命；Go 用 UpdateColumn 避免 bump updated_at）
-    await c.env.DB.prepare('UPDATE nodes SET last_heartbeat = ? WHERE id = ?')
-      .bind(new Date().toISOString(), id)
-      .run();
-
-    return c.json(config);
+    return c.json(await buildNodeXrayConfig(c.env.DB, node, Math.floor(Date.now() / 1000)));
   });
 
   // ── Traffic（traffic.go）──────────────────────────────────────────────────
@@ -830,97 +779,6 @@ export function adminRoutes() {
   });
 
   return app;
-}
-
-// buildNodeXrayConfig — 逐字移植 node_config.go buildNodeXrayConfigUncached
-async function buildNodeXrayConfig(db: D1Database, node: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const nowUnix = Math.floor(Date.now() / 1000);
-  const users = await db
-    .prepare(`SELECT id, vless_uuid FROM users WHERE ${SERVICEABLE_SQL} ORDER BY id`)
-    .bind(nowUnix)
-    .all<{ id: number; vless_uuid: string | null }>();
-
-  const address = String(node.address ?? '');
-  const serverName = firstNonEmpty(node.server_name, address);
-
-  const network = firstNonEmpty(node.network, 'tcp');
-  const flow = usesVision(String(node.protocol ?? ''), { network, security: String(node.security ?? '') }) ? 'xtls-rprx-vision' : '';
-
-  const clients: Record<string, unknown>[] = [];
-  const userIDs: number[] = [];
-  for (const u of users.results) {
-    // ensureUserCredentials：vless_uuid 缺失時記憶體內補 UUIDv4（對齊 Go：此路徑不回寫 DB）
-    const vlessUUID = u.vless_uuid || crypto.randomUUID();
-    if (vlessUUID === '') continue;
-    clients.push({ id: vlessUUID, flow });
-    userIDs.push(u.id);
-  }
-
-  const streamSettings: Record<string, unknown> = { network };
-  switch (node.security) {
-    case 'tls':
-      streamSettings.security = 'tls';
-      streamSettings.tlsSettings = {
-        certificates: [{ certificateFile: '/etc/xray/tls.crt', keyFile: '/etc/xray/tls.key' }],
-      };
-      break;
-    case 'reality':
-      streamSettings.security = 'reality';
-      streamSettings.realitySettings = {
-        show: false,
-        dest: `${serverName}:443`,
-        xver: 0,
-        serverNames: [serverName],
-        privateKey: '', // filled by the node operator via env XRAY_REALITY_PRIVATE_KEY
-        shortIds: [firstNonEmpty(node.reality_short_id, '')],
-        maxTimeDiff: 0,
-        minClientVer: '',
-        maxClientVer: '',
-        handshake: null,
-        decryption: 'none',
-        settings: null,
-      };
-      break;
-    default:
-      streamSettings.security = 'none';
-  }
-  if (network === 'ws') {
-    const path = firstNonEmpty(node.ws_path, '/');
-    streamSettings.wsSettings = { path, headers: { Host: serverName } };
-  }
-
-  const inbound = {
-    tag: `in-${String(node.protocol)}`,
-    port: node.port,
-    protocol: node.protocol,
-    settings: { clients, decryption: 'none', fallbacks: [] },
-    streamSettings,
-  };
-
-  const config: Record<string, unknown> = {
-    log: { loglevel: 'info', access: '/var/log/xray/access.log', error: '/var/log/xray/error.log' },
-    inbounds: [inbound],
-    outbounds: [{ protocol: 'freedom', tag: 'direct' }],
-    routing: {
-      domainStrategy: 'IPIfNonMatch',
-      rules: [{ type: 'field', inboundTag: [`in-${String(node.protocol)}`], outboundTag: 'direct' }],
-    },
-    stats: {},
-    policy: {
-      levels: {
-        '0': {
-          handshake: 4,
-          connIdle: 300,
-          uplinkOnly: 1,
-          downlinkOnly: 1,
-          statsUserUplink: true,
-          statsUserDownlink: true,
-        },
-      },
-    },
-  };
-  config._meta = { node_id: node.id, user_ids: userIDs, version: userSetVersion(userIDs) };
-  return config;
 }
 
 // publicProductRoutes — GET /products（product.go ListActiveProducts，無鑑權）

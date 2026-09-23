@@ -1,39 +1,27 @@
 // vless / vmess 分享鏈接生成（shadowsocks、trojan 已下線，見遷移方案 §16）
+// 節點唯一形態：客戶端連 Cloudflare 邊緣，address = 節點域名，443 + tls + ws，host/sni = 域名；
+// 無 Vision flow（WS 上不可用）。nodes.port 是節點本機 Xray 端口，不出現在鏈接裡。
 
 export type NodeRow = {
   name: string | null;
   address: string | null;
-  port: number | null;
   protocol: string | null;
-  reality_public_key: string | null;
-  reality_short_id: string | null;
-  network?: string | null;
-  security?: string | null;
   ws_path?: string | null;
-  server_name?: string | null;
 };
 
+export const CLIENT_PORT = 443;
+
 export type Transport = {
-  network: string;
-  security: string;
   host: string;
   path: string;
 };
 
-// 與 admin buildNodeXrayConfig 同一套默認值，保證客戶端鏈接與節點 inbound 一致
+// 與 nodeconfig 的 ws path 默認值一致
 export function nodeTransport(node: NodeRow): Transport {
-  const address = node.address ?? '';
   return {
-    network: node.network || 'tcp',
-    security: node.security || 'none',
-    host: node.server_name || address,
+    host: node.address ?? '',
     path: node.ws_path || '/',
   };
-}
-
-// Vision 只能跑在 TCP + TLS/REALITY 上；WS（含 Cloudflare CDN）必須留空
-export function usesVision(protocol: string | null | undefined, t: Pick<Transport, 'network' | 'security'>): boolean {
-  return protocol === 'vless' && t.network === 'tcp' && (t.security === 'tls' || t.security === 'reality');
 }
 
 export type UserCreds = {
@@ -80,18 +68,17 @@ export function encodeNodeToURI(node: NodeRow, user: UserCreds): string {
 // v2rayN 分享格式，鍵按字母序輸出
 function encodeVmess(node: NodeRow, user: UserCreds): string {
   const t = nodeTransport(node);
-  const tls = t.security === 'tls';
   const data = JSON.stringify({
     add: node.address ?? '',
     aid: 0,
-    host: t.network === 'ws' ? t.host : '',
+    host: t.host,
     id: user.vless_uuid ?? '',
-    net: t.network,
-    path: t.network === 'ws' ? t.path : '',
-    port: node.port ?? 0,
+    net: 'ws',
+    path: t.path,
+    port: CLIENT_PORT,
     ps: node.name ?? '',
-    sni: tls ? t.host : '',
-    tls: tls ? 'tls' : '',
+    sni: t.host,
+    tls: 'tls',
     type: 'none',
     v: '2',
   });
@@ -100,31 +87,17 @@ function encodeVmess(node: NodeRow, user: UserCreds): string {
 
 // query 參數按鍵序輸出
 function encodeVless(node: NodeRow, user: UserCreds): string {
-  const addr = node.address ?? '';
   const t = nodeTransport(node);
   const q = queryEscape;
-  const params: [string, string][] = [];
-  // 舊節點可能只填了 Reality 公鑰而 security 仍是默認 none
-  const reality = t.security === 'reality' || (t.security !== 'tls' && !!node.reality_public_key);
-  if (reality) {
-    params.push(
-      ['flow', 'xtls-rprx-vision'],
-      ['fp', 'chrome'],
-      ['pbk', node.reality_public_key ?? ''],
-      ['security', 'reality'],
-      ['sid', node.reality_short_id ?? ''],
-      ['sni', t.host],
-      ['type', 'tcp'],
-    );
-  } else {
-    params.push(['encryption', 'none']);
-    if (usesVision('vless', t)) params.push(['flow', 'xtls-rprx-vision']);
-    if (t.security === 'tls') params.push(['fp', 'chrome']);
-    if (t.network === 'ws') params.push(['host', t.host], ['path', t.path]);
-    params.push(['security', t.security]);
-    if (t.security === 'tls') params.push(['sni', t.host]);
-    params.push(['type', t.network]);
-  }
+  const params: [string, string][] = [
+    ['encryption', 'none'],
+    ['fp', 'chrome'],
+    ['host', t.host],
+    ['path', t.path],
+    ['security', 'tls'],
+    ['sni', t.host],
+    ['type', 'ws'],
+  ];
   const qs = params.map(([k, v]) => `${k}=${q(v)}`).join('&');
-  return `vless://${user.vless_uuid ?? ''}@${addr}:${node.port ?? 0}?${qs}#${q(node.name ?? '')}`;
+  return `vless://${user.vless_uuid ?? ''}@${node.address ?? ''}:${CLIENT_PORT}?${qs}#${q(node.name ?? '')}`;
 }

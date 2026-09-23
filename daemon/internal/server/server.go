@@ -14,6 +14,7 @@ import (
 type Syncer interface {
 	GetLocalNodes() ([]sync.NodeConfig, error)
 	LastSyncResult() (*sync.SyncResult, error)
+	NodeID() uint
 }
 
 // HealthResponse is returned by the health endpoint.
@@ -89,7 +90,7 @@ func (s *Server) healthHandler(c *fiber.Ctx) error {
 func (s *Server) statusHandler(c *fiber.Ctx) error {
 	lastSync, _ := s.syncer.LastSyncResult()
 	return c.JSON(StatusResponse{
-		NodeID:   s.cfg.NodeID,
+		NodeID:   s.syncer.NodeID(),
 		LastSync: lastSync,
 	})
 }

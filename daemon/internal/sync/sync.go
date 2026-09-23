@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,19 +15,29 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
 )
 
+// defaultAPIPort is the Xray StatsService port used when the manager's config
+// does not carry _meta.api_port.
+const defaultAPIPort = 10085
+
 // Syncer handles periodic synchronisation of the node's Xray configuration from
-// the Manager API, applies it to the local Xray-core process, and reports
-// per-user traffic back to the Manager.
+// the Manager API, applies it to the local Xray-core process (and keeps that
+// process running), and reports per-user traffic back to the Manager.
 type Syncer struct {
-	cfg    *config.Config
-	client *http.Client
-	stopCh chan struct{}
+	cfg      *config.Config
+	client   *http.Client
+	stopCh   chan struct{}
+	stopOnce sync.Once
+
+	// xrayMu serialises starting/stopping the xray process.
+	xrayMu sync.Mutex
 
 	mu           sync.Mutex
 	lastConfig   map[string]interface{}
@@ -41,10 +52,21 @@ type Syncer struct {
 	lastAppliedVersion int64
 	// running tracks whether the managed xray process is considered up.
 	running bool
-	// xrayCmd is the currently managed xray process, if any.
-	xrayCmd *exec.Cmd
-	// lastTraffic is the last cumulative traffic snapshot per user id.
-	lastTraffic map[uint]TrafficDelta
+	// stopping is set by Stop so crashed xray is not relaunched.
+	stopping bool
+	// xrayCmd is the currently managed xray process, if any; xrayDone is
+	// closed once that process has exited.
+	xrayCmd  *exec.Cmd
+	xrayDone chan struct{}
+	// nodeID is taken from the manager's config response.
+	nodeID uint
+	// apiPort is the StatsService port of the running xray config.
+	apiPort int
+	// pending holds traffic read from xray (counters are reset on read) that
+	// the manager has not acknowledged yet; it is merged into the next report.
+	pending map[uint]TrafficDelta
+	// queryStats reads and resets per-user counters; replaceable in tests.
+	queryStats func() (map[uint]TrafficDelta, error)
 }
 
 // NodeConfig is the node metadata derived from the last synced Xray config.
@@ -62,7 +84,7 @@ type NodeConfig struct {
 	Users       int    `json:"users"`
 }
 
-// TrafficDelta is a per-user cumulative traffic snapshot.
+// TrafficDelta is per-user traffic in bytes.
 type TrafficDelta struct {
 	Upload   int64
 	Download int64
@@ -79,14 +101,16 @@ type SyncResult struct {
 
 // NewSyncer creates a new Syncer.
 func NewSyncer(cfg *config.Config) *Syncer {
-	return &Syncer{
+	s := &Syncer{
 		cfg: cfg,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		stopCh:      make(chan struct{}),
-		lastTraffic: make(map[uint]TrafficDelta),
+		stopCh:  make(chan struct{}),
+		pending: make(map[uint]TrafficDelta),
 	}
+	s.queryStats = s.queryXrayStats
+	return s
 }
 
 // Start begins the periodic sync loop. Runs until Stop() is called.
@@ -114,41 +138,62 @@ func (s *Syncer) Start() {
 	}
 }
 
-// Stop signals the sync loop to stop.
+// Stop signals the sync loop to stop and terminates the managed xray process.
+// Safe to call more than once.
 func (s *Syncer) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.stopping = true
+		s.mu.Unlock()
+		close(s.stopCh)
+
+		s.xrayMu.Lock()
+		s.stopXrayLocked()
+		s.xrayMu.Unlock()
+	})
+}
+
+// NodeID returns the node id reported by the manager (0 before the first
+// successful config pull).
+func (s *Syncer) NodeID() uint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nodeID
 }
 
 // Sync performs a single sync: fetch config, apply to xray, report traffic.
+// Traffic is reported even when fetching or applying the config fails, so
+// usage keeps being accounted for while the manager is unreachable.
 func (s *Syncer) Sync() error {
+	var syncErr error
 	cfg, err := s.fetchConfig()
 	if err != nil {
+		syncErr = fmt.Errorf("fetch config: %w", err)
+	} else {
 		s.mu.Lock()
-		s.lastError = err
-		s.lastSyncTime = time.Now()
+		s.nodeID = cfg.NodeID
 		s.mu.Unlock()
-		return fmt.Errorf("fetch config: %w", err)
+		if err := s.applyConfig(cfg.Config); err != nil {
+			syncErr = fmt.Errorf("apply config: %w", err)
+		}
 	}
 
-	if err := s.applyConfig(cfg.Config); err != nil {
-		s.mu.Lock()
-		s.lastError = err
-		s.lastSyncTime = time.Now()
-		s.mu.Unlock()
-		return fmt.Errorf("apply config: %w", err)
-	}
-
-	if err := s.reportTraffic(cfg.NodeID); err != nil {
-		log.Printf("[sync] traffic report failed (non-fatal): %v", err)
+	if err := s.reportTraffic(); err != nil {
+		log.Printf("[sync] traffic report failed (kept for next report): %v", err)
 	}
 
 	s.mu.Lock()
-	s.lastConfig = cfg.Config
-	s.lastName = cfg.Name
 	s.lastSyncTime = time.Now()
-	s.lastError = nil
+	s.lastError = syncErr
+	if syncErr == nil {
+		s.lastConfig = cfg.Config
+		s.lastName = cfg.Name
+	}
 	s.mu.Unlock()
 
+	if syncErr != nil {
+		return syncErr
+	}
 	log.Printf("[sync] synced node config %q (node_id=%d)", cfg.Name, cfg.NodeID)
 	return nil
 }
@@ -191,6 +236,9 @@ func (s *Syncer) fetchConfig() (*nodeConfigResponse, error) {
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return nil, fmt.Errorf("parse response: %w (body: %s)", err, string(body))
 	}
+	if cfg.Config == nil {
+		return nil, fmt.Errorf("manager response has no config (body: %s)", string(body))
+	}
 	return &cfg, nil
 }
 
@@ -218,11 +266,13 @@ func nodeHMACSecret(token string) []byte {
 }
 
 // applyConfig writes the Xray config to disk and reloads the local Xray process.
-// If the config is unchanged, no write or restart is triggered.
+// If the config is unchanged, no write or restart is triggered. When the
+// restart fails the config is not recorded as applied, so the next sync
+// retries it.
 func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 	// Fast path: _meta.version is a stable fingerprint derived by the manager
-	// from the active user id set, so an equal version implies identical
-	// content. When it matches the last applied version we can skip
+	// from the user set and node transport, so an equal version implies
+	// identical content. When it matches the last applied version we can skip
 	// marshalling the whole config and writing it again.
 	version, hasVersion := configVersion(cfg)
 	if hasVersion {
@@ -266,14 +316,14 @@ func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 
 	log.Printf("[sync] config changed, reloading xray (%d bytes)", len(data))
 
-	// Reload: if the daemon is configured with an xray binary path, restart it.
 	if s.cfg.XrayBinary != "" {
+		if out, err := exec.Command(s.cfg.XrayBinary, "run", "-test", "-c", configPath).CombinedOutput(); err != nil {
+			return fmt.Errorf("xray rejected config (keeping current process): %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		// Restarting resets xray's counters: collect them first.
+		s.collectTraffic()
 		if err := s.restartXray(configPath); err != nil {
-			log.Printf("[sync] xray restart failed (continuing): %v", err)
-		} else {
-			s.mu.Lock()
-			s.running = true
-			s.mu.Unlock()
+			return fmt.Errorf("restart xray: %w", err)
 		}
 	} else {
 		log.Printf("[sync] no xray binary configured; config written to %s", configPath)
@@ -284,15 +334,16 @@ func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 	if hasVersion {
 		s.lastAppliedVersion = version
 	}
+	s.apiPort = metaAPIPort(cfg)
 	s.mu.Unlock()
 	return nil
 }
 
 // configVersion extracts the stable _meta.version from a config map. The
-// version is derived by the manager from the active user id set, so it is
-// unchanged whenever the config content is unchanged. It returns ok=false
-// when the config carries no version; callers then fall back to content
-// hashing.
+// version is derived by the manager from the user set and node transport, so
+// it is unchanged whenever the config content is unchanged. It returns
+// ok=false when the config carries no version; callers then fall back to
+// content hashing.
 func configVersion(cfg map[string]interface{}) (int64, bool) {
 	meta, ok := cfg["_meta"].(map[string]interface{})
 	if !ok {
@@ -310,84 +361,152 @@ func configVersion(cfg map[string]interface{}) (int64, bool) {
 	return 0, false
 }
 
+// metaAPIPort extracts _meta.api_port (the StatsService port), falling back
+// to defaultAPIPort.
+func metaAPIPort(cfg map[string]interface{}) int {
+	if meta, ok := cfg["_meta"].(map[string]interface{}); ok {
+		if p, ok := meta["api_port"].(float64); ok && p > 0 && p < 65536 {
+			return int(p)
+		}
+	}
+	return defaultAPIPort
+}
+
 // restartXray stops any running xray process and starts a new one with the
 // freshly-written config.
 func (s *Syncer) restartXray(configPath string) error {
-	// Stop existing process.
-	s.stopXray()
-	time.Sleep(500 * time.Millisecond)
+	s.xrayMu.Lock()
+	defer s.xrayMu.Unlock()
+	s.stopXrayLocked()
+	return s.startXrayLocked(configPath)
+}
 
-	cmd := exec.Command(s.cfg.XrayBinary, "-c", configPath)
+// startXrayLocked launches xray and a watcher that relaunches it if it exits
+// unexpectedly. Caller must hold xrayMu.
+func (s *Syncer) startXrayLocked(configPath string) error {
+	s.mu.Lock()
+	stopping := s.stopping
+	s.mu.Unlock()
+	if stopping {
+		return fmt.Errorf("syncer is stopping")
+	}
+
+	cmd := exec.Command(s.cfg.XrayBinary, "run", "-c", configPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start xray: %w", err)
 	}
+	done := make(chan struct{})
 
 	s.mu.Lock()
 	s.xrayCmd = cmd
+	s.xrayDone = done
+	s.running = true
 	s.mu.Unlock()
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("[sync] xray process exited: %v", err)
-			s.mu.Lock()
-			s.running = false
-			s.mu.Unlock()
-		}
-	}()
+
+	go s.watchXray(cmd, done, configPath)
 	return nil
 }
 
-// stopXray terminates the managed xray process, if any.
-func (s *Syncer) stopXray() {
+// watchXray waits for the xray process to exit. If it was not stopped on
+// purpose (restart or Stop), it is relaunched with exponential backoff.
+func (s *Syncer) watchXray(cmd *exec.Cmd, done chan struct{}, configPath string) {
+	err := cmd.Wait()
+	close(done)
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.xrayCmd != nil && s.xrayCmd.Process != nil {
-		_ = s.xrayCmd.Process.Kill()
+	current := s.xrayCmd == cmd
+	if current {
 		s.xrayCmd = nil
+		s.xrayDone = nil
+		s.running = false
+	}
+	unexpected := current && !s.stopping
+	s.mu.Unlock()
+	if !unexpected {
+		return
+	}
+
+	log.Printf("[sync] xray exited unexpectedly: %v; relaunching", err)
+	backoff := 2 * time.Second
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-time.After(backoff):
+		}
+
+		s.xrayMu.Lock()
+		s.mu.Lock()
+		skip := s.xrayCmd != nil || s.stopping
+		s.mu.Unlock()
+		if skip {
+			// Already restarted by a sync, or shutting down.
+			s.xrayMu.Unlock()
+			return
+		}
+		startErr := s.startXrayLocked(configPath)
+		s.xrayMu.Unlock()
+		if startErr == nil {
+			log.Printf("[sync] xray relaunched")
+			return
+		}
+		log.Printf("[sync] xray relaunch failed: %v", startErr)
+		if backoff < time.Minute {
+			backoff *= 2
+		}
 	}
 }
 
-// reportTraffic reads the node's own traffic accounting and reports deltas to
-// the Manager. The daemon reads cumulative totals from a stats file that the
-// xray process writes (see deploy docs); if unavailable, it reports nothing.
-func (s *Syncer) reportTraffic(nodeID uint) error {
-	stats, err := s.readTrafficStats()
-	if err != nil || len(stats) == 0 {
-		return nil // no traffic accounting yet — nothing to report
+// stopXrayLocked terminates the managed xray process, if any, and waits for
+// it to exit so its ports are free. Caller must hold xrayMu.
+func (s *Syncer) stopXrayLocked() {
+	s.mu.Lock()
+	cmd, done := s.xrayCmd, s.xrayDone
+	s.xrayCmd = nil
+	s.xrayDone = nil
+	s.running = false
+	s.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return
 	}
 
-	// Compute deltas from the last snapshot.
-	type reportEntry struct {
-		UserID        uint  `json:"user_id"`
-		UploadBytes   int64 `json:"upload_bytes"`
-		DownloadBytes int64 `json:"download_bytes"`
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-done:
+		return
+	case <-time.After(5 * time.Second):
 	}
-	var entries []reportEntry
+	_ = cmd.Process.Kill()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("[sync] xray (pid %d) did not exit after kill", cmd.Process.Pid)
+	}
+}
+
+// reportEntry is one user's traffic in a report.
+type reportEntry struct {
+	UserID        uint  `json:"user_id"`
+	UploadBytes   int64 `json:"upload_bytes"`
+	DownloadBytes int64 `json:"download_bytes"`
+}
+
+// reportTraffic reads per-user traffic from xray (reset on read), adds it to
+// the pending totals and reports them. Pending totals are only cleared after
+// the manager acknowledges the report, so a failed report is retried with
+// the next one.
+func (s *Syncer) reportTraffic() error {
+	s.collectTraffic()
+
 	s.mu.Lock()
-	for userID, cur := range stats {
-		prev, ok := s.lastTraffic[userID]
-		if !ok {
-			// First snapshot: establish the baseline without reporting.
-			s.lastTraffic[userID] = cur
-			continue
+	nodeID := s.nodeID
+	entries := make([]reportEntry, 0, len(s.pending))
+	for userID, d := range s.pending {
+		if d.Upload > 0 || d.Download > 0 {
+			entries = append(entries, reportEntry{UserID: userID, UploadBytes: d.Upload, DownloadBytes: d.Download})
 		}
-		up := cur.Upload
-		down := cur.Download
-		if cur.Upload < prev.Upload {
-			up = cur.Upload // counter reset
-		} else {
-			up = cur.Upload - prev.Upload
-		}
-		if cur.Download < prev.Download {
-			down = cur.Download
-		} else {
-			down = cur.Download - prev.Download
-		}
-		if up > 0 || down > 0 {
-			entries = append(entries, reportEntry{UserID: userID, UploadBytes: up, DownloadBytes: down})
-		}
-		s.lastTraffic[userID] = cur
 	}
 	s.mu.Unlock()
 
@@ -419,37 +538,122 @@ func (s *Syncer) reportTraffic(nodeID uint) error {
 		return fmt.Errorf("manager report returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	// Subtract what was reported; anything collected meanwhile stays pending.
+	s.mu.Lock()
+	for _, e := range entries {
+		d := s.pending[e.UserID]
+		d.Upload -= e.UploadBytes
+		d.Download -= e.DownloadBytes
+		if d.Upload <= 0 && d.Download <= 0 {
+			delete(s.pending, e.UserID)
+		} else {
+			s.pending[e.UserID] = d
+		}
+	}
+	s.mu.Unlock()
+
 	log.Printf("[sync] reported traffic for %d user(s)", len(entries))
 	return nil
 }
 
-// readTrafficStats reads cumulative per-user traffic from the xray stats file.
-// The file is written by the xray process or a companion exporter; its format
-// is {"user_id": {"upload": N, "download": N}, ...}.
-func (s *Syncer) readTrafficStats() (map[uint]TrafficDelta, error) {
-	path := filepath.Join(s.cfg.DataDir, "traffic_stats.json")
-	data, err := os.ReadFile(path)
+// collectTraffic moves xray's per-user counters into the pending totals.
+func (s *Syncer) collectTraffic() {
+	stats, err := s.queryStats()
 	if err != nil {
-		return nil, err
+		log.Printf("[sync] read xray stats: %v", err)
+		return
+	}
+	if len(stats) == 0 {
+		return
+	}
+	s.mu.Lock()
+	for userID, d := range stats {
+		p := s.pending[userID]
+		p.Upload += d.Upload
+		p.Download += d.Download
+		s.pending[userID] = p
+	}
+	s.mu.Unlock()
+}
+
+// queryXrayStats reads and resets per-user counters through xray's
+// StatsService (`xray api statsquery -reset`). Returns nothing when no xray
+// process is managed.
+func (s *Syncer) queryXrayStats() (map[uint]TrafficDelta, error) {
+	if s.cfg.XrayBinary == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	running := s.running
+	port := s.apiPort
+	s.mu.Unlock()
+	if !running {
+		return nil, nil
+	}
+	if port == 0 {
+		port = defaultAPIPort
 	}
 
-	var raw map[string]struct {
-		Upload   int64 `json:"upload"`
-		Download int64 `json:"download"`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, s.cfg.XrayBinary, "api", "statsquery",
+		"-server=127.0.0.1:"+strconv.Itoa(port), "-pattern=user>>>", "-reset").Output()
+	if err != nil {
+		return nil, fmt.Errorf("xray api statsquery: %w", err)
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, err
-	}
+	return parseStatsQuery(out)
+}
 
-	out := make(map[uint]TrafficDelta, len(raw))
-	for k, v := range raw {
-		id, err := strconv.ParseUint(k, 10, 64)
-		if err != nil {
+// parseStatsQuery parses `xray api statsquery` JSON output:
+//
+//	{"stat": [{"name": "user>>>u12>>>traffic>>>uplink", "value": "1024"}, ...]}
+//
+// value is an int64 that protojson may encode as a string or omit when zero.
+// Client emails are "u{user_id}" (set by the manager's node config).
+func parseStatsQuery(out []byte) (map[uint]TrafficDelta, error) {
+	stats := make(map[uint]TrafficDelta)
+	if len(bytes.TrimSpace(out)) == 0 {
+		return stats, nil
+	}
+	var resp struct {
+		Stat []struct {
+			Name  string          `json:"name"`
+			Value json.RawMessage `json:"value"`
+		} `json:"stat"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse statsquery output: %w", err)
+	}
+	for _, st := range resp.Stat {
+		parts := strings.Split(st.Name, ">>>")
+		if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" || !strings.HasPrefix(parts[1], "u") {
 			continue
 		}
-		out[uint(id)] = TrafficDelta{Upload: v.Upload, Download: v.Download}
+		id, err := strconv.ParseUint(parts[1][1:], 10, 64)
+		if err != nil || id == 0 {
+			continue
+		}
+		raw := strings.Trim(strings.TrimSpace(string(st.Value)), `"`)
+		var v int64
+		if raw != "" && raw != "null" {
+			v, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				log.Printf("[sync] skipping stat %s: bad value %q", st.Name, raw)
+				continue
+			}
+		}
+		d := stats[uint(id)]
+		switch parts[3] {
+		case "uplink":
+			d.Upload += v
+		case "downlink":
+			d.Download += v
+		default:
+			continue
+		}
+		stats[uint(id)] = d
 	}
-	return out, nil
+	return stats, nil
 }
 
 // configHash returns a quick content hash for change detection.
@@ -507,8 +711,8 @@ func (s *Syncer) GetLocalNodes() ([]NodeConfig, error) {
 		return nil, os.ErrNotExist
 	}
 	meta, _ := s.lastConfig["_meta"].(map[string]interface{})
-	nodeID := uint(0)
-	if id, ok := meta["node_id"].(float64); ok {
+	nodeID := s.nodeID
+	if id, ok := meta["node_id"].(float64); ok && nodeID == 0 {
 		nodeID = uint(id)
 	}
 	userIDs, _ := meta["user_ids"].([]interface{})

@@ -19,8 +19,8 @@
               <th>ID</th>
               <th>Name</th>
               <th>Type</th>
-              <th>Address</th>
-              <th>Port</th>
+              <th>Domain</th>
+              <th>Local Port</th>
               <th>Protocol</th>
               <th>Status</th>
               <th>Traffic</th>
@@ -42,6 +42,7 @@
               </td>
               <td class="actions-cell">
                 <button class="btn-tiny" @click="openEditModal(n)">✏️ Edit</button>
+                <button class="btn-tiny" @click="rotateToken(n)">🔑 Token</button>
                 <button class="btn-tiny danger" @click="deleteNode(n)">🗑️ Delete</button>
               </td>
             </tr>
@@ -71,14 +72,15 @@
           </div>
           <div class="field-row">
             <div class="field field-wide">
-              <label>Address</label>
-              <input v-model="form.address" type="text" placeholder="IP or domain" required />
+              <label>Domain</label>
+              <input v-model="form.address" type="text" placeholder="node-xx.rfplay.uk" required />
             </div>
             <div class="field field-narrow">
-              <label>Port</label>
-              <input v-model.number="form.port" type="number" min="1" max="65535" placeholder="443" required />
+              <label>Local Port</label>
+              <input v-model.number="form.port" type="number" min="1" max="65535" placeholder="20001" required />
             </div>
           </div>
+          <p class="hint">Clients connect to the domain on 443 (TLS at Cloudflare); cloudflared forwards to Xray on 127.0.0.1:&lt;Local Port&gt;.</p>
           <div class="field-row">
             <div class="field">
               <label>Protocol</label>
@@ -93,42 +95,9 @@
               <input v-model.number="form.user_id" type="number" min="0" placeholder="1" required />
             </div>
           </div>
-          <div class="field-row">
-            <div class="field">
-              <label>Network</label>
-              <select v-model="form.network">
-                <option value="ws">ws</option>
-                <option value="tcp">tcp</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Security</label>
-              <select v-model="form.security">
-                <option value="none">none</option>
-                <option value="tls">tls</option>
-                <option value="reality">reality</option>
-              </select>
-            </div>
-          </div>
-          <div class="field-row">
-            <div v-if="form.network === 'ws'" class="field">
-              <label>WS Path</label>
-              <input v-model="form.ws_path" type="text" placeholder="/vcheck/" />
-            </div>
-            <div class="field">
-              <label>{{ form.security === 'reality' ? 'Reality SNI' : 'Host / SNI' }}</label>
-              <input v-model="form.server_name" type="text" placeholder="Defaults to address" />
-            </div>
-          </div>
-          <div v-if="form.security === 'reality'" class="field-row">
-            <div class="field field-wide">
-              <label>Reality Public Key</label>
-              <input v-model="form.reality_public_key" type="text" />
-            </div>
-            <div class="field">
-              <label>Short ID</label>
-              <input v-model="form.reality_short_id" type="text" />
-            </div>
+          <div class="field">
+            <label>WS Path</label>
+            <input v-model="form.ws_path" type="text" placeholder="/ (default)" />
           </div>
           <div v-if="editingNode" class="field">
             <label>Status</label>
@@ -166,12 +135,8 @@ interface Node {
   traffic_up: number
   traffic_down: number
   user_id: number
-  network?: string | null
-  security?: string | null
   ws_path?: string | null
-  server_name?: string | null
-  reality_public_key?: string | null
-  reality_short_id?: string | null
+  last_heartbeat?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -186,8 +151,7 @@ const editingNode = ref<Node | null>(null)
 
 function emptyForm() {
   return {
-    name: '', type: '', address: '', port: 443, protocol: '', user_id: 1, status: 'inactive',
-    network: 'ws', security: 'tls', ws_path: '', server_name: '', reality_public_key: '', reality_short_id: '',
+    name: '', type: 'xray', address: '', port: 20001, protocol: '', user_id: 1, status: 'inactive', ws_path: '',
   }
 }
 
@@ -196,18 +160,6 @@ const form = ref(emptyForm())
 function resetForm() {
   form.value = emptyForm()
   formError.value = ''
-}
-
-function transportPayload() {
-  const reality = form.value.security === 'reality'
-  return {
-    network: form.value.network,
-    security: form.value.security,
-    ws_path: form.value.network === 'ws' ? form.value.ws_path : '',
-    server_name: form.value.server_name,
-    reality_public_key: reality ? form.value.reality_public_key : '',
-    reality_short_id: reality ? form.value.reality_short_id : '',
-  }
 }
 
 function openAddModal() {
@@ -225,12 +177,7 @@ function openEditModal(n: Node) {
     protocol: n.protocol,
     user_id: n.user_id,
     status: n.status,
-    network: n.network || 'tcp',
-    security: n.security || 'none',
     ws_path: n.ws_path ?? '',
-    server_name: n.server_name ?? '',
-    reality_public_key: n.reality_public_key ?? '',
-    reality_short_id: n.reality_short_id ?? '',
   }
   editingNode.value = n
   showModal.value = true
@@ -284,7 +231,7 @@ async function saveNode() {
         port: form.value.port,
         protocol: form.value.protocol,
         status: form.value.status,
-        ...transportPayload(),
+        ws_path: form.value.ws_path,
       }
       const res = await api.put(`/admin/nodes/${editingNode.value.id}`, payload)
       const updated = res.data
@@ -298,7 +245,7 @@ async function saveNode() {
         port: form.value.port,
         protocol: form.value.protocol,
         user_id: form.value.user_id,
-        ...transportPayload(),
+        ws_path: form.value.ws_path,
       }
       const res = await api.post('/admin/nodes', payload)
       const created = res.data
@@ -309,6 +256,17 @@ async function saveNode() {
     formError.value = e.response?.data?.error || e.message || 'Failed to save node'
   } finally {
     saving.value = false
+  }
+}
+
+// The daemon token is only returned once; rotating invalidates the running daemon
+async function rotateToken(n: Node) {
+  if (!confirm(`Generate a new daemon token for "${n.name}"? The current token stops working immediately.`)) return
+  try {
+    const res = await api.post(`/admin/nodes/${n.id}/token`)
+    window.prompt('Node token (use with deploy-node-cf-ws.sh --node-token):', res.data.token)
+  } catch (e: any) {
+    error.value = e.response?.data?.error || e.message || 'Failed to generate token'
   }
 }
 
@@ -397,4 +355,5 @@ onMounted(loadNodes)
 .field select { cursor: pointer; }
 .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.5rem; }
 .error { color: #ff6b6b; font-size: 0.85rem; margin: 0.5rem 0; }
+.hint { color: #888; font-size: 0.78rem; margin: -0.5rem 0 1rem; }
 </style>

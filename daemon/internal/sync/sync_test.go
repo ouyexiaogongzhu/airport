@@ -365,7 +365,20 @@ func BenchmarkApplyConfig_Unchanged(b *testing.B) {
 	}
 }
 
-func TestReportTraffic_Delta(t *testing.T) {
+// fakeStats returns a queryStats replacement that yields each queued result
+// once (xray counters are reset on read), then nothing.
+func fakeStats(queue ...map[uint]TrafficDelta) func() (map[uint]TrafficDelta, error) {
+	return func() (map[uint]TrafficDelta, error) {
+		if len(queue) == 0 {
+			return nil, nil
+		}
+		next := queue[0]
+		queue = queue[1:]
+		return next, nil
+	}
+}
+
+func TestReportTraffic_ReportsResetCounters(t *testing.T) {
 	var gotBody map[string]interface{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/node/test-token/traffic/report" {
@@ -379,46 +392,167 @@ func TestReportTraffic_Delta(t *testing.T) {
 	defer ts.Close()
 
 	syncer := setupTestSyncer(t, ts.URL)
+	syncer.nodeID = 7
+	syncer.queryStats = fakeStats(map[uint]TrafficDelta{1: {Upload: 50, Download: 30}})
 
-	// First snapshot establishes the baseline; no report expected.
-	statsFile := filepath.Join(syncer.cfg.DataDir, "traffic_stats.json")
-	writeStats := func(upload, download int64) {
-		data, _ := json.Marshal(map[string]interface{}{
-			"1": map[string]int64{"upload": upload, "download": download},
-		})
-		os.WriteFile(statsFile, data, 0644)
-	}
-
-	writeStats(100, 200)
-	if err := syncer.reportTraffic(1); err != nil {
-		t.Fatalf("reportTraffic error: %v", err)
-	}
-	if gotBody != nil {
-		t.Fatal("expected no report on first snapshot (baseline only)")
-	}
-
-	// Second snapshot: delta of 50 up / 30 down should be reported.
-	gotBody = nil
-	writeStats(150, 230)
-	if err := syncer.reportTraffic(1); err != nil {
+	if err := syncer.reportTraffic(); err != nil {
 		t.Fatalf("reportTraffic error: %v", err)
 	}
 	if gotBody == nil {
-		t.Fatal("expected a report on second snapshot")
+		t.Fatal("expected a report")
 	}
-	nodeID := int(gotBody["node_id"].(float64))
-	if nodeID != 1 {
-		t.Fatalf("expected node_id 1, got %d", nodeID)
+	if nodeID := int(gotBody["node_id"].(float64)); nodeID != 7 {
+		t.Fatalf("expected node_id 7, got %d", nodeID)
 	}
 	traffic := gotBody["traffic"].([]interface{})
 	if len(traffic) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(traffic))
 	}
 	entry := traffic[0].(map[string]interface{})
-	if entry["upload_bytes"].(float64) != 50 {
-		t.Errorf("expected upload delta 50, got %v", entry["upload_bytes"])
+	if entry["user_id"].(float64) != 1 || entry["upload_bytes"].(float64) != 50 || entry["download_bytes"].(float64) != 30 {
+		t.Errorf("unexpected entry %v", entry)
 	}
-	if entry["download_bytes"].(float64) != 30 {
-		t.Errorf("expected download delta 30, got %v", entry["download_bytes"])
+	if len(syncer.pending) != 0 {
+		t.Errorf("expected pending cleared after successful report, got %v", syncer.pending)
 	}
+
+	// Nothing new: no report.
+	gotBody = nil
+	if err := syncer.reportTraffic(); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	if gotBody != nil {
+		t.Errorf("expected no report without new traffic, got %v", gotBody)
+	}
+}
+
+func TestReportTraffic_KeepsPendingOnFailure(t *testing.T) {
+	fail := true
+	var gotBody map[string]interface{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	syncer := setupTestSyncer(t, ts.URL)
+	syncer.queryStats = fakeStats(
+		map[uint]TrafficDelta{1: {Upload: 100, Download: 200}},
+		map[uint]TrafficDelta{1: {Upload: 1, Download: 2}, 2: {Upload: 0, Download: 5}},
+	)
+
+	if err := syncer.reportTraffic(); err == nil {
+		t.Fatal("expected error from failing manager")
+	}
+	if got := syncer.pending[1]; got.Upload != 100 || got.Download != 200 {
+		t.Fatalf("expected traffic kept pending after failure, got %+v", got)
+	}
+
+	fail = false
+	if err := syncer.reportTraffic(); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	byUser := map[int][2]float64{}
+	for _, e := range gotBody["traffic"].([]interface{}) {
+		m := e.(map[string]interface{})
+		byUser[int(m["user_id"].(float64))] = [2]float64{m["upload_bytes"].(float64), m["download_bytes"].(float64)}
+	}
+	if byUser[1] != [2]float64{101, 202} || byUser[2] != [2]float64{0, 5} {
+		t.Errorf("expected failed batch merged into next report, got %v", byUser)
+	}
+	if len(syncer.pending) != 0 {
+		t.Errorf("expected pending cleared, got %v", syncer.pending)
+	}
+}
+
+func TestSync_ReportsTrafficWhenConfigFetchFails(t *testing.T) {
+	reported := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/node/test-token/traffic/report":
+			reported = true
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer ts.Close()
+
+	syncer := setupTestSyncer(t, ts.URL)
+	syncer.queryStats = fakeStats(map[uint]TrafficDelta{3: {Upload: 1, Download: 1}})
+	if err := syncer.Sync(); err == nil {
+		t.Fatal("expected Sync error when config fetch fails")
+	}
+	if !reported {
+		t.Error("expected traffic to be reported even though config fetch failed")
+	}
+}
+
+func TestSync_TakesNodeIDFromResponse(t *testing.T) {
+	sample := nodeConfigResponse{NodeID: 42, Name: "n", Protocol: "vless", Config: sampleConfig()}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sample)
+	}))
+	defer ts.Close()
+
+	syncer := setupTestSyncer(t, ts.URL)
+	if err := syncer.Sync(); err != nil {
+		t.Fatalf("Sync() error: %v", err)
+	}
+	if syncer.NodeID() != 42 {
+		t.Errorf("expected node id 42 from config response, got %d", syncer.NodeID())
+	}
+}
+
+func TestParseStatsQuery(t *testing.T) {
+	out := []byte(`{
+  "stat": [
+    {"name": "user>>>u12>>>traffic>>>uplink", "value": "1024"},
+    {"name": "user>>>u12>>>traffic>>>downlink", "value": 4096},
+    {"name": "user>>>u3>>>traffic>>>downlink"},
+    {"name": "inbound>>>api>>>traffic>>>uplink", "value": "9"},
+    {"name": "user>>>alice>>>traffic>>>uplink", "value": "9"}
+  ]
+}`)
+	stats, err := parseStatsQuery(out)
+	if err != nil {
+		t.Fatalf("parseStatsQuery error: %v", err)
+	}
+	if got := stats[12]; got.Upload != 1024 || got.Download != 4096 {
+		t.Errorf("unexpected stats for user 12: %+v", got)
+	}
+	if got := stats[3]; got.Upload != 0 || got.Download != 0 {
+		t.Errorf("expected zero for omitted value, got %+v", got)
+	}
+	if len(stats) != 2 {
+		t.Errorf("expected 2 users, got %v", stats)
+	}
+
+	empty, err := parseStatsQuery([]byte("  \n"))
+	if err != nil || len(empty) != 0 {
+		t.Errorf("expected empty result for empty output, got %v, %v", empty, err)
+	}
+	if _, err := parseStatsQuery([]byte("not json")); err == nil {
+		t.Error("expected error for invalid output")
+	}
+}
+
+func TestMetaAPIPort(t *testing.T) {
+	if p := metaAPIPort(map[string]interface{}{"_meta": map[string]interface{}{"api_port": float64(10086)}}); p != 10086 {
+		t.Errorf("expected 10086, got %d", p)
+	}
+	if p := metaAPIPort(sampleConfig()); p != defaultAPIPort {
+		t.Errorf("expected default port, got %d", p)
+	}
+}
+
+func TestStop_Idempotent(t *testing.T) {
+	syncer := setupTestSyncer(t, "http://localhost:9999")
+	syncer.Stop()
+	syncer.Stop()
 }

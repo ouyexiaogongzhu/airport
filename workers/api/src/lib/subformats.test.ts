@@ -1,5 +1,4 @@
-// 純函數契約測試 — 期望值由 Go 邏輯手工推導（base64 以標準編碼核算）
-// 注意：本檔不在 tsc --noEmit 範圍驗收內（vitest 由主線統一跑）
+// 純函數契約測試 — 節點固定為 Cloudflare Tunnel 形態：ws + tls + 443，host/sni = 節點域名
 import { describe, expect, it } from 'vitest';
 import { buildClash, buildSingbox, buildV2ray, goJSON } from './subformats';
 import { encodeNodeToURI, queryEscape } from './xrayuri';
@@ -13,54 +12,27 @@ const user: UserCreds = {
 const vmessNode: NodeRow = {
   name: 'HK-01',
   address: 'hk.example.com',
-  port: 443,
   protocol: 'vmess',
-  reality_public_key: null,
-  reality_short_id: null,
-  network: 'ws',
-  security: 'tls',
   ws_path: '/vcheck/',
-  server_name: null,
-};
-
-const vlessWsNode: NodeRow = {
-  name: 'SG-CF',
-  address: 'sg.example.com',
-  port: 443,
-  protocol: 'vless',
-  reality_public_key: null,
-  reality_short_id: null,
-  network: 'ws',
-  security: 'tls',
-  ws_path: '/vcheck/',
-  server_name: 'cdn.example.com',
 };
 
 const vlessNode: NodeRow = {
-  name: 'US-01',
-  address: 'us.example.com',
-  port: 8443,
+  name: 'SG-CF',
+  address: 'sg.example.com',
   protocol: 'vless',
-  reality_public_key: 'PBK',
-  reality_short_id: 'abcd1234',
+  ws_path: '/vcheck/',
 };
 
 const ssNode: NodeRow = {
   name: 'JP-01',
   address: 'jp.example.com',
-  port: 8388,
   protocol: 'shadowsocks',
-  reality_public_key: null,
-  reality_short_id: null,
 };
 
 const trojanNode: NodeRow = {
   name: 'TW 01',
   address: 'tw.example.com',
-  port: 443,
   protocol: 'trojan',
-  reality_public_key: null,
-  reality_short_id: null,
 };
 
 describe('queryEscape（Go url.QueryEscape 語義）', () => {
@@ -71,8 +43,8 @@ describe('queryEscape（Go url.QueryEscape 語義）', () => {
   });
 });
 
-describe('encodeNodeToURI（對齊 links.go）', () => {
-  it('vmess ws+tls：帶 host/path/sni/tls，host 默認為 address', () => {
+describe('encodeNodeToURI', () => {
+  it('vmess：ws + tls + 443，host/sni 為節點域名', () => {
     const uri = encodeNodeToURI(vmessNode, user);
     expect(uri.startsWith('vmess://')).toBe(true);
     expect(atob(uri.slice('vmess://'.length))).toBe(
@@ -80,22 +52,14 @@ describe('encodeNodeToURI（對齊 links.go）', () => {
     );
   });
 
-  it('vless reality：舊節點只填公鑰、security 未設也按 Reality 生成', () => {
+  it('vless：ws + tls + 443，無 flow', () => {
     expect(encodeNodeToURI(vlessNode, user)).toBe(
-      'vless://11111111-2222-3333-4444-555555555555@us.example.com:8443?flow=xtls-rprx-vision&fp=chrome&pbk=PBK&security=reality&sid=abcd1234&sni=us.example.com&type=tcp#US-01',
+      'vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&fp=chrome&host=sg.example.com&path=%2Fvcheck%2F&security=tls&sni=sg.example.com&type=ws#SG-CF',
     );
   });
 
-  it('vless reality：sni 用 server_name（偽裝域名）', () => {
-    expect(encodeNodeToURI({ ...vlessNode, security: 'reality', server_name: 'www.microsoft.com' }, user)).toContain(
-      '&sni=www.microsoft.com&type=tcp',
-    );
-  });
-
-  it('vless ws+tls（Cloudflare）：無 flow，帶 host/path/sni', () => {
-    expect(encodeNodeToURI(vlessWsNode, user)).toBe(
-      'vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&fp=chrome&host=cdn.example.com&path=%2Fvcheck%2F&security=tls&sni=cdn.example.com&type=ws#SG-CF',
-    );
+  it('ws_path 為空時默認 /', () => {
+    expect(encodeNodeToURI({ ...vlessNode, ws_path: null }, user)).toContain('&path=%2F&');
   });
 
   it('已下線的 shadowsocks / trojan 回空字串', () => {
@@ -108,7 +72,7 @@ describe('encodeNodeToURI（對齊 links.go）', () => {
   });
 });
 
-describe('buildV2ray（對齊 handleV2rayFormat）', () => {
+describe('buildV2ray', () => {
   it('URI 以 \\n 相接後整體 base64', () => {
     const out = buildV2ray(user, [vmessNode, vlessNode]);
     expect(out?.ct).toBe('text/plain; charset=utf-8');
@@ -122,7 +86,7 @@ describe('buildV2ray（對齊 handleV2rayFormat）', () => {
   });
 });
 
-describe('buildClash（對齊 handleClashFormat）', () => {
+describe('buildClash', () => {
   it('vmess 節點 YAML 逐字一致；已下線協議不進 proxies 與 proxy-groups', () => {
     const out = buildClash(user, [vmessNode, ssNode]);
     expect(out.ct).toBe('text/yaml; charset=utf-8');
@@ -132,6 +96,15 @@ describe('buildClash（對齊 handleClashFormat）', () => {
     expect(out.body).not.toContain('JP-01');
     expect(out.body.endsWith('rules:\n  - GEOIP,CN,DIRECT\n  - MATCH,Proxy\n')).toBe(true);
     expect(out.body).toContain('proxy-groups:\n  - name: Proxy\n    type: url-test\n    proxies:\n      - HK-01\n    url:');
+  });
+
+  it('vless 節點：無 flow / reality-opts', () => {
+    const out = buildClash(user, [vlessNode]);
+    expect(out.body).toContain(
+      '  - name: "SG-CF"\n    type: vless\n    server: sg.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    tls: true\n    servername: sg.example.com\n    network: ws\n',
+    );
+    expect(out.body).not.toContain('flow');
+    expect(out.body).not.toContain('reality');
   });
 });
 

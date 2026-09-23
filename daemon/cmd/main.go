@@ -58,29 +58,36 @@ func main() {
 		log.Fatalf("[daemon] invalid configuration: %v", err)
 	}
 
-	log.Printf("[daemon] node_id=%d manager=%s listen=%s sync=%s",
-		cfg.NodeID, cfg.ManagerURL, cfg.ListenAddr, cfg.SyncInterval)
+	log.Printf("[daemon] manager=%s listen=%s sync=%s (node_id comes from the manager)",
+		cfg.ManagerURL, cfg.ListenAddr, cfg.SyncInterval)
 
-	// Create syncer
+	// Create syncer; Stop also terminates the managed xray process.
 	syncer := sync.NewSyncer(cfg)
 	go syncer.Start()
-	defer syncer.Stop()
 
 	// Create HTTP server
 	srv := server.New(cfg, syncer)
+	srvErr := make(chan error, 1)
 	go func() {
-		if err := srv.Start(); err != nil {
-			log.Fatalf("[daemon] server error: %v", err)
-		}
+		srvErr <- srv.Start()
 	}()
-	defer srv.Shutdown()
 
 	log.Println("[daemon] all services started")
 
-	// Wait for shutdown signal
+	// Wait for shutdown signal (or a server failure). Cleanup runs explicitly
+	// so xray is never left behind as an orphan.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	exitCode := 0
+	select {
+	case <-sigCh:
+		log.Println("[daemon] shutting down...")
+	case err := <-srvErr:
+		log.Printf("[daemon] server error: %v", err)
+		exitCode = 1
+	}
 
-	log.Println("[daemon] shutting down...")
+	_ = srv.Shutdown()
+	syncer.Stop()
+	os.Exit(exitCode)
 }

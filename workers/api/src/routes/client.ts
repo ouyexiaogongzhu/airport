@@ -47,8 +47,7 @@ function creds(user: UserRow): UserCreds {
 
 async function getActiveNodes(env: Env): Promise<NodeRow[]> {
   const { results } = await env.DB.prepare(
-    'SELECT name, address, port, protocol, reality_public_key, reality_short_id, network, security, ws_path, server_name ' +
-      "FROM nodes WHERE status = 'active' ORDER BY id",
+    "SELECT name, address, protocol, ws_path FROM nodes WHERE status = 'active' ORDER BY id",
   ).all<NodeRow>();
   return results ?? [];
 }
@@ -112,7 +111,7 @@ export function clientRoutes() {
   r.get('/links/:token/clash', (c) => handleLinks(c, c.req.param('token'), 'clash'));
   r.get('/links/:token/singbox', (c) => handleLinks(c, c.req.param('token'), 'singbox'));
 
-  // QR 暫緩（§8-P1.5）
+  // QR 暫緩：portal 前端自行生成
   r.get('/links/:token/qrcode', (c) => c.json({ error: 'NOT_IMPLEMENTED' }, 501));
 
   // GET /client/subscription — GetSubscription（Bearer JWT）
@@ -179,7 +178,7 @@ async function handleLinks(c: { env: Env; req: { param: (k: string) => string };
     return Response.json({ error: 'INVALID_TOKEN' }, { status: 401 });
   }
 
-  // ponytail: Go 的進程內 10s/IP 限流已刪（方案 §5，多 isolate 下本就失效），由 CF WAF 規則承接
+  // ponytail: Go 的進程內 10s/IP 限流已刪（多 isolate 下本就失效），由 CF WAF 規則承接
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE client_token = ? LIMIT 1')
     .bind(token)
     .first<UserRow>();

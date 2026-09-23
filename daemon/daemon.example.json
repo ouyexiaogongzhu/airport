@@ -1,5 +1,4 @@
 {
-  "node_id": 1,
   "manager_url": "https://api.rfplay.uk",
   "manager_token": "nd_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   "sync_interval": 60000000000,

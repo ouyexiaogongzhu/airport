@@ -3,32 +3,41 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
 )
 
+// Default placeholder values. Validate rejects them so a daemon started
+// without a real config file fails fast instead of polling a bogus manager.
+const (
+	DefaultManagerURL   = "http://localhost:8080"
+	DefaultManagerToken = "default-token"
+)
+
 // Config holds the daemon configuration.
 type Config struct {
-	NodeID         uint          `json:"node_id"`
-	ManagerURL     string        `json:"manager_url"`
-	ManagerToken   string        `json:"manager_token"`
-	SyncInterval   time.Duration `json:"sync_interval"`
-	DataDir        string        `json:"data_dir"`
-	ListenAddr     string        `json:"listen_addr"`
-	LogLevel       string        `json:"log_level"`
-	XrayBinary     string        `json:"xray_binary,omitempty"`
+	// NodeID is informational only: the authoritative node id comes from the
+	// manager's config response (the token identifies the node).
+	NodeID       uint          `json:"node_id,omitempty"`
+	ManagerURL   string        `json:"manager_url"`
+	ManagerToken string        `json:"manager_token"`
+	SyncInterval time.Duration `json:"sync_interval"`
+	DataDir      string        `json:"data_dir"`
+	ListenAddr   string        `json:"listen_addr"`
+	LogLevel     string        `json:"log_level"`
+	XrayBinary   string        `json:"xray_binary,omitempty"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		NodeID:       1,
-		ManagerURL:   "http://localhost:8080",
-		ManagerToken: "default-token",
+		ManagerURL:   DefaultManagerURL,
+		ManagerToken: DefaultManagerToken,
 		SyncInterval: 30 * time.Second,
 		DataDir:      "/var/lib/airport",
-		ListenAddr:   ":9090",
+		ListenAddr:   "127.0.0.1:9090",
 		LogLevel:     "info",
 	}
 }
@@ -72,17 +81,30 @@ func SaveConfig(cfg *Config, path string) error {
 
 // Validate checks that required fields are set. Returns an error if invalid.
 func (c *Config) Validate() error {
-	if c.NodeID <= 0 {
-		return fmt.Errorf("node_id must be positive")
-	}
 	if c.ManagerURL == "" {
 		return fmt.Errorf("manager_url is required")
+	}
+	if c.ManagerURL == DefaultManagerURL {
+		return fmt.Errorf("manager_url is still the default %q; set the real manager URL", DefaultManagerURL)
 	}
 	if c.ManagerToken == "" {
 		return fmt.Errorf("manager_token is required")
 	}
+	if c.ManagerToken == DefaultManagerToken {
+		return fmt.Errorf("manager_token is still the default %q; set the node token from the admin panel", DefaultManagerToken)
+	}
 	if c.SyncInterval <= 0 {
 		return fmt.Errorf("sync_interval must be positive")
+	}
+	// The local HTTP API has no authentication, so it must never be exposed.
+	host, _, err := net.SplitHostPort(c.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("invalid listen_addr %q: %w", c.ListenAddr, err)
+	}
+	if host != "localhost" {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			return fmt.Errorf("listen_addr must bind a loopback address (e.g. 127.0.0.1:9090), got %q", c.ListenAddr)
+		}
 	}
 	return nil
 }
