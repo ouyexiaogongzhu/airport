@@ -19,6 +19,23 @@ const vmessNode: NodeRow = {
   protocol: 'vmess',
   reality_public_key: null,
   reality_short_id: null,
+  network: 'ws',
+  security: 'tls',
+  ws_path: '/vcheck/',
+  server_name: null,
+};
+
+const vlessWsNode: NodeRow = {
+  name: 'SG-CF',
+  address: 'sg.example.com',
+  port: 443,
+  protocol: 'vless',
+  reality_public_key: null,
+  reality_short_id: null,
+  network: 'ws',
+  security: 'tls',
+  ws_path: '/vcheck/',
+  server_name: 'cdn.example.com',
 };
 
 const vlessNode: NodeRow = {
@@ -57,15 +74,29 @@ describe('queryEscape（Go url.QueryEscape 語義）', () => {
 });
 
 describe('encodeNodeToURI（對齊 links.go）', () => {
-  it('vmess：鍵序排序 JSON + 標準 base64', () => {
-    expect(encodeNodeToURI(vmessNode, user)).toBe(
-      'vmess://eyJhZGQiOiJoay5leGFtcGxlLmNvbSIsImFpZCI6MCwiaWQiOiIxMTExMTExMS0yMjIyLTMzMzMtNDQ0NC01NTU1NTU1NTU1NTUiLCJuZXQiOiJ3cyIsInBzIjoiSEstMDEiLCJwb3J0Ijo0NDMsInR5cGUiOiJub25lIiwidiI6IjIifQ==',
+  it('vmess ws+tls：帶 host/path/sni/tls，host 默認為 address', () => {
+    const uri = encodeNodeToURI(vmessNode, user);
+    expect(uri.startsWith('vmess://')).toBe(true);
+    expect(atob(uri.slice('vmess://'.length))).toBe(
+      '{"add":"hk.example.com","aid":0,"host":"hk.example.com","id":"11111111-2222-3333-4444-555555555555","net":"ws","path":"/vcheck/","port":443,"ps":"HK-01","sni":"hk.example.com","tls":"tls","type":"none","v":"2"}',
     );
   });
 
-  it('vless：query 參數按鍵序 flow,fp,pbk,security,sid,sni,type', () => {
+  it('vless reality：舊節點只填公鑰、security 未設也按 Reality 生成', () => {
     expect(encodeNodeToURI(vlessNode, user)).toBe(
       'vless://11111111-2222-3333-4444-555555555555@us.example.com:8443?flow=xtls-rprx-vision&fp=chrome&pbk=PBK&security=reality&sid=abcd1234&sni=us.example.com&type=tcp#US-01',
+    );
+  });
+
+  it('vless reality：sni 用 server_name（偽裝域名）', () => {
+    expect(encodeNodeToURI({ ...vlessNode, security: 'reality', server_name: 'www.microsoft.com' }, user)).toContain(
+      '&sni=www.microsoft.com&type=tcp',
+    );
+  });
+
+  it('vless ws+tls（Cloudflare）：無 flow，帶 host/path/sni', () => {
+    expect(encodeNodeToURI(vlessWsNode, user)).toBe(
+      'vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&fp=chrome&host=cdn.example.com&path=%2Fvcheck%2F&security=tls&sni=cdn.example.com&type=ws#SG-CF',
     );
   });
 
@@ -90,8 +121,8 @@ describe('buildV2ray（對齊 handleV2rayFormat）', () => {
   it('URI 以 \\n 相接後整體 base64', () => {
     const out = buildV2ray(user, [vmessNode, vlessNode]);
     expect(out?.ct).toBe('text/plain; charset=utf-8');
-    expect(out?.body).toBe(
-      'dm1lc3M6Ly9leUpoWkdRaU9pSm9heTVsZUdGdGNHeGxMbU52YlNJc0ltRnBaQ0k2TUN3aWFXUWlPaUl4TVRFeE1URXhNUzB5TWpJeUxUTXpNek10TkRRME5DMDFOVFUxTlRVMU5UVTFOVFVpTENKdVpYUWlPaUozY3lJc0luQnpJam9pU0VzdE1ERWlMQ0p3YjNKMElqbzBORE1zSW5SNWNHVWlPaUp1YjI1bElpd2lkaUk2SWpJaWZRPT0Kdmxlc3M6Ly8xMTExMTExMS0yMjIyLTMzMzMtNDQ0NC01NTU1NTU1NTU1NTVAdXMuZXhhbXBsZS5jb206ODQ0Mz9mbG93PXh0bHMtcnByeC12aXNpb24mZnA9Y2hyb21lJnBiaz1QQksmc2VjdXJpdHk9cmVhbGl0eSZzaWQ9YWJjZDEyMzQmc25pPXVzLmV4YW1wbGUuY29tJnR5cGU9dGNwI1VTLTAx',
+    expect(atob(out?.body ?? '')).toBe(
+      `${encodeNodeToURI(vmessNode, user)}\n${encodeNodeToURI(vlessNode, user)}`,
     );
   });
 
@@ -104,9 +135,8 @@ describe('buildClash（對齊 handleClashFormat）', () => {
   it('vmess+ss 節點的 YAML 片段逐字一致', () => {
     const out = buildClash(user, [vmessNode, ssNode]);
     expect(out.ct).toBe('text/yaml; charset=utf-8');
-    // uuid = %08x-%04x-%04x-%04x-%012x of (1,0,0,0,100)
     expect(out.body).toContain(
-      '  - name: "HK-01"\n    type: vmess\n    server: hk.example.com\n    port: 443\n    uuid: 00000001-0000-0000-0000-000000000064\n    alterId: 0\n    cipher: auto\n    tls: true\n    network: ws\n    ws-path: /ws\n    ws-headers:\n      Host: hk.example.com\n\n',
+      '  - name: "HK-01"\n    type: vmess\n    server: hk.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    alterId: 0\n    cipher: auto\n    tls: true\n    servername: hk.example.com\n    network: ws\n    ws-opts:\n      path: "/vcheck/"\n      headers:\n        Host: hk.example.com\n\n',
     );
     expect(out.body).toContain(
       '    cipher: aes-256-gcm\n    password: "rf-1-pass"\n\n',

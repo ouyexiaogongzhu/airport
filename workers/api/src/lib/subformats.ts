@@ -1,6 +1,6 @@
 // 對齊 manager/internal/handler/subscription.go — 三種訂閱格式（逐字節契約）
 // Go json.Marshal 對 map 按鍵排序且 HTML 轉義 <>&；物件以插入序模擬，字串後處理轉義。
-import { b64std, encodeNodeToURI, type NodeRow, type UserCreds } from './xrayuri';
+import { b64std, encodeNodeToURI, nodeTransport, usesVision, type NodeRow, type UserCreds } from './xrayuri';
 
 export type FormatKind = 'v2ray' | 'clash' | 'singbox';
 
@@ -25,15 +25,6 @@ export function buildV2ray(user: UserCreds, nodes: NodeRow[]): FormatOutput | nu
   return { ct: 'text/plain; charset=utf-8', body: b64std(lines.join('\n')) };
 }
 
-function hexPad(n: number, width: number): string {
-  return n.toString(16).padStart(width, '0');
-}
-
-// Go: fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", user.ID, 0, 0, 0, user.ID*100)
-function clashUUID(user: UserCreds): string {
-  return `${hexPad(user.id, 8)}-0000-0000-0000-${hexPad(user.id * 100, 12)}`;
-}
-
 export function buildClash(user: UserCreds, nodes: NodeRow[]): FormatOutput {
   const sb: string[] = [];
   sb.push('port: 7890\n');
@@ -48,28 +39,36 @@ export function buildClash(user: UserCreds, nodes: NodeRow[]): FormatOutput {
     const port = node.port ?? 0;
     switch (node.protocol) {
       case 'vmess':
+      case 'vless': {
+        const t = nodeTransport(node);
         sb.push(`  - name: "${name}"\n`);
-        sb.push('    type: vmess\n');
+        sb.push(`    type: ${node.protocol}\n`);
         sb.push(`    server: ${address}\n`);
         sb.push(`    port: ${port}\n`);
-        sb.push(`    uuid: ${clashUUID(user)}\n`);
-        sb.push('    alterId: 0\n');
-        sb.push('    cipher: auto\n');
-        sb.push('    tls: true\n');
-        sb.push('    network: ws\n');
-        sb.push('    ws-path: /ws\n');
-        sb.push(`    ws-headers:\n      Host: ${address}\n\n`);
+        sb.push(`    uuid: ${user.vless_uuid ?? ''}\n`);
+        if (node.protocol === 'vmess') {
+          sb.push('    alterId: 0\n');
+          sb.push('    cipher: auto\n');
+        }
+        if (t.security === 'reality' || (node.protocol === 'vless' && t.security !== 'tls' && node.reality_public_key)) {
+          sb.push('    flow: xtls-rprx-vision\n');
+          sb.push('    tls: true\n');
+          sb.push(`    servername: ${t.host}\n`);
+          sb.push('    client-fingerprint: chrome\n');
+          sb.push(`    reality-opts:\n      public-key: ${node.reality_public_key ?? ''}\n      short-id: ${node.reality_short_id ?? ''}\n`);
+          sb.push('    network: tcp\n\n');
+          break;
+        }
+        if (usesVision(node.protocol, t)) sb.push('    flow: xtls-rprx-vision\n');
+        sb.push(`    tls: ${t.security === 'tls'}\n`);
+        if (t.security === 'tls') sb.push(`    servername: ${t.host}\n`);
+        sb.push(`    network: ${t.network}\n`);
+        if (t.network === 'ws') {
+          sb.push(`    ws-opts:\n      path: "${t.path}"\n      headers:\n        Host: ${t.host}\n`);
+        }
+        sb.push('\n');
         break;
-      case 'vless':
-        sb.push(`  - name: "${name}"\n`);
-        sb.push('    type: vless\n');
-        sb.push(`    server: ${address}\n`);
-        sb.push(`    port: ${port}\n`);
-        sb.push(`    uuid: ${clashUUID(user)}\n`);
-        sb.push('    flow: xtls-rprx-vision\n');
-        sb.push('    tls: true\n');
-        sb.push('    network: tcp\n\n');
-        break;
+      }
       case 'shadowsocks':
         sb.push(`  - name: "${name}"\n`);
         sb.push('    type: ss\n');

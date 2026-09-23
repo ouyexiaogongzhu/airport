@@ -7,6 +7,7 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { verifyJwt } from '../lib/jwt';
 import { constantTimeEqual, randomHex } from '../lib/csrf';
+import { usesVision } from '../lib/xrayuri';
 import type { Env } from '../index';
 
 type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
@@ -81,6 +82,30 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
     created_at: n.created_at,
     updated_at: n.updated_at,
   };
+}
+
+// 節點傳輸層可選欄位；只收到的鍵才返回，字串 '' 存為 NULL
+function parseTransport(body: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
+  const fields: Record<string, unknown> = {};
+  if (body.network !== undefined) {
+    if (body.network !== 'tcp' && body.network !== 'ws') return { error: 'network must be one of: tcp, ws' };
+    fields.network = body.network;
+  }
+  if (body.security !== undefined) {
+    if (body.security !== 'none' && body.security !== 'tls' && body.security !== 'reality') {
+      return { error: 'security must be one of: none, tls, reality' };
+    }
+    fields.security = body.security;
+  }
+  for (const key of ['ws_path', 'server_name', 'reality_public_key', 'reality_short_id'] as const) {
+    const v = body[key];
+    if (v === undefined) continue;
+    if (v !== null && typeof v !== 'string') return { error: `${key} must be a string` };
+    const s = typeof v === 'string' ? v.trim() : '';
+    if (key === 'ws_path' && s !== '' && !s.startsWith('/')) return { error: 'ws_path must start with /' };
+    fields[key] = s === '' ? null : s;
+  }
+  return { fields };
 }
 
 const NODE_COLS =
@@ -393,9 +418,11 @@ export function adminRoutes() {
   // CreateNode
   app.post('/admin/nodes', ...guard, adminCsrf, async (c) => {
     const body = await c.req
-      .json<{ name?: unknown; type?: unknown; address?: unknown; port?: unknown; protocol?: unknown; user_id?: unknown }>()
+      .json<Record<string, unknown>>()
       .catch(() => null);
     if (body === null) return c.json({ error: 'invalid request body' }, 400);
+    const transport = parseTransport(body);
+    if ('error' in transport) return c.json({ error: transport.error }, 400);
 
     const name = typeof body.name === 'string' ? body.name : '';
     const type = typeof body.type === 'string' ? body.type : '';
@@ -417,13 +444,27 @@ export function adminRoutes() {
       return c.json({ error: 'type must be one of: v2ray, xray' }, 400);
     }
 
+    const t = {
+      network: 'ws',
+      security: 'none',
+      ws_path: null,
+      server_name: null,
+      reality_public_key: null,
+      reality_short_id: null,
+      ...transport.fields,
+    };
     const now = new Date().toISOString();
     const token = 'nd_' + randomHex(32);
     const ins = await c.env.DB.prepare(
       "INSERT INTO nodes (name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, " +
-        "network, security, token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'inactive', 0, 0, ?, 'ws', 'none', ?, ?, ?)",
+        'network, security, ws_path, server_name, reality_public_key, reality_short_id, token, created_at, updated_at) ' +
+        "VALUES (?, ?, ?, ?, ?, 'inactive', 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-      .bind(name, type, address, port, protocol, Number(body.user_id ?? 0), token, now, now)
+      .bind(
+        name, type, address, port, protocol, Number(body.user_id ?? 0),
+        t.network, t.security, t.ws_path, t.server_name, t.reality_public_key, t.reality_short_id,
+        token, now, now,
+      )
       .run();
     if ((ins.meta.changes ?? 0) === 0) return c.json({ error: 'failed to create node' }, 500);
 
@@ -439,12 +480,7 @@ export function adminRoutes() {
         traffic_up: 0,
         traffic_down: 0,
         user_id: Number(body.user_id ?? 0),
-        network: 'ws',
-        security: 'none',
-        ws_path: null,
-        server_name: null,
-        reality_public_key: null,
-        reality_short_id: null,
+        ...t,
         last_heartbeat: null,
         created_at: now,
         updated_at: now,
@@ -477,7 +513,7 @@ export function adminRoutes() {
     return c.json(nodeJson(node));
   });
 
-  // UpdateNode：name/type/address/port/protocol/status 指針欄位，有值才更新
+  // UpdateNode：基本欄位 + 傳輸層欄位，有值才更新
   app.put('/admin/nodes/:id', ...guard, adminCsrf, async (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid node id' }, 400);
@@ -489,8 +525,10 @@ export function adminRoutes() {
       .json<Record<string, unknown>>()
       .catch(() => null);
     if (body === null) return c.json({ error: 'invalid request body' }, 400);
+    const transport = parseTransport(body);
+    if ('error' in transport) return c.json({ error: transport.error }, 400);
 
-    const updates: Record<string, unknown> = {};
+    const updates: Record<string, unknown> = { ...transport.fields };
     for (const key of ['name', 'type', 'address', 'protocol', 'status'] as const) {
       if (body[key] !== undefined) updates[key] = body[key];
     }
@@ -727,20 +765,22 @@ async function buildNodeXrayConfig(db: D1Database, node: Record<string, unknown>
     .bind(nowUnix)
     .all<{ id: number; vless_uuid: string | null }>();
 
+  const address = String(node.address ?? '');
+  const serverName = firstNonEmpty(node.server_name, address);
+
+  const network = firstNonEmpty(node.network, 'tcp');
+  const flow = usesVision(String(node.protocol ?? ''), { network, security: String(node.security ?? '') }) ? 'xtls-rprx-vision' : '';
+
   const clients: Record<string, unknown>[] = [];
   const userIDs: number[] = [];
   for (const u of users.results) {
     // ensureUserCredentials：vless_uuid 缺失時記憶體內補 UUIDv4（對齊 Go：此路徑不回寫 DB）
     const vlessUUID = u.vless_uuid || crypto.randomUUID();
     if (vlessUUID === '') continue;
-    clients.push({ id: vlessUUID, flow: 'xtls-rprx-vision' });
+    clients.push({ id: vlessUUID, flow });
     userIDs.push(u.id);
   }
 
-  const address = String(node.address ?? '');
-  const serverName = firstNonEmpty(node.server_name, address);
-
-  const network = firstNonEmpty(node.network, 'tcp');
   const streamSettings: Record<string, unknown> = { network };
   switch (node.security) {
     case 'tls':

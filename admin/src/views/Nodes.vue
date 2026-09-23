@@ -95,6 +95,43 @@
               <input v-model.number="form.user_id" type="number" min="0" placeholder="1" required />
             </div>
           </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Network</label>
+              <select v-model="form.network">
+                <option value="ws">ws</option>
+                <option value="tcp">tcp</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Security</label>
+              <select v-model="form.security">
+                <option value="none">none</option>
+                <option value="tls">tls</option>
+                <option value="reality">reality</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div v-if="form.network === 'ws'" class="field">
+              <label>WS Path</label>
+              <input v-model="form.ws_path" type="text" placeholder="/vcheck/" />
+            </div>
+            <div class="field">
+              <label>{{ form.security === 'reality' ? 'Reality SNI' : 'Host / SNI' }}</label>
+              <input v-model="form.server_name" type="text" placeholder="Defaults to address" />
+            </div>
+          </div>
+          <div v-if="form.security === 'reality'" class="field-row">
+            <div class="field field-wide">
+              <label>Reality Public Key</label>
+              <input v-model="form.reality_public_key" type="text" />
+            </div>
+            <div class="field">
+              <label>Short ID</label>
+              <input v-model="form.reality_short_id" type="text" />
+            </div>
+          </div>
           <div v-if="editingNode" class="field">
             <label>Status</label>
             <select v-model="form.status">
@@ -131,6 +168,12 @@ interface Node {
   traffic_up: number
   traffic_down: number
   user_id: number
+  network?: string | null
+  security?: string | null
+  ws_path?: string | null
+  server_name?: string | null
+  reality_public_key?: string | null
+  reality_short_id?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -143,11 +186,30 @@ const saving = ref(false)
 const formError = ref('')
 const editingNode = ref<Node | null>(null)
 
-const form = ref({ name: '', type: '', address: '', port: 443, protocol: '', user_id: 1, status: 'inactive' })
+function emptyForm() {
+  return {
+    name: '', type: '', address: '', port: 443, protocol: '', user_id: 1, status: 'inactive',
+    network: 'ws', security: 'tls', ws_path: '', server_name: '', reality_public_key: '', reality_short_id: '',
+  }
+}
+
+const form = ref(emptyForm())
 
 function resetForm() {
-  form.value = { name: '', type: '', address: '', port: 443, protocol: '', user_id: 1, status: 'inactive' }
+  form.value = emptyForm()
   formError.value = ''
+}
+
+function transportPayload() {
+  const reality = form.value.security === 'reality'
+  return {
+    network: form.value.network,
+    security: form.value.security,
+    ws_path: form.value.network === 'ws' ? form.value.ws_path : '',
+    server_name: form.value.server_name,
+    reality_public_key: reality ? form.value.reality_public_key : '',
+    reality_short_id: reality ? form.value.reality_short_id : '',
+  }
 }
 
 function openAddModal() {
@@ -165,6 +227,12 @@ function openEditModal(n: Node) {
     protocol: n.protocol,
     user_id: n.user_id,
     status: n.status,
+    network: n.network || 'tcp',
+    security: n.security || 'none',
+    ws_path: n.ws_path ?? '',
+    server_name: n.server_name ?? '',
+    reality_public_key: n.reality_public_key ?? '',
+    reality_short_id: n.reality_short_id ?? '',
   }
   editingNode.value = n
   showModal.value = true
@@ -218,6 +286,7 @@ async function saveNode() {
         port: form.value.port,
         protocol: form.value.protocol,
         status: form.value.status,
+        ...transportPayload(),
       }
       const res = await api.put(`/admin/nodes/${editingNode.value.id}`, payload)
       const updated = res.data
@@ -231,6 +300,7 @@ async function saveNode() {
         port: form.value.port,
         protocol: form.value.protocol,
         user_id: form.value.user_id,
+        ...transportPayload(),
       }
       const res = await api.post('/admin/nodes', payload)
       const created = res.data
