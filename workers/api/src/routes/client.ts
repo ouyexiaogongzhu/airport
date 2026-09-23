@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { Env } from '../index';
 import { verifyJwt, type Claims } from '../lib/jwt';
 import { serviceBlock } from '../lib/entitlement';
+import { checkClaims } from '../lib/session';
 import { buildFormat, goJSON, type FormatKind } from '../lib/subformats';
 import { encodeNodeToURI, type NodeRow, type UserCreds } from '../lib/xrayuri';
 
@@ -79,7 +80,13 @@ async function requireJwt(c: { env: Env; req: { header: (k: string) => string | 
     }
   }
   const claims = await verifyJwt(tokenStr, secret);
-  if (!claims) {
+  if (!claims || typeof claims.user_id !== 'number' || claims.typ === 'refresh') {
+    return Response.json({ error: 'invalid or expired token' }, { status: 401 });
+  }
+  // 吊銷（token_version 不符）→ 401；帳號非 active → 403（與 serviceBlock 同一錯誤碼）
+  const s = await checkClaims(c.env.DB, claims);
+  if ('error' in s) {
+    if (s.error === 'disabled') return Response.json({ error: 'ACCOUNT_DISABLED' }, { status: 403 });
     return Response.json({ error: 'invalid or expired token' }, { status: 401 });
   }
   return claims;

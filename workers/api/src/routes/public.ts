@@ -1,45 +1,37 @@
 // /public/register|login — 逐字移植 manager/internal/handler/auth.go Register/Login
 // 掛載點：/api/v1（對齊 cmd/server/main.go v1 group）。
-// 進程內限流（sync.Map）按遷移方案 §5 刪除 → CF WAF + Turnstile 接管。
+// 進程內限流（sync.Map）已刪除 → CF WAF + Turnstile 接管。
 // 圖形驗證碼 /captcha 已刪除 → Turnstile siteverify。
 
 import { Hono } from 'hono';
 import bcrypt from 'bcryptjs';
 import { verifyTurnstile } from '../lib/turnstile';
-import { signJwt } from '../lib/jwt';
-import { SESSION_TTL, REFRESH_TTL, sessionCookie, refreshCookie, csrfCookie } from '../lib/cookies';
+import { sessionCookie, refreshCookie, csrfCookie } from '../lib/cookies';
 import { randomHex } from '../lib/csrf';
+import { signTokens } from '../lib/session';
 import { sanitizedUser, type UserRow } from '../lib/user';
 import type { Env } from '../index';
 
 // Go bcrypt.DefaultCost == bcryptjs 預設 rounds == 10，顯式寫出以免漂移
 const BCRYPT_COST = 10;
-const BEARER_TTL = 24 * 3600; // Go generateToken: 24h
 
-type UserWithHash = UserRow & { password_hash: string };
-type Credentials = { id: number; username: string; role: string };
+type UserWithHash = UserRow & { password_hash: string; token_version: number };
+type Credentials = { id: number; username: string; role: string; token_version?: number };
 
-async function signBearer(env: Env, user: Credentials): Promise<string | null> {
-  if (!env.JWT_SECRET) return null;
-  return signJwt({ user_id: user.id, username: user.username, role: user.role }, env.JWT_SECRET, BEARER_TTL);
-}
-
-// setWebAuthCookies / setAdminAuthCookies：session(30d)+refresh(90d)+csrf(30d 非 httpOnly)
-async function issueCookieGroup(
+// setWebAuthCookies：session(30d)+refresh(90d)+csrf(30d 非 httpOnly)；
+// 回傳 Bearer(24h) 與 refresh token 供跨站前端（pages.dev）localStorage 兜底與續期
+async function issueSession(
   c: { env: Env; header: (name: 'Set-Cookie', value: string, opts?: { append?: boolean }) => void },
   user: Credentials,
-  sessionName: string,
-  refreshName: string,
-  csrfName: string,
-): Promise<boolean> {
+): Promise<{ token: string; refresh_token: string } | null> {
   const secret = c.env.JWT_SECRET;
-  if (!secret) return false;
+  if (!secret) return null;
   const domain = c.env.COOKIE_DOMAIN;
-  const base = { user_id: user.id, username: user.username, role: user.role };
-  c.header('Set-Cookie', sessionCookie(sessionName, await signJwt(base, secret, SESSION_TTL), domain), { append: true });
-  c.header('Set-Cookie', refreshCookie(refreshName, await signJwt(base, secret, REFRESH_TTL), domain), { append: true });
-  c.header('Set-Cookie', csrfCookie(csrfName, randomHex(32), domain), { append: true });
-  return true;
+  const t = await signTokens(user, secret);
+  c.header('Set-Cookie', sessionCookie('session', t.session, domain), { append: true });
+  c.header('Set-Cookie', refreshCookie('refresh', t.refresh, domain), { append: true });
+  c.header('Set-Cookie', csrfCookie('csrf', randomHex(32), domain), { append: true });
+  return { token: t.bearer, refresh_token: t.refresh };
 }
 
 // Fiber BodyParser 語意：JSON 解析失敗或欄位型別不符 → 400 "invalid request body"；
@@ -146,11 +138,9 @@ export function publicRoutes() {
     };
 
     // Go 同樣永遠返回 token；跨站前端靠它 Bearer 兜底
-    const ok = await issueCookieGroup(c, user, 'session', 'refresh', 'csrf');
-    if (!ok) return c.json({ error: 'failed to establish session' }, 500);
-    const token = await signBearer(c.env, user);
-    if (!token) return c.json({ error: 'failed to generate token' }, 500);
-    return c.json({ token, user: sanitizedUser(user) }, 201);
+    const tokens = await issueSession(c, user);
+    if (!tokens) return c.json({ error: 'failed to establish session' }, 500);
+    return c.json({ ...tokens, user: sanitizedUser(user) }, 201);
   });
 
   app.post('/public/login', async (c) => {
@@ -192,11 +182,9 @@ export function publicRoutes() {
     }
 
     // Go AuthResponse 永遠含 token；跨站前端（pages.dev）靠它做 Bearer 兜底
-    const ok = await issueCookieGroup(c, user, 'session', 'refresh', 'csrf');
-    if (!ok) return c.json({ error: 'failed to establish session' }, 500);
-    const token = await signBearer(c.env, user);
-    if (!token) return c.json({ error: 'failed to generate token' }, 500);
-    return c.json({ token, user: sanitizedUser(user) });
+    const tokens = await issueSession(c, user);
+    if (!tokens) return c.json({ error: 'failed to establish session' }, 500);
+    return c.json({ ...tokens, user: sanitizedUser(user) });
   });
 
   return app;

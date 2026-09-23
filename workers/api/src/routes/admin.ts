@@ -5,7 +5,7 @@
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
-import { verifyJwt } from '../lib/jwt';
+import { authenticate } from '../lib/session';
 import { constantTimeEqual, randomHex } from '../lib/csrf';
 import { usesVision } from '../lib/xrayuri';
 import { SERVICEABLE_SQL, activationStatement, type ProductPlan } from '../lib/entitlement';
@@ -173,11 +173,12 @@ export function adminRoutes() {
     const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
     const token = (secret ? getCookie(c, 'admin_session') : undefined) || bearer;
     if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    const claims = await verifyJwt(token, secret);
-    if (!claims || typeof claims.user_id !== 'number') return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    c.set('userId', claims.user_id);
-    c.set('username', claims.username);
-    c.set('role', claims.role);
+    // 回庫比對 token_version / status；role 以庫為準（降權下一次請求即生效）
+    const r = await authenticate(c.env.DB, token, secret);
+    if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+    c.set('userId', r.user.id);
+    c.set('username', r.user.username);
+    c.set('role', r.user.role);
     await next();
   });
 
@@ -259,6 +260,8 @@ export function adminRoutes() {
       }
       sets.push('status = ?');
       binds.push(body.status);
+      // 封禁/停用即吊銷該用戶全部會話
+      if (body.status !== 'active') sets.push('token_version = token_version + 1');
     }
     if (body.subscription_status !== undefined) {
       if (!['active', 'pending', 'expired'].includes(body.subscription_status as string)) {

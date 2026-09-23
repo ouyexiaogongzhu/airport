@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import api, { setOnUnauthorized } from '../api/index'
+import api, { setOnUnauthorized, AUTH_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../api/index'
 import { clearApiCache } from '../api/cache'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -22,7 +22,8 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username: string, password: string) {
     try {
       const res = await api.post('/admin/auth/login', { username, password })
-      if (res.data.token) localStorage.setItem('auth_token', res.data.token)
+      if (res.data.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
+      if (res.data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, res.data.refresh_token)
       user.value = res.data.user ?? null
       role.value = res.data.role ?? null
       return { success: true }
@@ -34,11 +35,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout() {
     try {
-      await api.post('/admin/auth/logout')
+      // The refresh token lets the server revoke the session even if the access token expired.
+      await api.post('/admin/auth/logout', { refresh_token: localStorage.getItem(REFRESH_TOKEN_KEY) || undefined })
     } catch {
       // Best-effort server-side session invalidation — clear local state regardless.
     } finally {
-      localStorage.removeItem('auth_token')
+      localStorage.removeItem(AUTH_TOKEN_KEY)
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
       clearApiCache()
       user.value = null
       role.value = null
@@ -53,10 +56,10 @@ export const useAuthStore = defineStore('auth', () => {
       // CSRF bootstrap failure should not prevent the validate attempt below.
     }
     try {
-      const res = await api.get('/auth/validate', { cache: { skipCache: true } })
+      // Admin-only check: reads admin_session (never the portal `session` cookie).
+      const res = await api.get('/admin/auth/validate', { cache: { skipCache: true } })
       user.value = res.data.user ?? null
-      // /auth/validate returns { user } only — role lives on the user object.
-      role.value = res.data.user?.role ?? null
+      role.value = res.data.role ?? res.data.user?.role ?? null
     } catch {
       user.value = null
       role.value = null

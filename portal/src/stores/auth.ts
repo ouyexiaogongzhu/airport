@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import api, { AUTH_TOKEN_KEY } from '../api/index'
+import api, { AUTH_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../api/index'
 import { clearApiCache } from '../api/cache'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -36,7 +36,7 @@ export const useAuthStore = defineStore('auth', () => {
         password,
         ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
       })
-      if (res.data.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
+      storeTokens(res.data)
       user.value = res.data.user
       return { success: true }
     } catch (e: any) {
@@ -54,7 +54,7 @@ export const useAuthStore = defineStore('auth', () => {
       })
       // Backend always returns a token (parity with login) — store it so the
       // Bearer fallback works on cross-site frontends (pages.dev).
-      if (res.data.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
+      storeTokens(res.data)
       user.value = res.data.user
       return { success: true }
     } catch (e: any) {
@@ -66,13 +66,20 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout() {
     try {
       // State-changing request; CSRF header is attached by the api interceptor.
-      await api.post('/auth/logout')
+      // The refresh token lets the server revoke the session even if the access token expired.
+      await api.post('/auth/logout', { refresh_token: localStorage.getItem(REFRESH_TOKEN_KEY) || undefined })
     } catch {
       // Clear local state regardless of the server response.
     }
     clearApiCache()
     localStorage.removeItem(AUTH_TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
     user.value = null
+  }
+
+  function storeTokens(data: { token?: string; refresh_token?: string }) {
+    if (data.token) localStorage.setItem(AUTH_TOKEN_KEY, data.token)
+    if (data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
   }
 
   return { user, isLoggedIn, username, init, login, register, logout }

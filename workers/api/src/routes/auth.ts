@@ -1,31 +1,32 @@
 // /auth/* + /admin/auth/* — 逐字移植 manager/internal/handler/auth.go 會話端點
 // 掛載點：/api/v1。WebAuth("session") 語意（middleware/webauth.go）：session cookie
-// 缺失或 HS256 驗簽失敗 → 401 {"error":"SESSION_EXPIRED"}。
+// 缺失、驗簽失敗、token_version 不符或帳號非 active → 401 {"error":"SESSION_EXPIRED"}。
 
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
-import { signJwt, verifyJwt } from '../lib/jwt';
-import { SESSION_TTL, REFRESH_TTL, sessionCookie, refreshCookie, csrfCookie, clearAuthCookies } from '../lib/cookies';
+import { verifyJwt } from '../lib/jwt';
+import { SESSION_TTL, sessionCookie, refreshCookie, csrfCookie, clearAuthCookies } from '../lib/cookies';
 import { randomHex } from '../lib/csrf';
+import { authenticate, bumpTokenVersion, signTokens, signAccess, BEARER_TTL, type SessionUser } from '../lib/session';
 import { sanitizedUser, type UserRow } from '../lib/user';
 import type { Env } from '../index';
 
-type AppEnv = { Bindings: Env; Variables: { userId: number } };
-type UserWithHash = UserRow & { password_hash: string };
+type AppEnv = { Bindings: Env; Variables: { userId: number; role: string } };
+type UserWithHash = UserRow & { password_hash: string; token_version: number };
 
 // setAdminAuthCookies：admin_session(30d) + admin_refresh(90d) + admin_csrf(30d 非 httpOnly)
-async function issueAdminCookies(c: Context<AppEnv>, user: { id: number; username: string; role: string }) {
+async function issueAdminCookies(c: Context<AppEnv>, user: SessionUser | UserWithHash) {
   const secret = c.env.JWT_SECRET;
-  if (!secret) return false;
+  if (!secret) return null;
   const domain = c.env.COOKIE_DOMAIN;
-  const base = { user_id: user.id, username: user.username, role: user.role };
-  c.header('Set-Cookie', sessionCookie('admin_session', await signJwt(base, secret, SESSION_TTL), domain), { append: true });
-  c.header('Set-Cookie', refreshCookie('admin_refresh', await signJwt(base, secret, REFRESH_TTL), domain), { append: true });
+  const t = await signTokens(user, secret);
+  c.header('Set-Cookie', sessionCookie('admin_session', t.session, domain), { append: true });
+  c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh, domain), { append: true });
   c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32), domain), { append: true });
-  return true;
+  return t;
 }
 
 // GetCSRFToken 同一 handler 掛 /auth/csrf 與 /admin/auth/csrf：缺才發，雙 cookie 都補
@@ -40,25 +41,62 @@ function csrfHandler(c: Context<AppEnv>) {
   return c.json({ ok: true });
 }
 
+function bearerOf(c: Context<AppEnv>): string | undefined {
+  return c.req.header('Authorization')?.replace(/^Bearer /i, '') || undefined;
+}
+
+// refresh token 來源：cookie（同站）或 JSON body.refresh_token（跨站 localStorage）；
+// 不看 access token（Authorization 頭可能帶著已過期的 Bearer）
+async function refreshCandidates(c: Context<AppEnv>, cookieName: string): Promise<string[]> {
+  const body = await c.req.json<{ refresh_token?: unknown }>().catch(() => null);
+  const fromBody = typeof body?.refresh_token === 'string' ? body.refresh_token : '';
+  return [getCookie(c, cookieName) ?? '', fromBody].filter((t) => t !== '');
+}
+
+async function refreshUser(c: Context<AppEnv>, cookieName: string): Promise<SessionUser | null> {
+  const secret = c.env.JWT_SECRET;
+  if (!secret) return null;
+  for (const t of await refreshCandidates(c, cookieName)) {
+    const r = await authenticate(c.env.DB, t, secret, 'refresh');
+    if ('user' in r) return r.user;
+  }
+  return null;
+}
+
+// 退出：任一當前版本的 token（access / refresh）即可吊銷該用戶全部會話；
+// 已吊銷的舊 token 不能再觸發加一（防止被盜舊 token 反覆踢人）
+async function revokeFromRequest(c: Context<AppEnv>, names: string[]) {
+  const secret = c.env.JWT_SECRET;
+  if (!secret) return;
+  const body = await c.req.json<{ refresh_token?: unknown }>().catch(() => null);
+  const tokens = [...names.map((n) => getCookie(c, n)), bearerOf(c), body?.refresh_token];
+  for (const t of tokens) {
+    if (typeof t !== 'string' || t === '') continue;
+    const claims = await verifyJwt(t, secret);
+    if (!claims || typeof claims.user_id !== 'number') continue;
+    const r = await bumpTokenVersion(c.env.DB, claims.user_id, claims.tv ?? 0).run();
+    if ((r.meta.changes ?? 0) > 0) return;
+  }
+}
+
 export function authRoutes() {
   const app = new Hono<AppEnv>();
 
-  // middleware.WebAuth("session")
-  const webAuth = createMiddleware<AppEnv>(async (c, next) => {
-    const secret = c.env.JWT_SECRET;
-    // 跨站前端（pages.dev）第三方 cookie 被瀏覽器丟棄 → Bearer 兜底（同 JWT/密鑰）
-    const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
-    const token = (secret ? getCookie(c, 'session') : undefined) || bearer;
-    if (!secret || !token) {
-      return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    }
-    const claims = await verifyJwt(token, secret);
-    if (!claims || typeof claims.user_id !== 'number') {
-      return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    }
-    c.set('userId', claims.user_id);
-    await next();
-  });
+  // middleware.WebAuth(cookieName)：cookie 優先，跨站前端（pages.dev）第三方 cookie
+  // 被瀏覽器丟棄 → Bearer 兜底（同 JWT/密鑰）
+  const sessionAuth = (cookieName: string) =>
+    createMiddleware<AppEnv>(async (c, next) => {
+      const secret = c.env.JWT_SECRET;
+      const token = (secret ? getCookie(c, cookieName) : undefined) || bearerOf(c);
+      if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+      const r = await authenticate(c.env.DB, token, secret);
+      if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+      c.set('userId', r.user.id);
+      c.set('role', r.user.role);
+      await next();
+    });
+  const webAuth = sessionAuth('session');
+  const adminSessionAuth = sessionAuth('admin_session');
 
   const userCols =
     'id, username, role, status, balance, subscription_status, subscription_tier, ' +
@@ -79,37 +117,44 @@ export function authRoutes() {
     return c.json({ user: sanitizedUser(user) });
   });
 
-  // Refresh：WebAuth(session) 先行（對齊 main.go 路由鏈），再以 refresh cookie 重簽 session
-  app.post('/auth/refresh', webAuth, async (c) => {
-    const secret = c.env.JWT_SECRET as string;
-    const refreshToken = getCookie(c, 'refresh');
-    if (!refreshToken) {
-      return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    }
-    const claims = await verifyJwt(refreshToken, secret);
-    if (!claims || typeof claims.user_id !== 'number') {
-      return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    }
-    const user = await c.env.DB.prepare('SELECT id, username, role FROM users WHERE id = ?')
-      .bind(claims.user_id)
-      .first<{ id: number; username: string; role: string }>();
-    if (!user) {
-      return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    }
-    c.header(
-      'Set-Cookie',
-      sessionCookie(
-        'session',
-        await signJwt({ user_id: user.id, username: user.username, role: user.role }, secret, SESSION_TTL),
-        c.env.COOKIE_DOMAIN,
-      ),
-      { append: true },
-    );
-    return c.json({ ok: true });
+  // 後台專用校驗：只認 admin_session（+ Bearer 兜底），不會被 portal 的 session cookie 冒充
+  app.get('/admin/auth/validate', adminSessionAuth, async (c) => {
+    if (c.get('role') !== 'admin') return c.json({ error: 'admin access required' }, 403);
+    const user = await c.env.DB.prepare(`SELECT ${userCols} FROM users WHERE id = ?`)
+      .bind(c.get('userId'))
+      .first<UserRow>();
+    if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+    return c.json({ user: sanitizedUser(user), role: user.role });
   });
 
-  // Logout：清全部 6 個 cookie（portal + admin）
-  app.post('/auth/logout', webAuth, (c) => {
+  // Refresh：只校驗 refresh token（access 過期也能續），重簽 session cookie 並回傳新 Bearer
+  app.post('/auth/refresh', async (c) => {
+    const user = await refreshUser(c, 'refresh');
+    if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+    const secret = c.env.JWT_SECRET as string;
+    c.header('Set-Cookie', sessionCookie('session', await signAccess(user, secret, SESSION_TTL), c.env.COOKIE_DOMAIN), {
+      append: true,
+    });
+    return c.json({ ok: true, token: await signAccess(user, secret, BEARER_TTL) });
+  });
+
+  app.post('/admin/auth/refresh', async (c) => {
+    const user = await refreshUser(c, 'admin_refresh');
+    if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+    if (user.role !== 'admin') return c.json({ error: 'admin access required' }, 403);
+    const secret = c.env.JWT_SECRET as string;
+    c.header(
+      'Set-Cookie',
+      sessionCookie('admin_session', await signAccess(user, secret, SESSION_TTL), c.env.COOKIE_DOMAIN),
+      { append: true },
+    );
+    return c.json({ ok: true, token: await signAccess(user, secret, BEARER_TTL) });
+  });
+
+  // Logout：吊銷該用戶全部會話（token_version+1），清全部 6 個 cookie（portal + admin）；
+  // 會話已失效也照樣清 cookie
+  app.post('/auth/logout', async (c) => {
+    await revokeFromRequest(c, ['session', 'refresh']);
     for (const v of clearAuthCookies(c.env.COOKIE_DOMAIN)) {
       c.header('Set-Cookie', v, { append: true });
     }
@@ -152,19 +197,16 @@ export function authRoutes() {
       return c.json({ error: 'admin access required' }, 403);
     }
 
-    const ok = await issueAdminCookies(c, user);
-    if (!ok) return c.json({ error: 'failed to establish session' }, 500);
+    const t = await issueAdminCookies(c, user);
+    if (!t) return c.json({ error: 'failed to establish session' }, 500);
 
-    // 跨站前端（pages.dev）cookie 存不住 → 附 Bearer token 供 localStorage 兜底
-    const secret = c.env.JWT_SECRET;
-    const token = secret
-      ? await signJwt({ user_id: user.id, username: user.username, role: user.role }, secret, 24 * 3600)
-      : undefined;
-    return c.json({ user: sanitizedUser(user), role: user.role, ...(token ? { token } : {}) });
+    // 跨站前端（pages.dev）cookie 存不住 → 附 Bearer token + refresh token 供 localStorage 兜底
+    return c.json({ user: sanitizedUser(user), role: user.role, token: t.bearer, refresh_token: t.refresh });
   });
 
-  // AdminLogout：只清 admin 三件套
-  app.post('/admin/auth/logout', (c) => {
+  // AdminLogout：吊銷會話，只清 admin 三件套
+  app.post('/admin/auth/logout', async (c) => {
+    await revokeFromRequest(c, ['admin_session', 'admin_refresh']);
     for (const v of clearAuthCookies(c.env.COOKIE_DOMAIN)) {
       if (v.startsWith('admin_')) c.header('Set-Cookie', v, { append: true });
     }

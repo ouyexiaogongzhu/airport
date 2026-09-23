@@ -13,7 +13,10 @@ const UNSAFE_METHODS = ['post', 'put', 'patch', 'delete']
 // Endpoints whose 401 responses are expected (e.g. while bootstrapping auth
 // state at app startup) and must not trigger the global session-expired
 // redirect to `/`.
-const EXEMPT_401_URLS = ['/public/login', '/public/register', '/auth/csrf', '/auth/validate']
+const EXEMPT_401_URLS = ['/public/login', '/public/register', '/auth/csrf', '/auth/validate', '/auth/refresh', '/auth/logout']
+
+// Endpoints whose 401 must not trigger a refresh-and-retry.
+const NO_REFRESH_URLS = ['/public/login', '/public/register', '/auth/csrf', '/auth/refresh', '/auth/logout']
 
 // Reads a non-httpOnly cookie (used for the CSRF double-submit token).
 export function readCookie(name: string): string {
@@ -41,6 +44,24 @@ const api = axios.create({
 // cookie and rejects with 403 on mismatch.
 // 跨站前端（pages.dev）第三方 cookie 被丟棄 → localStorage Bearer 兜底
 export const AUTH_TOKEN_KEY = 'auth_token'
+// 跨站時 refresh cookie 同樣存不住 → refresh token 放 localStorage，401 時用它續期
+export const REFRESH_TOKEN_KEY = 'refresh_token'
+
+// Single-flight: concurrent 401s share one /auth/refresh call.
+let refreshing: Promise<boolean> | null = null
+function refreshSession(): Promise<boolean> {
+  refreshing ??= api
+    .post('/auth/refresh', { refresh_token: localStorage.getItem(REFRESH_TOKEN_KEY) || undefined })
+    .then(res => {
+      if (res.data?.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
+      return true
+    })
+    .catch(() => false)
+    .finally(() => {
+      refreshing = null
+    })
+  return refreshing
+}
 
 api.interceptors.request.use(cfg => {
   const bearer = localStorage.getItem(AUTH_TOKEN_KEY)
@@ -70,9 +91,14 @@ api.interceptors.response.use(
     }
     return res
   },
-  err => {
+  async err => {
     if (isCacheHit(err)) {
       return Promise.resolve(buildCachedResponse(err))
+    }
+    const cfg = err.config as (typeof err.config & { _authRetried?: boolean }) | undefined
+    if (err.response?.status === 401 && cfg && !cfg._authRetried && !matches(NO_REFRESH_URLS, cfg.url)) {
+      cfg._authRetried = true
+      if (await refreshSession()) return api(cfg)
     }
     if (err.response?.status === 401 && !isExempt401(err.config?.url)) {
       // Full page reload: in-memory auth state resets and the router guard /
@@ -84,9 +110,13 @@ api.interceptors.response.use(
   },
 )
 
-function isExempt401(url?: string): boolean {
+function matches(paths: string[], url?: string): boolean {
   if (!url) return false
-  return EXEMPT_401_URLS.some(path => url.includes(path))
+  return paths.some(path => url.includes(path))
+}
+
+function isExempt401(url?: string): boolean {
+  return matches(EXEMPT_401_URLS, url)
 }
 
 export default api

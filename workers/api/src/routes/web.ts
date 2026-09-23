@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
-import { verifyJwt } from '../lib/jwt';
+import { authenticate } from '../lib/session';
 import { constantTimeEqual } from '../lib/csrf';
 import { sanitizedUser, type UserRow } from '../lib/user';
 import { createPaymentURL } from '../lib/payments';
@@ -38,11 +38,12 @@ export function webRoutes() {
     const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
     const token = (secret ? getCookie(c, 'session') : undefined) || bearer;
     if (!secret || !token) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    const claims = await verifyJwt(token, secret);
-    if (!claims || typeof claims.user_id !== 'number') return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    c.set('userId', claims.user_id);
-    c.set('username', claims.username);
-    c.set('role', claims.role);
+    // 回庫比對 token_version / status；username、role 以庫為準
+    const r = await authenticate(c.env.DB, token, secret);
+    if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
+    c.set('userId', r.user.id);
+    c.set('username', r.user.username);
+    c.set('role', r.user.role);
     await next();
   });
 
@@ -129,7 +130,7 @@ export function webRoutes() {
     if (!product) return c.json({ error: 'product not found' }, 404);
     if (product.status !== 'active') return c.json({ error: 'product is not available' }, 400);
 
-    // PayPal 以 USD 計價（§5.2）：非 USD 產品拒走 paypal，否則 CNY 定價會以同數字美元扣款
+    // PayPal 以 USD 計價：非 USD 產品拒走 paypal，否則 CNY 定價會以同數字美元扣款
     if (typeof body.provider === 'string' && body.provider === 'paypal' && product.currency !== 'USD') {
       return c.json({ error: 'product does not support paypal payment' }, 400);
     }

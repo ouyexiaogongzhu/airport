@@ -25,10 +25,13 @@ async function key(secret: string): Promise<CryptoKey> {
   ]);
 }
 
+// tv：users.token_version（缺省視為 0，兼容舊 token）；typ='refresh' 僅能用於續期
 export type Claims = {
   user_id: number;
   username: string;
   role: string;
+  tv?: number;
+  typ?: 'refresh';
   exp: number;
   iat: number;
 };
