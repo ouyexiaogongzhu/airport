@@ -5,7 +5,6 @@
       <div class="nav-links">
         <router-link to="/dashboard">Dashboard</router-link>
         <router-link to="/products">Plans</router-link>
-        <router-link to="/subscription">Subscription</router-link>
         <router-link to="/account">Account</router-link>
         <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
       </div>
@@ -34,15 +33,15 @@
           <span class="sub">{{ profile.subscription_tier || 'No tier' }}</span>
         </div>
         <div class="card">
-          <h3>Active Nodes</h3>
-          <span class="num">{{ nodes.length }}</span>
-          <span class="sub">available servers</span>
+          <h3>Expires</h3>
+          <span class="num expiry-num">{{ formatExpiry(profile.expire_time) }}</span>
+          <span class="sub">subscription end</span>
         </div>
       </div>
 
       <div class="action-row">
-        <router-link to="/subscription" class="btn-primary">Manage Subscription</router-link>
-        <router-link to="/account/guide" class="btn-secondary">Import Guide</router-link>
+        <router-link to="/account" class="btn-primary">Manage Account</router-link>
+        <router-link to="/account#setup" class="btn-secondary">Setup Guide</router-link>
       </div>
 
       <section class="recent">
@@ -77,7 +76,6 @@ const auth = useAuthStore()
 const loading = ref(true)
 const error = ref('')
 const profile = ref<any>({})
-const nodes = ref<string[]>([])
 
 const statusClass = computed(() => {
   const s = profile.value.subscription_status || ''
@@ -126,12 +124,8 @@ function formatDailyAvg(): string {
 async function fetchData() {
   loading.value = true
   try {
-    const [profRes, nodesRes] = await Promise.all([
-      api.get('/user/profile'),
-      api.get('/client/subscription').catch(() => ({ data: { nodes: [] } }))
-    ])
+    const profRes = await api.get('/user/profile')
     profile.value = profRes.data
-    nodes.value = nodesRes.data.nodes || []
   } catch (e: any) {
     console.error('Dashboard load error:', e)
     error.value = e.response?.data?.error || 'Failed to load dashboard data'
@@ -198,6 +192,7 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
 }
 .card h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.5px; }
 .card .num { font-size: 2rem; font-weight: 700; color: #e2e8f0; display: block; }
+.card .expiry-num { font-size: 1.25rem; }
 .card .sub { font-size: 0.8rem; color: #718096; display: block; margin-top: 0.15rem; }
 .num-badge {
   font-size: 1.3rem;

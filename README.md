@@ -61,6 +61,9 @@ airport/
 | :--- | :--- |
 | **v0.1.0** | 里程碑 A：Workers + Tunnel 节点；订阅在 v2rayNG / v2rayA / Clash Verge（Android / Ubuntu / MacBook）验证通过 |
 
+后续传输：XHTTP + Cloudflare Tunnel 设计见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)（草案，未实现）。
+设备槽位（订阅拉取侧，默认 5）：[docs/devices.md](docs/devices.md)。
+
 ## 部署
 
 ### Worker

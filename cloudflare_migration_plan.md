@@ -162,7 +162,7 @@
 | 35 | D1 → R2 备份 | 未实现 |
 | 36 | ✅ 后台改用户到期/流量/订阅状态、商品币种（A1） | |
 | 37 | 设备管理页 | `AccountDevices.vue` 为占位 |
-| 38 | Hysteria2 / gRPC / XHTTP | 不支持 |
+| 38 | Hysteria2 / gRPC / XHTTP | 不支持；XHTTP+Tunnel 设计草案见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) |
 | 39 | 杂项 | `PORTAL_URL` ✅；`online_nodes` 把 active 算在线；营收按下单时间；`Pay.vue` 超时提示不显示；Dashboard 空状态不显示 |
 
 ---
@@ -256,5 +256,5 @@ nodes 表的 `security`、`network`、`server_name`、`reality_*` 列已停用�
 - #35：备份。先依靠 D1 Time Travel，再加每周 CI 任务执行 `wrangler d1 export` 上传 R2
 - #37、#39：设备管理页；统计口径；`Pay.vue` 超时提示；Dashboard 空状态
 - #8：如有需要，再补齐 Shadowsocks / Trojan 的服务端配置与真实密码
-- #38：Hysteria2 等新协议
+- #38：Hysteria2 等新协议；XHTTP（CF 隐藏入站）设计草案：[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)（未实现）
 - 运维增强：节点拨测失败自动置 inactive + 告警；额度 >80% 告警；Telegram bot（查流量、续费、到期提醒）

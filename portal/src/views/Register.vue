@@ -26,7 +26,7 @@
 
       <p class="switch">
         Already have an account?
-        <router-link to="/">Sign In</router-link>
+        <router-link to="/login">Sign In</router-link>
       </p>
     </div>
   </div>

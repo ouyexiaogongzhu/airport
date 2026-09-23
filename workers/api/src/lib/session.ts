@@ -2,9 +2,12 @@
 // 吊銷 = token_version + 1（退出、改密、封禁），該用戶所有已簽發的 access/refresh 立即失效。
 
 import { signJwt, verifyJwt, type Claims } from './jwt';
-import { SESSION_TTL, REFRESH_TTL } from './cookies';
+import { PORTAL_SESSION_TTL, ADMIN_SESSION_TTL, REFRESH_TTL } from './cookies';
 
-export const BEARER_TTL = 24 * 3600; // Go generateToken: 24h
+/** Admin / 通用 Bearer 兜底：24h（對齊既有 Go generateToken） */
+export const BEARER_TTL = 24 * 3600;
+/** Portal Bearer（跨站 localStorage 兜底）與 portal session 同壽：2h */
+export const PORTAL_BEARER_TTL = PORTAL_SESSION_TTL;
 
 export type SessionUser = {
   id: number;
@@ -47,12 +50,16 @@ function baseClaims(user: Signable) {
   return { user_id: user.id, username: user.username, role: user.role, tv: user.token_version ?? 0 };
 }
 
-export async function signTokens(user: Signable, secret: string) {
+export type SessionKind = 'portal' | 'admin';
+
+export async function signTokens(user: Signable, secret: string, kind: SessionKind = 'portal') {
   const base = baseClaims(user);
+  const accessTtl = kind === 'admin' ? ADMIN_SESSION_TTL : PORTAL_SESSION_TTL;
+  const bearerTtl = kind === 'admin' ? BEARER_TTL : PORTAL_BEARER_TTL;
   return {
-    session: await signJwt(base, secret, SESSION_TTL),
+    session: await signJwt(base, secret, accessTtl),
     refresh: await signJwt({ ...base, typ: 'refresh' }, secret, REFRESH_TTL),
-    bearer: await signJwt(base, secret, BEARER_TTL),
+    bearer: await signJwt(base, secret, bearerTtl),
   };
 }
 

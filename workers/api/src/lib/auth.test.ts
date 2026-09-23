@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { signJwt, verifyJwt } from './jwt';
 import { randomHex, constantTimeEqual } from './csrf';
-import { SESSION_TTL, REFRESH_TTL, sessionCookie, refreshCookie, csrfCookie, clearAuthCookies } from './cookies';
+import { PORTAL_SESSION_TTL, ADMIN_SESSION_TTL, REFRESH_TTL, sessionCookie, refreshCookie, csrfCookie, clearAuthCookies } from './cookies';
 import { sanitizedUser, type UserRow } from './user';
 
 const SECRET = 'test-secret-at-least-16-chars';
@@ -71,12 +71,12 @@ describe('csrf', () => {
   });
 });
 
-describe('cookies (對齊 auth.go)', () => {
-  it('session cookie: 30d, HttpOnly, Secure, SameSite=None（跨站 pages.dev 前端需 None）, Path=/', () => {
+describe('cookies (portal 2h / admin 30d / refresh 90d)', () => {
+  it('portal session cookie: 2h, HttpOnly, Secure, SameSite=None, Path=/', () => {
     const v = sessionCookie('session', 'tok', undefined);
     expect(v).toContain('session=tok');
-    expect(v).toContain(`Max-Age=${SESSION_TTL}`);
-    expect(SESSION_TTL).toBe(30 * 24 * 3600);
+    expect(v).toContain(`Max-Age=${PORTAL_SESSION_TTL}`);
+    expect(PORTAL_SESSION_TTL).toBe(2 * 3600);
     expect(v).toContain('HttpOnly');
     expect(v).toContain('Secure');
     expect(v).toContain('SameSite=None');
@@ -85,17 +85,24 @@ describe('cookies (對齊 auth.go)', () => {
     expect(v).not.toContain('Domain=');
   });
 
+  it('admin session cookie keeps 30d TTL', () => {
+    const v = sessionCookie('admin_session', 'tok');
+    expect(v).toContain(`Max-Age=${ADMIN_SESSION_TTL}`);
+    expect(ADMIN_SESSION_TTL).toBe(30 * 24 * 3600);
+  });
+
   it('refresh cookie: 90d', () => {
     const v = refreshCookie('refresh', 'tok');
     expect(v).toContain(`Max-Age=${REFRESH_TTL}`);
     expect(REFRESH_TTL).toBe(90 * 24 * 3600);
   });
 
-  it('csrf cookie: not HttpOnly, session TTL, Domain appended when set', () => {
-    const v = csrfCookie('csrf', 'tok', 'rfplay.uk');
-    expect(v).not.toContain('HttpOnly');
-    expect(v).toContain(`Max-Age=${SESSION_TTL}`);
-    expect(v).toContain('Domain=rfplay.uk');
+  it('csrf cookie: not HttpOnly; TTL follows portal vs admin cookie name', () => {
+    const portal = csrfCookie('csrf', 'tok', 'rfplay.uk');
+    expect(portal).not.toContain('HttpOnly');
+    expect(portal).toContain(`Max-Age=${PORTAL_SESSION_TTL}`);
+    expect(portal).toContain('Domain=rfplay.uk');
+    expect(csrfCookie('admin_csrf', 'tok')).toContain(`Max-Age=${ADMIN_SESSION_TTL}`);
   });
 
   it('clearAuthCookies covers all 6 names', () => {
@@ -115,7 +122,7 @@ describe('cookies (對齊 auth.go)', () => {
 });
 
 describe('sanitizedUser', () => {
-  it('exposes exactly the portal contract fields, never credentials', () => {
+  it('exposes portal contract fields including profile, never credentials', () => {
     const row: UserRow = {
       id: 7,
       username: 'bob',
@@ -131,15 +138,23 @@ describe('sanitizedUser', () => {
       traffic_period_start: 0,
       client_token: 'rf_x',
       created_at: '2026-01-01T00:00:00.000Z',
+      email: 'bob@example.com',
+      phone: '+15551212',
+      display_name: 'Bob',
+      billing_address: '1 Main St',
     };
     const out = sanitizedUser(row);
     expect(Object.keys(out).sort()).toEqual(
       [
         'balance',
+        'billing_address',
         'client_token',
         'created_at',
+        'display_name',
+        'email',
         'expire_time',
         'id',
+        'phone',
         'rate_limit_bps',
         'role',
         'status',
@@ -151,6 +166,8 @@ describe('sanitizedUser', () => {
         'username',
       ].sort(),
     );
+    expect(out.email).toBe('bob@example.com');
+    expect(out.display_name).toBe('Bob');
     expect(JSON.stringify(out)).not.toContain('password');
     expect(JSON.stringify(out)).not.toContain('vless_uuid');
     expect(JSON.stringify(out)).not.toContain('ss_password');

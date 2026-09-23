@@ -34,6 +34,8 @@ export type ProductPlan = {
   duration_days: number | null;
   traffic_bytes: number | null;
   speed_limit_bps: number | null;
+  /** When set (incl. 0 = unlimited), copied onto users.max_devices on grant/pay. NULL = leave user as-is. */
+  max_devices?: number | null;
 };
 
 const DAY = 86400;
@@ -48,11 +50,13 @@ export function activationStatement(
   gate?: { sql: string; binds: unknown[] },
 ): D1PreparedStatement {
   const days = plan.duration_days && plan.duration_days > 0 ? plan.duration_days : 30;
+  const applyMax = plan.max_devices != null && Number.isFinite(plan.max_devices);
   return db
     .prepare(
       "UPDATE users SET subscription_status = 'active', subscription_tier = ?," +
         ' traffic_limit_bytes = ?, rate_limit_bps = ?, traffic_used_bytes = 0, traffic_period_start = ?,' +
         ' expire_time = MAX(?, COALESCE(expire_time, 0)) + ?, updated_at = ?' +
+        (applyMax ? ', max_devices = ?' : '') +
         ` WHERE id = ?${gate ? ` AND ${gate.sql}` : ''}`,
     )
     .bind(
@@ -63,6 +67,7 @@ export function activationStatement(
       now,
       days * DAY,
       new Date(now * 1000).toISOString(),
+      ...(applyMax ? [plan.max_devices] : []),
       userId,
       ...(gate?.binds ?? []),
     );

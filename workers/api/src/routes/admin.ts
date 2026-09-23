@@ -8,6 +8,7 @@ import { getCookie } from 'hono/cookie';
 import { authenticate } from '../lib/session';
 import { constantTimeEqual, randomHex } from '../lib/csrf';
 import { activationStatement, type ProductPlan } from '../lib/entitlement';
+import { clearUserDevices } from '../lib/devices';
 import { buildNodeXrayConfig, type NodeConfigRow } from '../lib/nodeconfig';
 import type { Env } from '../index';
 
@@ -49,6 +50,7 @@ function adminUserJson(u: Record<string, unknown>): Record<string, unknown> {
     expire_time: u.expire_time,
     rate_limit_bps: u.rate_limit_bps,
     traffic_period_start: u.traffic_period_start,
+    max_devices: u.max_devices,
     vless_uuid: u.vless_uuid,
     created_at: u.created_at,
     updated_at: u.updated_at,
@@ -58,7 +60,7 @@ function adminUserJson(u: Record<string, unknown>): Record<string, unknown> {
 const USER_COLS =
   'id, username, role, balance, status, client_token, subscription_status, subscription_tier, ' +
   'traffic_limit_bytes, traffic_used_bytes, expire_time, rate_limit_bps, traffic_period_start, ' +
-  'vless_uuid, created_at, updated_at';
+  'max_devices, vless_uuid, created_at, updated_at';
 
 // nodeJson — token 不輸出。節點固定為 Tunnel 形態：address = 節點域名，port = 本機 Xray 端口；
 // network/security/server_name/reality_* 列已停用，不再輸出
@@ -106,7 +108,7 @@ function isNonNegInt(v: unknown): v is number {
 }
 
 const PRODUCT_COLS =
-  'id, name, type, price, stock, status, currency, duration_days, traffic_bytes, speed_limit_bps, description, created_at, updated_at';
+  'id, name, type, price, stock, status, currency, duration_days, traffic_bytes, speed_limit_bps, max_devices, description, created_at, updated_at';
 
 // 商品權益欄位：只校驗收到的鍵
 function parseProductPlan(req: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
@@ -115,7 +117,7 @@ function parseProductPlan(req: Record<string, unknown>): { fields: Record<string
     if (!isNonNegInt(req.duration_days) || req.duration_days === 0) return { error: 'duration_days must be a positive integer' };
     fields.duration_days = req.duration_days;
   }
-  for (const key of ['traffic_bytes', 'speed_limit_bps'] as const) {
+  for (const key of ['traffic_bytes', 'speed_limit_bps', 'max_devices'] as const) {
     if (req[key] === undefined) continue;
     if (!isNonNegInt(req[key])) return { error: `${key} must be a non-negative integer` };
     fields[key] = req[key];
@@ -215,12 +217,15 @@ export function adminRoutes() {
 
     const sets: string[] = [];
     const binds: unknown[] = [];
+    let regeneratedToken = false;
     if (typeof body.client_token === 'string' && body.client_token !== '') {
       sets.push('client_token = ?');
       binds.push(body.client_token);
+      regeneratedToken = true;
     } else if (body.regenerate_token === true) {
       sets.push('client_token = ?');
       binds.push('rf_' + randomHex(32));
+      regeneratedToken = true;
     }
     if (body.status !== undefined) {
       const valid = new Set(['active', 'suspended', 'banned']);
@@ -239,7 +244,7 @@ export function adminRoutes() {
       sets.push('subscription_status = ?');
       binds.push(body.subscription_status);
     }
-    for (const key of ['expire_time', 'traffic_limit_bytes', 'traffic_used_bytes', 'rate_limit_bps'] as const) {
+    for (const key of ['expire_time', 'traffic_limit_bytes', 'traffic_used_bytes', 'rate_limit_bps', 'max_devices'] as const) {
       const v = body[key];
       if (v === undefined) continue;
       if (!isNonNegInt(v)) return c.json({ error: `${key} must be a non-negative integer` }, 400);
@@ -254,6 +259,7 @@ export function adminRoutes() {
       .bind(...binds)
       .run();
     if ((r.meta.changes ?? 0) === 0) return c.json({ error: 'failed to update user' }, 500);
+    if (regeneratedToken) await clearUserDevices(db, id);
 
     const fresh = await db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).bind(id).first<Record<string, unknown>>();
     if (!fresh) return c.json({ error: 'user not found' }, 404);
@@ -269,7 +275,7 @@ export function adminRoutes() {
     if (!Number.isInteger(productId) || productId <= 0) return c.json({ error: 'product_id is required' }, 400);
     const db = c.env.DB;
     const plan = await db
-      .prepare('SELECT name, duration_days, traffic_bytes, speed_limit_bps FROM products WHERE id = ?')
+      .prepare('SELECT name, duration_days, traffic_bytes, speed_limit_bps, max_devices FROM products WHERE id = ?')
       .bind(productId)
       .first<ProductPlan>();
     if (!plan) return c.json({ error: 'product not found' }, 404);

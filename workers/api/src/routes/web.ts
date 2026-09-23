@@ -8,11 +8,15 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { authenticate } from '../lib/session';
 import { constantTimeEqual } from '../lib/csrf';
-import { sanitizedUser, type UserRow } from '../lib/user';
+import { sanitizedUser, isValidEmail, USER_PROFILE_COLS, type UserRow } from '../lib/user';
 import { createPaymentURL } from '../lib/payments';
+import { clearUserDevices } from '../lib/devices';
 import type { Env } from '../index';
 
 type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
+
+const PROFILE_FIELDS = ['username', 'email', 'phone', 'display_name', 'billing_address'] as const;
+type ProfileField = (typeof PROFILE_FIELDS)[number];
 
 // parsePagination — 對齊 Go user.go parsePagination（page≥1、per_page 1..100，預設 20）
 function parsePagination(c: { req: { query: (k: string) => string | undefined } }): { offset: number; limit: number } {
@@ -68,44 +72,103 @@ export function webRoutes() {
 
   // GetProfile
   app.get('/user/profile', webAuth, async (c) => {
-    const user = await c.env.DB.prepare(
-      'SELECT id, username, role, status, balance, subscription_status, subscription_tier, ' +
-        'traffic_limit_bytes, traffic_used_bytes, expire_time, rate_limit_bps, traffic_period_start, ' +
-        'client_token, created_at FROM users WHERE id = ?',
-    )
+    const user = await c.env.DB.prepare(`SELECT ${USER_PROFILE_COLS} FROM users WHERE id = ?`)
       .bind(c.get('userId'))
       .first<UserRow>();
     if (!user) return c.json({ error: 'user not found' }, 404);
     return c.json(sanitizedUser(user));
   });
 
-  // UpdateProfile：只允許 username（allowlist）
+  // UpdateProfile：allowlist username / email / phone / display_name / billing_address（不影響 username 登入）
   app.put('/user/profile', webAuth, webCsrf, async (c) => {
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     if (body === null) return c.json({ error: 'invalid request body' }, 400);
-    if (!('username' in body)) {
+
+    const updates: Partial<Record<ProfileField, string | null>> = {};
+    for (const key of PROFILE_FIELDS) {
+      if (!(key in body)) continue;
+      const raw = body[key];
+      if (raw === null) {
+        updates[key] = null;
+        continue;
+      }
+      if (typeof raw !== 'string') {
+        return c.json({ error: `${key} must be a string or null` }, 400);
+      }
+      updates[key] = raw.trim();
+    }
+    if (Object.keys(updates).length === 0) {
       return c.json({ error: 'no valid fields to update' }, 400);
     }
-    const username = typeof body.username === 'string' ? body.username.trim() : '';
-    if (username === '' || username.length > 64) {
-      return c.json({ error: 'username must be 1-64 characters' }, 400);
+
+    if ('username' in updates) {
+      const username = updates.username ?? '';
+      if (username === '' || username.length > 64) {
+        return c.json({ error: 'username must be 1-64 characters' }, 400);
+      }
+      const taken = await c.env.DB.prepare('SELECT id FROM users WHERE username = ? AND id != ?')
+        .bind(username, c.get('userId'))
+        .first();
+      if (taken) return c.json({ error: 'username already exists' }, 409);
     }
-    const taken = await c.env.DB.prepare('SELECT id FROM users WHERE username = ? AND id != ?')
-      .bind(username, c.get('userId'))
-      .first();
-    if (taken) return c.json({ error: 'username already exists' }, 409);
+
+    if ('email' in updates) {
+      const email = updates.email;
+      if (email !== null && email !== '' && !isValidEmail(email)) {
+        return c.json({ error: 'invalid email format' }, 400);
+      }
+      // 空字串視為清除
+      if (email === '') updates.email = null;
+      if (updates.email) {
+        const taken = await c.env.DB.prepare('SELECT id FROM users WHERE email = ? AND id != ?')
+          .bind(updates.email, c.get('userId'))
+          .first();
+        if (taken) return c.json({ error: 'email already exists' }, 409);
+      }
+    }
+
+    if ('phone' in updates) {
+      const phone = updates.phone;
+      if (phone !== null && phone.length > 32) {
+        return c.json({ error: 'phone must be at most 32 characters' }, 400);
+      }
+      if (phone === '') updates.phone = null;
+    }
+
+    if ('display_name' in updates) {
+      const name = updates.display_name;
+      if (name !== null && name.length > 128) {
+        return c.json({ error: 'display_name must be at most 128 characters' }, 400);
+      }
+      if (name === '') updates.display_name = null;
+    }
+
+    if ('billing_address' in updates) {
+      const addr = updates.billing_address;
+      if (addr !== null && addr.length > 512) {
+        return c.json({ error: 'billing_address must be at most 512 characters' }, 400);
+      }
+      if (addr === '') updates.billing_address = null;
+    }
+
+    const setParts: string[] = [];
+    const binds: unknown[] = [];
+    for (const key of PROFILE_FIELDS) {
+      if (!(key in updates)) continue;
+      setParts.push(`${key} = ?`);
+      binds.push(updates[key] ?? null);
+    }
     const now = new Date().toISOString();
-    const result = await c.env.DB.prepare('UPDATE users SET username = ?, updated_at = ? WHERE id = ?')
-      .bind(username, now, c.get('userId'))
+    setParts.push('updated_at = ?');
+    binds.push(now, c.get('userId'));
+
+    const result = await c.env.DB.prepare(`UPDATE users SET ${setParts.join(', ')} WHERE id = ?`)
+      .bind(...binds)
       .run();
     if ((result.meta.changes ?? 0) === 0) {
       return c.json({ error: 'failed to update profile' }, 500);
     }
-    const user = await c.env.DB.prepare(
-      'SELECT id, username, role, status, balance, subscription_status, subscription_tier, ' +
-        'traffic_limit_bytes, traffic_used_bytes, expire_time, rate_limit_bps, traffic_period_start, ' +
-        'client_token, created_at FROM users WHERE id = ?',
-    )
+    const user = await c.env.DB.prepare(`SELECT ${USER_PROFILE_COLS} FROM users WHERE id = ?`)
       .bind(c.get('userId'))
       .first<UserRow>();
     if (!user) return c.json({ error: 'user not found' }, 404);
@@ -267,6 +330,8 @@ export function webRoutes() {
   });
 
   // RegenerateClientToken："rf_" + 32 隨機位元組 hex（crypto.getRandomValues，對齊 Go rand.Read）
+  // 不變量：只改 client_token + updated_at。不得觸及 traffic_*、expire_time、vless_uuid、
+  // token_version、subscription_* 等權益欄位（訂閱鏈接輪換 ≠ 重開通 / ≠ 換 UUID）。
   app.post('/web/client-token/regenerate', webAuth, webCsrf, async (c) => {
     const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?')
       .bind(c.get('userId'))
@@ -276,12 +341,16 @@ export function webRoutes() {
     crypto.getRandomValues(b);
     const newToken = 'rf_' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    const r = await c.env.DB.prepare('UPDATE users SET client_token = ?, updated_at = ? WHERE id = ?')
+    const r = await c.env.DB.prepare(
+      'UPDATE users SET client_token = ?, updated_at = ? WHERE id = ?',
+    )
       .bind(newToken, now, user.id)
       .run();
     if ((r.meta.changes ?? 0) === 0) {
       return c.json({ error: 'failed to generate token' }, 500);
     }
+    // New subscription URL → free previous device slots (clients must re-import).
+    await clearUserDevices(c.env.DB, user.id);
     return c.json({ token: newToken });
   });
 

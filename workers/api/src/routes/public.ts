@@ -18,8 +18,8 @@ const BCRYPT_COST = 10;
 type UserWithHash = UserRow & { password_hash: string; token_version: number };
 type Credentials = { id: number; username: string; role: string; token_version?: number };
 
-// setWebAuthCookies：session(30d)+refresh(90d)+csrf(30d 非 httpOnly)；
-// 回傳 Bearer(24h) 與 refresh token 供跨站前端（pages.dev）localStorage 兜底與續期
+// setWebAuthCookies：session(2h)+refresh(90d)+csrf(2h 非 httpOnly)；
+// 回傳 Bearer(2h) 與 refresh token 供跨站前端（pages.dev）localStorage 兜底與續期
 async function issueSession(
   c: { env: Env; header: (name: 'Set-Cookie', value: string, opts?: { append?: boolean }) => void },
   user: Credentials,
@@ -27,7 +27,7 @@ async function issueSession(
   const secret = c.env.JWT_SECRET;
   if (!secret) return null;
   const domain = c.env.COOKIE_DOMAIN;
-  const t = await signTokens(user, secret);
+  const t = await signTokens(user, secret, 'portal');
   c.header('Set-Cookie', sessionCookie('session', t.session, domain), { append: true });
   c.header('Set-Cookie', refreshCookie('refresh', t.refresh, domain), { append: true });
   c.header('Set-Cookie', csrfCookie('csrf', randomHex(32), domain), { append: true });
@@ -135,6 +135,10 @@ export function publicRoutes() {
       traffic_period_start: 0,
       client_token: clientToken,
       created_at: now,
+      email: null,
+      phone: null,
+      display_name: null,
+      billing_address: null,
     };
 
     // Go 同樣永遠返回 token；跨站前端靠它 Bearer 兜底

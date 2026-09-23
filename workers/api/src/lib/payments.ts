@@ -301,7 +301,7 @@ export async function activateSubscription(
 ): Promise<void> {
   const plan = await db
     .prepare(
-      'SELECT p.name, p.duration_days, p.traffic_bytes, p.speed_limit_bps FROM orders o' +
+      'SELECT p.name, p.duration_days, p.traffic_bytes, p.speed_limit_bps, p.max_devices FROM orders o' +
         ' JOIN products p ON p.id = o.product_id WHERE o.id = ? AND o.user_id = ? AND p.id = ?',
     )
     .bind(orderId, userId, productId)

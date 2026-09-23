@@ -1,6 +1,7 @@
 <template>
   <div class="page login-page">
     <div class="login-card">
+      <router-link to="/" class="home-link">← RFPlay</router-link>
       <h1>RFPlay</h1>
       <p class="subtitle">Sign in to your account</p>
 
@@ -72,6 +73,15 @@ async function handleLogin() {
   max-width: 400px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.08);
 }
+.home-link {
+  display: inline-block;
+  color: #1a73e8;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 1rem;
+}
+.home-link:hover { text-decoration: underline; }
 h1 {
   text-align: center;
   color: #1a73e8;

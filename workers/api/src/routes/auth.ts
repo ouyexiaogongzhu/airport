@@ -8,10 +8,25 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
 import { verifyJwt } from '../lib/jwt';
-import { SESSION_TTL, sessionCookie, refreshCookie, csrfCookie, clearAuthCookies } from '../lib/cookies';
+import {
+  PORTAL_SESSION_TTL,
+  ADMIN_SESSION_TTL,
+  sessionCookie,
+  refreshCookie,
+  csrfCookie,
+  clearAuthCookies,
+} from '../lib/cookies';
 import { randomHex } from '../lib/csrf';
-import { authenticate, bumpTokenVersion, signTokens, signAccess, BEARER_TTL, type SessionUser } from '../lib/session';
-import { sanitizedUser, type UserRow } from '../lib/user';
+import {
+  authenticate,
+  bumpTokenVersion,
+  signTokens,
+  signAccess,
+  BEARER_TTL,
+  PORTAL_BEARER_TTL,
+  type SessionUser,
+} from '../lib/session';
+import { sanitizedUser, USER_PROFILE_COLS, type UserRow } from '../lib/user';
 import type { Env } from '../index';
 
 type AppEnv = { Bindings: Env; Variables: { userId: number; role: string } };
@@ -22,7 +37,7 @@ async function issueAdminCookies(c: Context<AppEnv>, user: SessionUser | UserWit
   const secret = c.env.JWT_SECRET;
   if (!secret) return null;
   const domain = c.env.COOKIE_DOMAIN;
-  const t = await signTokens(user, secret);
+  const t = await signTokens(user, secret, 'admin');
   c.header('Set-Cookie', sessionCookie('admin_session', t.session, domain), { append: true });
   c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh, domain), { append: true });
   c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32), domain), { append: true });
@@ -98,17 +113,12 @@ export function authRoutes() {
   const webAuth = sessionAuth('session');
   const adminSessionAuth = sessionAuth('admin_session');
 
-  const userCols =
-    'id, username, role, status, balance, subscription_status, subscription_tier, ' +
-    'traffic_limit_bytes, traffic_used_bytes, expire_time, rate_limit_bps, traffic_period_start, ' +
-    'client_token, created_at';
-
   app.get('/auth/csrf', (c) => csrfHandler(c));
   app.get('/admin/auth/csrf', (c) => csrfHandler(c));
 
   // ValidateSession
   app.get('/auth/validate', webAuth, async (c) => {
-    const user = await c.env.DB.prepare(`SELECT ${userCols} FROM users WHERE id = ?`)
+    const user = await c.env.DB.prepare(`SELECT ${USER_PROFILE_COLS} FROM users WHERE id = ?`)
       .bind(c.get('userId'))
       .first<UserRow>();
     if (!user) {
@@ -120,7 +130,7 @@ export function authRoutes() {
   // 後台專用校驗：只認 admin_session（+ Bearer 兜底），不會被 portal 的 session cookie 冒充
   app.get('/admin/auth/validate', adminSessionAuth, async (c) => {
     if (c.get('role') !== 'admin') return c.json({ error: 'admin access required' }, 403);
-    const user = await c.env.DB.prepare(`SELECT ${userCols} FROM users WHERE id = ?`)
+    const user = await c.env.DB.prepare(`SELECT ${USER_PROFILE_COLS} FROM users WHERE id = ?`)
       .bind(c.get('userId'))
       .first<UserRow>();
     if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
@@ -132,10 +142,12 @@ export function authRoutes() {
     const user = await refreshUser(c, 'refresh');
     if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     const secret = c.env.JWT_SECRET as string;
-    c.header('Set-Cookie', sessionCookie('session', await signAccess(user, secret, SESSION_TTL), c.env.COOKIE_DOMAIN), {
-      append: true,
-    });
-    return c.json({ ok: true, token: await signAccess(user, secret, BEARER_TTL) });
+    c.header(
+      'Set-Cookie',
+      sessionCookie('session', await signAccess(user, secret, PORTAL_SESSION_TTL), c.env.COOKIE_DOMAIN),
+      { append: true },
+    );
+    return c.json({ ok: true, token: await signAccess(user, secret, PORTAL_BEARER_TTL) });
   });
 
   app.post('/admin/auth/refresh', async (c) => {
@@ -145,7 +157,7 @@ export function authRoutes() {
     const secret = c.env.JWT_SECRET as string;
     c.header(
       'Set-Cookie',
-      sessionCookie('admin_session', await signAccess(user, secret, SESSION_TTL), c.env.COOKIE_DOMAIN),
+      sessionCookie('admin_session', await signAccess(user, secret, ADMIN_SESSION_TTL), c.env.COOKIE_DOMAIN),
       { append: true },
     );
     return c.json({ ok: true, token: await signAccess(user, secret, BEARER_TTL) });

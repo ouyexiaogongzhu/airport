@@ -6,22 +6,70 @@
         <router-link to="/dashboard">Dashboard</router-link>
         <router-link to="/plans">Plans</router-link>
         <router-link to="/account">Account</router-link>
-        <router-link to="/subscription">Subscription</router-link>
-        <router-link to="/account/guide">Setup Guide</router-link>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
+        <router-link to="/account/devices">Devices</router-link>
+        <a href="#" @click.prevent="auth.logout(); $router.push('/login')">Logout</a>
       </div>
       <span class="user-badge">{{ auth.username }}</span>
     </nav>
 
     <main class="content">
       <h2>Account</h2>
-      <p class="subtitle">Manage your subscription and client token.</p>
+      <p class="subtitle">Profile, subscription, client token, and setup in one place.</p>
 
       <div v-if="loading" class="loading">Loading account info…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
 
+      <section class="card-section" id="profile">
+        <div class="section-header">
+          <h3>Profile</h3>
+          <button class="btn-small" type="button" @click="saveProfile" :disabled="profileSaving">
+            {{ profileSaving ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+        <p v-if="profileMsg" :class="profileMsgOk ? 'ok-msg' : 'error-msg'">{{ profileMsg }}</p>
+        <div class="form-grid">
+          <label class="form-field">
+            <span class="label">Username</span>
+            <input v-model="profileForm.username" type="text" maxlength="64" autocomplete="username" />
+          </label>
+          <label class="form-field">
+            <span class="label">Display name</span>
+            <input v-model="profileForm.display_name" type="text" maxlength="128" autocomplete="name" />
+          </label>
+          <label class="form-field">
+            <span class="label">Email</span>
+            <input v-model="profileForm.email" type="email" maxlength="254" autocomplete="email" />
+          </label>
+          <label class="form-field">
+            <span class="label">Phone</span>
+            <input v-model="profileForm.phone" type="tel" maxlength="32" autocomplete="tel" />
+          </label>
+          <label class="form-field full">
+            <span class="label">Billing address</span>
+            <textarea v-model="profileForm.billing_address" rows="2" maxlength="512"></textarea>
+          </label>
+        </div>
+      </section>
+
+      <section class="card-section" id="billing">
+        <div class="section-header">
+          <h3>Billing</h3>
+          <router-link to="/plans" class="btn-outline">Browse Plans</router-link>
+        </div>
+        <div v-if="ordersLoading" class="loading">Loading orders…</div>
+        <div v-else-if="!orders.length" class="placeholder-box">
+          <p>No orders yet.</p>
+        </div>
+        <div v-else class="orders-list">
+          <div v-for="o in orders" :key="o.id" class="info-row">
+            <span class="label">#{{ o.id }} · {{ o.status }}</span>
+            <span class="value">{{ formatOrderAmount(o) }} · {{ formatOrderDate(o.created_at) }}</span>
+          </div>
+        </div>
+      </section>
+
       <!-- Subscription Status -->
-      <section class="card-section">
+      <section class="card-section" id="subscription">
         <h3>Subscription</h3>
         <div class="sub-info">
           <div class="info-row">
@@ -134,7 +182,6 @@
           <p class="danger-hint">Resetting will invalidate the current token. All devices will need to re-import.</p>
         </div>
 
-        <!-- Regenerate confirm modal -->
         <div v-if="showConfirm" class="modal-overlay" role="dialog" aria-modal="true" @click.self="showConfirm = false">
           <div class="modal">
             <h4>Confirm Token Reset</h4>
@@ -146,7 +193,6 @@
           </div>
         </div>
 
-        <!-- Regenerate result -->
         <div v-if="newToken" class="new-token-banner">
           <h4>New Token Generated</h4>
           <p class="warning">Save this now — it will only be shown once!</p>
@@ -155,19 +201,76 @@
         </div>
       </section>
 
-      <!-- Node List -->
-      <section class="card-section">
-        <h3>Available Nodes</h3>
-        <div v-if="nodesLoading" class="loading">Loading nodes…</div>
-        <div v-if="nodesError" class="error-msg">{{ nodesError }}</div>
-        <div v-if="nodes.length > 0" class="node-list">
-          <div v-for="(node, i) in nodes" :key="i" class="node-item">
-            <span class="node-icon">🔗</span>
-            <span class="node-name">{{ node }}</span>
-          </div>
+      <!-- Setup Guide (merged from SetupGuide.vue) -->
+      <section class="card-section" id="setup">
+        <h3>Setup Guide</h3>
+        <p class="section-hint">Follow the steps for your device to get connected.</p>
+
+        <div class="tabs">
+          <button
+            v-for="t in tabs"
+            :key="t.key"
+            :class="['tab', { active: activeTab === t.key }]"
+            @click="activeTab = t.key"
+          >
+            {{ t.label }}
+          </button>
         </div>
-        <div v-if="nodes.length === 0 && !nodesLoading && !nodesError" class="no-data">
-          No nodes available yet. Purchase a plan to get access.
+
+        <div v-if="activeTab === 'v2rayng'" class="guide-section">
+          <div class="guide-header">
+            <span class="platform-badge android">Android</span>
+            <h4>V2rayNG</h4>
+          </div>
+          <div class="install-methods">
+            <a href="https://play.google.com/store/apps/details?id=com.v2ray.ang" target="_blank" rel="noopener" class="method-btn">Google Play</a>
+            <a href="https://github.com/2dust/v2rayNG/releases" target="_blank" rel="noopener" class="method-btn">APK Download</a>
+          </div>
+          <ol class="steps">
+            <li>Open V2rayNG app</li>
+            <li>Tap <strong>+</strong> icon in the top-right corner</li>
+            <li>Select <strong>Import subscription from clipboard</strong></li>
+            <li>Paste your <strong>Base64</strong> subscription URL (copied above)</li>
+            <li>Tap <strong>✓</strong> to confirm</li>
+            <li>Select a node and tap <strong>Connect</strong></li>
+          </ol>
+        </div>
+
+        <div v-if="activeTab === 'shadowrocket'" class="guide-section">
+          <div class="guide-header">
+            <span class="platform-badge ios">iOS</span>
+            <h4>Shadowrocket</h4>
+          </div>
+          <div class="install-methods">
+            <a href="https://apps.apple.com/app/shadowrocket/id932747118" target="_blank" rel="noopener" class="method-btn">App Store</a>
+          </div>
+          <ol class="steps">
+            <li>Open Shadowrocket app</li>
+            <li>Tap the <strong>+</strong> icon in the top-right corner</li>
+            <li>Select type: <strong>Subscribe</strong></li>
+            <li>Paste your subscription URL</li>
+            <li>Tap <strong>Save</strong> (top-right)</li>
+            <li>Select a node and toggle <strong>Connect</strong></li>
+          </ol>
+        </div>
+
+        <div v-if="activeTab === 'clash-verge'" class="guide-section">
+          <div class="guide-header">
+            <span class="platform-badge desktop">Desktop</span>
+            <h4>Clash Verge</h4>
+          </div>
+          <div class="install-methods">
+            <a href="https://github.com/clash-verge-rev/clash-verge-rev/releases" target="_blank" rel="noopener" class="method-btn">GitHub Releases</a>
+          </div>
+          <ol class="steps">
+            <li>Download and install Clash Verge for your OS</li>
+            <li>Open Clash Verge → go to <strong>Profiles</strong></li>
+            <li>Click <strong>Import</strong> (or paste URL)</li>
+            <li>Paste your Clash subscription URL (<code>/clash</code>)</li>
+            <li>Click <strong>Import</strong> to confirm</li>
+            <li>Go to <strong>Proxies</strong> and select a node</li>
+            <li>Toggle <strong>System Proxy</strong> or <strong>TUN Mode</strong></li>
+          </ol>
         </div>
       </section>
     </main>
@@ -183,36 +286,44 @@ import { buildSubscriptionUrl } from '../utils/subscriptionUrl'
 
 const auth = useAuthStore()
 
-// Profile (from /api/v1/user/profile)
 const profile = ref<any>({})
 const loading = ref(true)
 const error = ref('')
+const profileForm = ref({
+  username: '',
+  display_name: '',
+  email: '',
+  phone: '',
+  billing_address: '',
+})
+const profileSaving = ref(false)
+const profileMsg = ref('')
+const profileMsgOk = ref(false)
+const orders = ref<any[]>([])
+const ordersLoading = ref(false)
 
-// Token
 const tokenData = ref<any>(null)
 const fullToken = ref('')
 const showFullToken = ref(false)
 const tokenLoading = ref(false)
 const tokenError = ref('')
 
-// Regenerate
 const showConfirm = ref(false)
 const regenerating = ref(false)
 const newToken = ref('')
 const newCopied = ref(false)
 
-// Node list
-const nodes = ref<string[]>([])
-const nodesLoading = ref(false)
-const nodesError = ref('')
-
-// QR
 const showQr = ref(false)
 const copied = ref(false)
-
-// Subscription link
 const showLinkQr = ref(false)
 const copiedKind = ref('')
+
+const activeTab = ref('v2rayng')
+const tabs = [
+  { key: 'v2rayng', label: 'V2rayNG' },
+  { key: 'shadowrocket', label: 'Shadowrocket' },
+  { key: 'clash-verge', label: 'Clash Verge' },
+]
 
 const statusClass = computed(() => {
   const s = profile.value.subscription_status || ''
@@ -229,10 +340,7 @@ const trafficPercent = computed(() => {
   return Math.min(100, Math.round((used / limit) * 100))
 })
 
-// Full token available without user action: the freshly regenerated token
-// wins, otherwise fall back to the full token already returned in the profile.
 const fullSubscriptionToken = computed(() => newToken.value || profile.value.client_token || '')
-
 const subscriptionUrl = computed(() => buildSubscriptionUrl(fullSubscriptionToken.value))
 const clashSubscriptionUrl = computed(() => buildSubscriptionUrl(fullSubscriptionToken.value, 'clash'))
 
@@ -248,8 +356,7 @@ function formatBytes(bytes: number | undefined | null): string {
 function formatTrafficRemaining(): string {
   const limit = profile.value.traffic_limit_bytes || 0
   const used = profile.value.traffic_used_bytes || 0
-  const rem = Math.max(0, limit - used)
-  return formatBytes(rem)
+  return formatBytes(Math.max(0, limit - used))
 }
 
 function formatExpiry(ts: number | undefined | null): string {
@@ -258,13 +365,23 @@ function formatExpiry(ts: number | undefined | null): string {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-// Fetch profile (subscription info)
+function syncProfileForm(data: any) {
+  profileForm.value = {
+    username: data.username || '',
+    display_name: data.display_name || '',
+    email: data.email || '',
+    phone: data.phone || '',
+    billing_address: data.billing_address || '',
+  }
+}
+
 async function fetchProfile() {
   loading.value = true
   error.value = ''
   try {
     const res = await api.get('/user/profile')
     profile.value = res.data
+    syncProfileForm(res.data)
   } catch (e: any) {
     error.value = e.response?.data?.error || 'Failed to load account info'
   } finally {
@@ -272,8 +389,56 @@ async function fetchProfile() {
   }
 }
 
-// Fetch client token. `skipCache` is set by the explicit Refresh button so a
-// manual refresh always talks to the server.
+async function saveProfile() {
+  profileSaving.value = true
+  profileMsg.value = ''
+  try {
+    const res = await api.put('/user/profile', {
+      username: profileForm.value.username,
+      display_name: profileForm.value.display_name,
+      email: profileForm.value.email,
+      phone: profileForm.value.phone,
+      billing_address: profileForm.value.billing_address,
+    })
+    profile.value = res.data
+    syncProfileForm(res.data)
+    if (auth.user && res.data.username) {
+      auth.user = { ...auth.user, username: res.data.username }
+    }
+    profileMsgOk.value = true
+    profileMsg.value = 'Profile saved.'
+  } catch (e: any) {
+    profileMsgOk.value = false
+    profileMsg.value = e.response?.data?.error || 'Failed to save profile'
+  } finally {
+    profileSaving.value = false
+  }
+}
+
+function formatOrderAmount(o: any): string {
+  if (o.amount == null) return '—'
+  return String(o.amount)
+}
+
+function formatOrderDate(v: string | undefined | null): string {
+  if (!v) return '—'
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return String(v)
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+async function fetchOrders() {
+  ordersLoading.value = true
+  try {
+    const res = await api.get('/user/orders')
+    orders.value = res.data?.data || []
+  } catch {
+    orders.value = []
+  } finally {
+    ordersLoading.value = false
+  }
+}
+
 async function fetchToken(skipCache = false) {
   tokenLoading.value = true
   tokenError.value = ''
@@ -282,7 +447,7 @@ async function fetchToken(skipCache = false) {
   try {
     const res = await api.get('/web/client-token', { cache: skipCache ? { skipCache: true } : undefined })
     tokenData.value = res.data
-    fullToken.value = '' // Full token only available after regenerate or from profile
+    fullToken.value = ''
   } catch (e: any) {
     tokenError.value = e.response?.data?.error || 'Failed to load token'
     tokenData.value = null
@@ -291,20 +456,17 @@ async function fetchToken(skipCache = false) {
   }
 }
 
-// Toggle showing full token
 function toggleTokenVisibility() {
   if (showFullToken.value) {
     showFullToken.value = false
     return
   }
-  // If we don't have full token, try to get from profile
   if (profile.value.client_token) {
     fullToken.value = profile.value.client_token
     showFullToken.value = true
   }
 }
 
-// Copy masked token
 async function copyToken() {
   if (!tokenData.value?.token) return
   await navigator.clipboard.writeText(tokenData.value.token)
@@ -312,7 +474,6 @@ async function copyToken() {
   setTimeout(() => { copied.value = false }, 2000)
 }
 
-// Copy a subscription URL ('clash' or 'base64' format)
 async function copySubscriptionUrl(url: string, kind: 'clash' | 'base64') {
   if (!url) return
   await navigator.clipboard.writeText(url)
@@ -320,21 +481,17 @@ async function copySubscriptionUrl(url: string, kind: 'clash' | 'base64') {
   setTimeout(() => { copiedKind.value = '' }, 2000)
 }
 
-// Confirm regenerate
 function confirmRegenerate() {
   showConfirm.value = true
 }
 
-// Regenerate token
 async function regenerateToken() {
   regenerating.value = true
   showConfirm.value = false
   try {
     const res = await api.post('/web/client-token/regenerate')
     newToken.value = res.data.token
-    // Refresh masked token display
     await fetchToken()
-    // Clear fullToken since it's been regenerated
     fullToken.value = ''
   } catch (e: any) {
     tokenError.value = e.response?.data?.error || 'Failed to regenerate token'
@@ -343,7 +500,6 @@ async function regenerateToken() {
   }
 }
 
-// Copy new token
 async function copyNewToken() {
   if (!newToken.value) return
   await navigator.clipboard.writeText(newToken.value)
@@ -351,31 +507,10 @@ async function copyNewToken() {
   setTimeout(() => { newCopied.value = false }, 2000)
 }
 
-// Fetch node list
-async function fetchNodes() {
-  nodesLoading.value = true
-  nodesError.value = ''
-  try {
-    const res = await api.get('/client/subscription')
-    nodes.value = res.data.nodes || []
-  } catch (e: any) {
-    const msg = e.response?.data?.error || ''
-    if (msg === 'SUBSCRIPTION_PENDING') {
-      nodesError.value = 'Subscription pending — no nodes available yet.'
-    } else if (msg === 'SUBSCRIPTION_EXPIRED') {
-      nodesError.value = 'Subscription expired — renew to access nodes.'
-    } else {
-      nodesError.value = msg || 'Failed to load nodes'
-    }
-  } finally {
-    nodesLoading.value = false
-  }
-}
-
 onMounted(() => {
   fetchProfile()
   fetchToken()
-  fetchNodes()
+  fetchOrders()
 })
 </script>
 
@@ -403,23 +538,51 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .subtitle { color: #a0a0b0; margin: 0.25rem 0 1.5rem; font-size: 0.9rem; }
 .loading { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
 .error-msg { color: #ff6b6b; background: rgba(255,107,107,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+.ok-msg { color: #81c784; background: rgba(129,199,132,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem 1rem;
+}
+.form-field { display: flex; flex-direction: column; gap: 0.35rem; }
+.form-field.full { grid-column: 1 / -1; }
+.form-field .label { color: #a0a0b0; font-size: 0.8rem; }
+.form-field input,
+.form-field textarea {
+  background: #0f3460;
+  border: 1px solid #1a5276;
+  border-radius: 8px;
+  color: #e0e0e0;
+  padding: 0.55rem 0.75rem;
+  font: inherit;
+}
+.form-field input:focus,
+.form-field textarea:focus {
+  outline: none;
+  border-color: #e94560;
+}
+.orders-list { display: flex; flex-direction: column; gap: 0.5rem; }
+@media (max-width: 640px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
 
-/* Card sections */
 .card-section {
   background: #16213e;
   border-radius: 12px;
   padding: 1.5rem;
   margin-bottom: 1.5rem;
+  scroll-margin-top: 1.5rem;
 }
-.card-section h3 { margin: 0 0 1rem; font-size: 1rem; color: #f0f0f0; }
+.card-section h3 { margin: 0 0 0.5rem; font-size: 1rem; color: #f0f0f0; }
+.section-hint { color: #a0a0b0; font-size: 0.85rem; margin: 0 0 1rem; }
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
 .section-header h3 { margin: 0; }
 
-/* Subscription info */
 .sub-info { display: grid; gap: 0.75rem; }
 .info-row { display: flex; justify-content: space-between; align-items: center; }
 .info-row .label { color: #a0a0b0; font-size: 0.85rem; }
 .info-row .value { color: #e0e0e0; font-size: 0.9rem; font-weight: 500; }
+.info-row .value.muted { color: #718096; font-weight: 400; }
 .status-badge {
   display: inline-block;
   padding: 0.2rem 0.7rem;
@@ -432,7 +595,6 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .status-badge.pending { background: rgba(255,193,7,0.2); color: #ffd54f; }
 .status-badge.expired { background: rgba(244,67,54,0.2); color: #e57373; }
 
-/* Progress bar */
 .progress-row { display: flex; align-items: center; gap: 0.75rem; }
 .progress-bar {
   flex: 1;
@@ -449,7 +611,20 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 }
 .progress-label { color: #a0a0b0; font-size: 0.8rem; min-width: 2.5rem; text-align: right; }
 
-/* Token area */
+.placeholder-box {
+  padding: 1rem;
+  background: #0f3460;
+  border-radius: 8px;
+  color: #a0a0b0;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.placeholder-box p { margin: 0; }
+
 .token-area { margin-bottom: 1.5rem; }
 .token-display { margin-bottom: 0.75rem; }
 .link-hint { color: #a0a0b0; font-size: 0.85rem; margin: 0 0 0.75rem; }
@@ -468,18 +643,13 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .token-text.dim { opacity: 0.6; }
 .token-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
-/* QR */
 .qr-area { margin-top: 1rem; padding: 1rem; background: #0f3460; border-radius: 8px; }
 .qr-hint { text-align: center; color: #a0a0b0; font-size: 0.8rem; margin: 0.5rem 0 0; }
-
-/* No token */
 .no-token { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
 
-/* Token danger zone */
 .token-danger { border-top: 1px solid #0f3460; padding-top: 1rem; }
 .danger-hint { color: #a0a0b0; font-size: 0.8rem; margin: 0.5rem 0 0; }
 
-/* Buttons */
 .btn-small {
   padding: 0.3rem 0.7rem;
   background: #0f3460;
@@ -499,6 +669,8 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
   color: #e0e0e0;
   cursor: pointer;
   font-size: 0.85rem;
+  text-decoration: none;
+  display: inline-block;
   transition: all 0.2s;
 }
 .btn-outline:hover { border-color: #e94560; color: #e94560; }
@@ -514,7 +686,6 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 }
 .btn-danger:hover { background: rgba(244,67,54,0.3); }
 
-/* Modal */
 .modal-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -536,7 +707,6 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .modal p { color: #a0a0b0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 1.5rem; }
 .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
 
-/* New token banner */
 .new-token-banner {
   background: #1b5e20;
   border-radius: 8px;
@@ -548,18 +718,47 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .new-token-banner .btn-outline { margin-top: 0.75rem; border-color: #81c784; color: #81c784; }
 .new-token-banner .btn-outline:hover { border-color: #a5d6a7; color: #a5d6a7; }
 
-/* Node list */
-.node-list { display: grid; gap: 0.5rem; }
-.node-item {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 0.75rem;
+.tabs { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.tab {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid #0f3460;
+  border-radius: 20px;
+  background: transparent;
+  color: #a0a0b0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+.tab:hover { background: rgba(233,69,96,0.1); border-color: #e94560; }
+.tab.active { background: #e94560; color: white; border-color: #e94560; }
+.guide-section { margin-top: 0.25rem; }
+.guide-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.guide-header h4 { margin: 0; font-size: 1.05rem; color: #f0f0f0; }
+.platform-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.platform-badge.android { background: #4caf50; color: white; }
+.platform-badge.ios { background: #2196f3; color: white; }
+.platform-badge.desktop { background: #ff9800; color: white; }
+.install-methods { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.method-btn {
+  display: inline-block;
+  padding: 0.4rem 0.9rem;
   background: #0f3460;
   border-radius: 8px;
-  font-size: 0.9rem;
+  color: #e0e0e0;
+  text-decoration: none;
+  font-size: 0.85rem;
+  transition: background 0.2s;
 }
-.node-icon { font-size: 1rem; }
-.node-name { color: #e0e0e0; }
-.no-data { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
+.method-btn:hover { background: #1a5276; }
+.steps { padding-left: 1.5rem; margin: 0; }
+.steps li { margin-bottom: 0.6rem; line-height: 1.5; color: #c0c0d0; font-size: 0.9rem; }
+.steps li strong { color: #e94560; }
+code { background: #0f3460; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
 </style>

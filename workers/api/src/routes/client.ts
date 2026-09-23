@@ -1,10 +1,20 @@
 // 客戶端訂閱數據面 — 對齊 manager/internal/handler/subscription.go + middleware/auth.go JWTProtected
 // 契約：錯誤字串/狀態碼/JSON 鍵序/響應頭逐字對齊 Go。
+// 設備槽位：訂閱拉取 /links/:token 綁定指紋（見 docs/devices.md）；JWT /subscription 不計入。
 import { Hono } from 'hono';
+import { getCookie } from 'hono/cookie';
 import type { Env } from '../index';
 import { verifyJwt, type Claims } from '../lib/jwt';
 import { serviceBlock } from '../lib/entitlement';
 import { checkClaims } from '../lib/session';
+import { constantTimeEqual } from '../lib/csrf';
+import {
+  DEFAULT_MAX_DEVICES,
+  deleteDevice,
+  listDevices,
+  resolveDeviceIdentity,
+  touchDevice,
+} from '../lib/devices';
 import { buildFormat, goJSON, type FormatKind } from '../lib/subformats';
 import { encodeNodeToURI, type NodeRow, type UserCreds } from '../lib/xrayuri';
 
@@ -17,6 +27,7 @@ type UserRow = {
   traffic_used_bytes: number | null;
   expire_time: number | null;
   vless_uuid: string | null;
+  max_devices: number | null;
 };
 
 type CachedBody = { ct: string; body: string };
@@ -114,7 +125,7 @@ export function clientRoutes() {
   // QR 暫緩：portal 前端自行生成
   r.get('/links/:token/qrcode', (c) => c.json({ error: 'NOT_IMPLEMENTED' }, 501));
 
-  // GET /client/subscription — GetSubscription（Bearer JWT）
+  // GET /client/subscription — GetSubscription（Bearer JWT；不計入設備槽位）
   r.get('/subscription', async (c) => {
     const auth = await requireJwt(c);
     if (isResponse(auth)) return auth;
@@ -168,12 +179,67 @@ export function clientRoutes() {
     );
   });
 
+  // GET /client/devices — 官網 cookie / Flutter Bearer
+  r.get('/devices', async (c) => {
+    const auth = await requireJwt(c);
+    if (isResponse(auth)) return auth;
+    const headerId = c.req.header('X-Device-Id') ?? c.req.header('X-Device-Fingerprint');
+    const queryId = c.req.query('device_id') ?? c.req.query('dfp');
+    let currentFp: string | undefined;
+    if (headerId || queryId) {
+      const id = await resolveDeviceIdentity({
+        headerId,
+        queryId,
+        userAgent: c.req.header('User-Agent'),
+      });
+      currentFp = id.fingerprint;
+    }
+    const out = await listDevices(c.env.DB, auth.user_id, currentFp);
+    return c.json(out);
+  });
+
+  // DELETE /client/devices/:id — Bearer 免 CSRF；純 cookie 需雙提交
+  r.delete('/devices/:id', async (c) => {
+    const auth = await requireJwt(c);
+    if (isResponse(auth)) return auth;
+
+    if (!c.req.header('Authorization')) {
+      const header = c.req.header('X-CSRF-Token');
+      const cookie = getCookie(c, 'csrf');
+      if (!header || !cookie || !constantTimeEqual(header, cookie)) {
+        return c.json({ error: 'CSRF_INVALID' }, 403);
+      }
+    }
+
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) {
+      return c.json({ error: 'invalid device id' }, 400);
+    }
+    const result = await deleteDevice(c.env.DB, auth.user_id, id);
+    if (result === 'not_found') {
+      return c.json({ error: 'DEVICE_NOT_FOUND' }, 404);
+    }
+    return c.json({ ok: true });
+  });
+
   return r;
 }
 
-// handleLinksRequest：鑑權/狀態檢查永不走緩存（每請求讀 D1 用戶行）；
+// handleLinksRequest：鑑權/狀態/設備槽位永不走緩存（每請求讀 D1）；
 // 僅在狀態通過後，格式化 body 以 KV 緩存 60s（key=token+format），KV 異常靜默穿透直讀 D1。
-async function handleLinks(c: { env: Env; req: { param: (k: string) => string }; executionCtx: { waitUntil: (p: Promise<unknown>) => void } }, token: string, format: FormatKind): Promise<Response> {
+async function handleLinks(
+  c: {
+    env: Env;
+    req: {
+      param: (k: string) => string;
+      header: (k: string) => string | undefined;
+      query: (k: string) => string | undefined;
+    };
+    executionCtx: { waitUntil: (p: Promise<unknown>) => void };
+  },
+  token: string,
+  format: FormatKind,
+): Promise<Response> {
   if (token === '') {
     return Response.json({ error: 'INVALID_TOKEN' }, { status: 401 });
   }
@@ -189,6 +255,24 @@ async function handleLinks(c: { env: Env; req: { param: (k: string) => string };
   const blocked = serviceBlock(user, Math.floor(Date.now() / 1000));
   if (blocked) {
     return Response.json({ error: blocked }, { status: 403 });
+  }
+
+  const identity = await resolveDeviceIdentity({
+    headerId: c.req.header('X-Device-Id') ?? c.req.header('X-Device-Fingerprint'),
+    queryId: c.req.query('device_id') ?? c.req.query('dfp'),
+    userAgent: c.req.header('User-Agent'),
+  });
+  const maxDevices = user.max_devices ?? DEFAULT_MAX_DEVICES;
+  const touch = await touchDevice(c.env.DB, user.id, maxDevices, identity, Math.floor(Date.now() / 1000));
+  if (!touch.ok) {
+    return Response.json(
+      {
+        error: 'DEVICE_LIMIT_EXCEEDED',
+        message: `Device limit reached (${maxDevices}). Revoke a device in the portal, then retry.`,
+        max_devices: maxDevices,
+      },
+      { status: 403 },
+    );
   }
 
   const headers = subsHeaders(user);
