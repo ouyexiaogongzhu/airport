@@ -33,7 +33,7 @@
 | `/links/:token/clash` | Clash YAML | Clash Verge（mihomo 内核）、Stash |
 | `/links/:token/singbox` | sing-box JSON | **未完成**（目前仅占位输出） |
 
-响应头 `Subscription-Userinfo` 携带已用流量 / 总流量 / 到期时间。当前端到端可用的协议只有 VLESS 与 VMess，未完成项见 [cloudflare_migration_plan.md §15](cloudflare_migration_plan.md#15-未完成功能与已知-bug)。
+响应头 `Subscription-Userinfo` 携带已用流量 / 总流量 / 到期时间。当前端到端可用的协议只有 VLESS 与 VMess，未完成项见 [cloudflare_migration_plan.md §4](cloudflare_migration_plan.md#4-未完成功能与已知-bug)。
 
 ## 目录结构
 
@@ -92,5 +92,5 @@ npx wrangler deploy
 
 ## 文档
 
-* **[cloudflare_migration_plan.md](cloudflare_migration_plan.md)**：当前架构、上线手册、上线状态、未完成功能与已知 bug ← **必读**
+* **[cloudflare_migration_plan.md](cloudflare_migration_plan.md)**：决策、架构、部署运维、已知 bug 与修复计划 ← **必读**
 * [airport_system_design.md](airport_system_design.md)：早期完整设计（Go Manager + Flutter 时期），仅部分章节仍有效，见文首说明

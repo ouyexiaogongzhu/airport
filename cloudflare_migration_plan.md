@@ -1,733 +1,208 @@
-# Cloudflare 遷移方案 — 退役 Go，Manager 全量 TypeScript 重寫上 Workers
+# RFPlay 平台方案：Cloudflare Workers + Tunnel 节点
 
-> **狀態**: 規劃（2026-09-05）
-> **決策**: 徹底退役 Go manager（Fiber + GORM/SQLite + Docker），以 Workers (TS/Hono) + D1 + KV + R2 重寫。
-> **客戶端決策（2026-09-05）**: **退役 Flutter 客戶端（`client/`）**，用戶端改用**通用 Clash 客戶端**（Clash Meta/mihomo 系）+ 訂閱 URL 導入，自研 App 歸零。
-> **關聯**: [README.md](README.md)、[airport_system_design.md](airport_system_design.md)
+> **状态（2026-09-23）**：Go manager 与 Flutter 客户端已退役，后端为 Workers（TS/Hono）+ D1 + KV。里程碑 A 的 A0–A3 代码已完成，待 VPS 验收（§5.5）；支付（里程碑 B）暂缓。
+> **关联**：[README.md](README.md)；[airport_system_design.md](airport_system_design.md) 为早期设计，仅供参考。
 
 ---
 
-## 1. 目標與非目標
+## 1. 已确定的决策
 
-| 目標 | 非目標 |
+| 项 | 决策 |
 | :--- | :--- |
-| 退役 `manager/` 全部 Go 代碼與其 Docker 部署 | 不退役 xray 節點進程；**節點統一為 CF-WS + Tunnel 回源（零公網端口），Reality 已從方案刪除** |
-| **退役 `client/` Flutter 客戶端**，訂閱導入交給通用 Clash 客戶端（用戶自備） | 不改 admin / daemon 代碼（契約保持則無需動）；portal 僅一處小改（訂閱連結默認輸出 Clash 格式） |
-| API 契約 100% 不變：portal/admin（cookie+CSRF）、訂閱 URL（無鑑）、daemon（HMAC） | 不引進付費依賴；超額對策僅備檔 `$5/月 Workers Paid` |
-| 基礎設施全部遷到 CF 免費層（Workers/D1/KV/R2/Pages/Tunnel/Access/Turnstile） | 不重寫 daemon（它本來就是 Node，只需改 `DAEMON_MANAGER_URL`） |
-| BEpusdt 支付進程留 VPS（第三方 Go 服務，不屬於本次重寫範圍）；**新增 PayPal 通道（大陸用戶可用）**，XunhuPay 已從計劃刪除 | |
+| 后端 | 单个 Worker `rfplay-api`（Hono 按 public/client/web/admin/node 分路由），共享 D1；不拆微服务 |
+| 客户端 | 不自研 App。用户用通用客户端导入订阅 URL：Clash 系（mihomo 内核，`/clash`）为主，V2rayNG 等用 Base64（`/links/:token`） |
+| 节点形态 | **所有节点走 Cloudflare：VLESS/VMess + WS，cloudflared Tunnel 回源**。Xray 只监听 `127.0.0.1`，VPS 零公网端口、无需证书。Reality 已删除 |
+| 协议 | 只保留 `vless`、`vmess`；Shadowsocks / Trojan 已下线 |
+| 商品 | 每个商品单独配置时长、流量（每 30 天额度）、限速 |
+| 支付 | 暂不做（里程碑 B）。先由管理员在后台手动开通 |
+| 出口 IP | 不处理：节点出站直连（`freedom`），目标网站可见 VPS 出口 IP |
+| 节点面板 | 不引入 Marzban / 3X-UI：自研 daemon + Worker 为唯一控制面，只借鉴其设计 |
+| 会话 | HS256 JWT 放 httpOnly cookie（`session` / `admin_session` / `refresh`）+ CSRF 双提交；跨站 pages.dev 用 Bearer 兜底 |
+| 限流 / 人机校验 | 不在 Worker 内做进程级限流；由 CF WAF 规则 + Turnstile 承担 |
 
 ---
 
-## 2. 現狀盤點（`manager/` 全量清單）
-
-### 2.1 路由（`cmd/server/main.go`，約 50 條）
-
-| 分組 | 端點 | 鑑權 | Workers 對策 |
-| :--- | :--- | :--- | :--- |
-| 健康檢查 | `GET /health` | 無 | Worker 內 `__scheduled`/健康路由 |
-| 驗證碼 | `GET /captcha` | 無 | **刪除**，換 Turnstile（無後端狀態） |
-| 公開 | `POST /public/register` `/login` | 無 + 限流 | Worker + Turnstile 校驗 |
-| ~~公開~~ | `POST /public/token-login` | — | **刪除**：Flutter token 導入專屬，退役後全庫無消費者 |
-| 支付回調 | `POST /public/payment/callback[/:provider]` | 簽名 | Worker + 簽名驗證 |
-| 客戶端訂閱 | `GET /client/config`、`GET /client/links/:token{,/clash,/singbox,/qrcode}` | 無（token 即憑證）+ 限流 | **Worker 第一批**（最高頻）；**`/clash` 為主力輸出** |
-| 客戶端訂閱（JWT） | `GET /client/subscription` | Bearer JWT | Worker；**消費者是 portal 三個頁面**（Dashboard/Account/Subscription），必須保留 |
-| Web 會話 | `GET /auth/csrf` `/validate`、`POST /auth/refresh` `/logout` | httpOnly cookie JWT | Worker（WebCrypto HMAC 重簽） |
-| Admin 會話 | `POST /admin/auth/login` `/logout`、`GET /admin/auth/csrf` | cookie | 同上 |
-| 節點 daemon | `GET /node/:token/config`、`POST /node/:token/traffic/report` | node token + HMAC | Worker（第一批/第二批） |
-| 用戶 | `GET/PUT /user/profile`、`POST/GET /user/orders[/:id]` | cookie + CSRF | Worker |
-| 訂閱憑證 | `GET /web/client-token`、`POST /web/client-token/regenerate` | cookie + CSRF | Worker |
-| Admin 管理 | users / orders(+refund) / stats / nodes(+token/config) / traffic / products | admin cookie + CSRF | Worker |
-
-### 2.2 數據層（GORM + SQLite，5 張表 → D1）
+## 2. 架构
 
 ```
-users(id, username✦, password_hash, role, balance, status, client_token✦,
-      subscription_status, subscription_tier, traffic_limit_bytes, traffic_used_bytes,
-      expire_time, rate_limit_bps, traffic_period_start, vless_uuid, ss_password,
-      trojan_password, created_at, updated_at)
-nodes(id, name, type, address, port, protocol, status, traffic_up/down, user_id,
-      network, security, ws_path, server_name, reality_public_key, reality_short_id,
-      token✦, last_heartbeat, created_at, updated_at)
-orders(id, user_id, product_id, amount, status, provider, payment_url, created_at, updated_at)
-products(id, name, type, price, stock, status, created_at, updated_at)
-traffic_records(id, node_id, user_id, upload_bytes, download_bytes, recorded_at)
+                         Cloudflare
+  ┌────────────────────────────────────────────────────────────┐
+  │ Pages   www.rfplay.uk（portal） / admin.rfplay.uk（admin）   │
+  │ Worker  api.rfplay.uk/api/v1/*（rfplay-api）                 │
+  │   ├─ D1  rfplay：users / nodes / orders / products / traffic │
+  │   ├─ KV  CACHE：订阅响应缓存 60s                               │
+  │   ├─ R2  BACKUPS（已绑定，未使用）                              │
+  │   └─ Cron 每小时：标记过期、按 30 天周期重置流量                    │
+  │ Tunnel  node-xx.rfplay.uk → VPS 127.0.0.1:<xray-port>        │
+  │         pay.rfplay.uk     → VPS BEpusdt（里程碑 B）            │
+  └───────────────┬───────────────────────────┬────────────────┘
+                  │ 订阅 URL                    │ /api/v1/node/:token/*（HMAC）
+          用户的 Clash / V2rayNG              VPS：Xray + daemon（Go）+ cloudflared
+                                              入站只留 SSH
 ```
-✦ = uniqueIndex。全部是簡單關聯，無 stored procedure / 觸發器 → D1 直遷。
 
-### 2.3 對遷移有利的既有事實
+**节点数据流**：daemon 定时拉 `GET /node/:token/config`，按版本号决定是否重载 Xray；从 Xray StatsService 读按用户流量，`POST /node/:token/traffic/report` 批量上报；上报成功后才扣除本地增量。
 
-- **會話無狀態**：HS256 JWT 裝在 httpOnly cookie（`session`/`admin_session` + `refresh` + `csrf` double-submit），**無服務端 session 存储** → Workers 零狀態重現，只需 WebCrypto + 同名 cookie。
-- **無後台 cron**：`internal/cron/` 是空目錄；訂閱過期是讀時計算 → 不需要 Cron Triggers 也能跑（可選加）。
-- **限流是進程內 `sync.Map`**（本來就有 TODO 要換 TTL-LRU）→ Workers 上天然失效（多 isolate），直接刪，改用 CF WAF 免費規則 + Turnstile，升級路徑為 DO 限流器。
-- **daemon 是 Go**（`daemon/`）：只調 `GET /node/:token/config` + `POST /node/:token/traffic/report`，改 `DAEMON_MANAGER_URL` 即指向 Worker（前提是 Worker 補齊這兩條路由，見 §15）。
-- **portal 已有 Clash 引導**：`SetupGuide.vue` 直接指向 clash-verge-rev 下載並教用戶貼 `/clash` 訂閱——「通用客戶端」方向 portal 側已就緒，本次只需把訂閱連結默認輸出改為 `/clash` 格式。
+**支付数据流（里程碑 B）**：portal 下单 → Worker 调 BEpusdt 建单拿收银台 URL → 用户付款 → BEpusdt 回调 Worker 验签（MD5，WebCrypto 不支持，用自带 `md5.ts`）→ D1 batch 以「订单仍为 pending」为闸门开通，重复回调零副作用。PayPal 走 Orders v2 + 官方 verify-webhook-signature 接口，商品须以 USD 计价。
+
+**Worker Secrets**：`JWT_SECRET`、`TURNSTILE_SECRET`；里程碑 B 另需 `BEPUSDT_API_URL`、`BEPUSDT_TOKEN`、`BEPUSDT_SECRET`、`PAYPAL_CLIENT_ID`、`PAYPAL_CLIENT_SECRET`、`PAYPAL_WEBHOOK_ID`。批量写入：`deploy/cloudflare/push-secrets.sh`。
+
+**wrangler vars**：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`TURNSTILE_DISABLED="1"`（⚠️ 配好 `TURNSTILE_SECRET` 后必须删掉）。
 
 ---
 
-## 3. 目標架構
+## 3. 部署与运维
 
-```
-                              Cloudflare（免費層）
-  ┌──────────────────────────────────────────────────────────────────┐
-  │  Pages: www.rfplay.uk（portal：複製 /clash 訂閱連結 + 二維碼）    │
-  │         admin.rfplay.uk（+ Access 零信任門）                      │
-  │                                                                  │
-  │  Worker「rfplay-api」= 新 manager（TS + Hono，單 Worker）          │
-  │   ├─ routes: api.rfplay.uk/api/v1/*（路徑級灰度切流）              │
-  │   ├─ D1   rfplay（users/nodes/orders/products/traffic_records）   │
-  │   ├─ KV   訂閱緩存 60s / traffic report 聚合暫存                   │
-  │   ├─ R2   backups（D1 導出歸檔，未實現）                           │
-  │   ├─ Turnstile 校驗（register/login）                              │
-  │   ├─ Secrets: JWT_SECRET / BEPUSDT_TOKEN / BEPUSDT_SECRET / ...   │
-  │   └─ Workers Cron（可選：traffic 彙總落 D1）                       │
-  │                                                                  │
-  │  Tunnel 主機名：pay.rfplay.uk → VPS BEpusdt（僅 Worker 可達）      │
-  └───────┬───────────────────────────┬──────────────────────────────┘
-          │                           │
-   通用 Clash 客戶端              daemon（Go，改 URL 即可）
- （用戶自備：Clash Meta/mihomo、         │
-   Clash Verge、ClashX、Stash）   VPS（保留，無公網端口）
-          │                     ├─ xray 節點（vless+ws，cloudflared Tunnel 回源）
-          ▼                     └─ BEpusdt（USDT 收款網關，Go 第三方）
-  portal 複製訂閱 URL → 貼進 Clash 客戶端 → 訂閱/連接
-  用戶瀏覽器 → BEpusdt 託管收銀台（購買，僅 portal）
-```
+### 3.1 CI/CD
 
-**支付數據流**（重點）：
+- **Worker**：push main → `.github/workflows/deploy-worker.yml` 执行 `wrangler d1 migrations apply rfplay --remote`，再 `wrangler deploy`。⚠️ 推到 main 即上线生产
+- **Pages**：portal / admin 由 CF Pages Git 集成自动构建，PR 自动 preview
+- **本地**：`npm run db:migrate`（本地 D1）、`wrangler dev`；测试 `npx vitest run`（D1 相关测试用 `node:sqlite` 跑真实迁移，见 `src/testing/d1.ts`）
+- **回滚**：重新部署上一版 Worker；D1 可用 Time Travel 回到 30 天内任意时间点
 
-```
-①  portal 下單    → Worker POST /user/orders（cookie+CSRF）
-②  Worker → BEpusdt  POST pay.rfplay.uk/api/v1/order/create-transaction
-                  （MD5 簽名 + Bearer token）→ 拿託管收銀台 URL 存 orders.payment_url
-③  用戶付款       → BEpusdt 託管頁（USDT 鏈上確認）
-④  BEpusdt → Worker  POST /public/payment/callback/bepusdt（MD5 簽名回調）
-⑤  Worker 驗簽    → D1 batch：orders.status=paid ＋ 用戶激活/順延 expire_time（原子）
-```
+### 3.2 证书
 
-**單 Worker 原則**：不搞微服務。一個 `rfplay-api` 用 Hono 路由分層（public/client/web/admin/node），共享 D1 binding。日後有獨立伸縮需求再拆。
+用户到 CF 边缘由 Universal SSL 覆盖；Worker 与 Pages 无源站；Tunnel 回源走本机 loopback 明文。**无任何证书需要申请或续期**。
 
----
+### 3.3 新增节点（手动步骤，自动化见 §5.3 部署脚本）
 
-## 4. 新代碼庫結構
+1. 后台建节点（域名、本地端口、WS Path）→ `POST /admin/nodes/:id/token` 生成 token
+2. VPS 上运行 `deploy-node-cf-ws.sh`（装 Xray + daemon + cloudflared）
+3. Zero Trust 里给 Tunnel 加公共主机名 `node-xx.rfplay.uk → http://127.0.0.1:<port>`（自动建橙云 CNAME）
 
-```
-workers/api/
-├── wrangler.jsonc          # bindings: D1/KV/R2, routes, crons
-├── package.json            # hono, @cloudflare/vitest-pool-workers
-├── src/
-│   ├── index.ts            # Hono app：中間件鏈（CORS/cookie/CSRF/error）
-│   ├── routes/
-│   │   ├── public.ts       # register/login/token-login/captcha→turnstile
-│   │   ├── client.ts       # config + links/:token{,/clash,/singbox,/qrcode} + subscription
-│   │   ├── auth.ts         # csrf/validate/refresh/logout + admin/auth
-│   │   ├── web.ts          # client-token, profile, orders
-│   │   ├── admin.ts        # users/orders/nodes/products/traffic/stats
-│   │   └── node.ts         # daemon config + traffic report（HMAC）
-│   ├── lib/
-│   │   ├── jwt.ts          # WebCrypto HS256 簽發/校驗（對齊 jwt/v5 claims）
-│   │   ├── cookies.ts      # httpOnly cookie 寫/清（對齊 auth.go）
-│   │   ├── csrf.ts         # double-submit 恆定時間比較
-│   │   ├── nodehmac.ts     # 對齊 middleware/node_auth.go 簽名算法
-│   │   ├── subformats.ts   # base64 / Clash YAML / sing-box JSON 生成（對齊 subscription.go）
-│   │   └── xrayuri.ts      # vless/vmess/ss/trojan URI 生成（對齊 links.go）
-│   └── types.ts            # Env bindings + 行類型
-├── migrations/             # D1 SQL（從 GORM AutoMigrate 落成）
-│   ├── 0001_schema.sql
-│   └── 0002_indexes.sql
-└── test/                   # vitest-pool-workers（契約對拍用例）
-```
+### 3.4 尚需人工完成
 
-**對拍策略**：Go manager 繼續在 VPS 跑；每條端點寫「同請求 → 比較 Go 響應 vs Worker 響應」的合約測試，全綠才切流。
-
----
-
-## 5. 關鍵技術映射（Go → Workers）
-
-| Go 現狀 | Workers 對策 | 備註 |
+| # | 事项 | 阻塞什么 |
 | :--- | :--- | :--- |
-| `jwt/v5` HS256（Bearer + cookie 雙通道） | WebCrypto `crypto.subtle` HMAC，claims 對齊（`user_id/username/role/exp`） | Secret 存 Worker Secrets；cookie 名/TTL/Secure/SameSite 逐項對齊 `auth.go:383-` |
-| CSRF double-submit（`subtle.ConstantTimeCompare`） | 恆定時間比較（自寫 10 行，別拉依賴） | `csrf.ts` |
-| GORM SQLite + AutoMigrate | D1 + SQL migrations（把 AutoMigrate 落成 `0001_schema.sql`） | `wrangler d1 execute --local` 起步 → `d1 import` 遷數據 |
-| `sync.Map` 限流（無限增長 TODO） | **刪除**：CF WAF 免費自定義規則（IP 限速）+ Turnstile 擋 register/login | 升級路徑：DO（SQLite 免費層）做 /public/* 限流 |
-| 圖形驗證碼 `/captcha` | **刪除**，Turnstile siteverify（`fetch` 一個 POST） | 後端零狀態 |
-| links v2ray base64 / Clash YAML / sing-box JSON | 純字符串生成，TS 重寫（`subformats.ts`） | **`/clash` 是唯一用戶入口**（Flutter 退役後），對拍優先級最高；`Subscription-Userinfo` 響應頭是用戶唯一的流量/到期展示渠道（Clash 客戶端原生讀取），必保；當前節點協議 ss/vmess/vless/trojan 全部落在 Clash 範圍（vless 需 Meta 內核 mihomo） |
-| qrcode PNG（Go 裡是 stub） | `qrcode` npm → SVG（純 JS）先交付，PNG 需 pngjs | 或砍掉——portal 已有二維碼，見 §8-P1 註記 |
-| node token + HMAC（`node_auth.go`） | `nodehmac.ts` 逐字節對齊簽名算法 | daemon 無感 |
-| BEpusdt webhook 簽名校驗 | TS 重寫驗簽；訂單狀態機不變 | 回調 URL 指向 Worker 路由（Tunnel 域名） |
-| Stripe provider | TS 重寫（官方 REST，無 SDK） | 或同階段擱置，見 §8 |
-| 訂單/餘額事務 | D1 `batch()`（原子批次） | 無跨庫事務需求 |
+| 1 | Turnstile site key → Pages env；`wrangler secret put TURNSTILE_SECRET`；删掉 `TURNSTILE_DISABLED` | 注册/登录防刷 |
+| 2 | 正式 `JWT_SECRET` | 正式会话 |
+| 3 | VPS：Tunnel token + 公共主机名 | 节点回源 |
+| 4 | Access 保护 `admin.rfplay.uk`；Email Routing | 运维 |
+| 5 | 老用户数据（若 VPS 上有 `manager.db`）→ `deploy/cloudflare/dump-to-seed.sh` → `wrangler d1 import` | 老用户迁移（无则跳过） |
+| 6 | git 凭据需要 `workflow` 权限才能推送改动 `.github/workflows/` 的提交 | 推送 |
+| 7 | 里程碑 B：BEpusdt（VPS 上只开 TRON 单链）、PayPal 应用与 webhook | 收款 |
 
-### 5.1 支付鏈路細節（BEpusdt / Payoneer / Stripe / Mock）
+### 3.5 免费额度风险
 
-Go 端實現 = `payment.go`(496行) + `payment_provider.go`(295行) + `provider_stripe.go`(145行)，TS 重寫約 400 行：
-
-| Provider | 現狀 | TS 重寫要點 |
+| 资源 | 免费额度 | 风险与对策 |
 | :--- | :--- | :--- |
-| **BEpusdt**（主力，USDT） | ✅ 完整：建單（`POST /api/v1/order/create-transaction`，MD5 簽名 + Bearer token）→ 託管收銀台 URL；回調 8 字段 MD5 驗簽，`status==2` 為 paid，**無 secret 配置直接拒收**（fail closed） | ⚠️ **WebCrypto 不支持 MD5** → 自帶 40 行純 JS `md5.ts`（BEpusdt 是遺留簽名方案，無法更換，只能重現）；建單/回調的欄位順序、金額格式（`FormatFloat(-1)`）逐項對拍 |
-| **PayPal**（**新增**，大陸用戶可用） | Go 端無此通道，本次新增 | REST **Orders v2** 建單（OAuth2 client credentials，access_token 緩存 KV，避免每次建單取 token）→ 返回 `approve` 託管頁 URL 存 `orders.payment_url`；webhook `PAYMENT.CAPTURE.COMPLETED` → 調 `/v1/notifications/verify-webhook-signature` 官方接口驗簽（免自行處理證書鏈）；費率 ~4.4%+固定費，**拒付窗口 180 天**；資金提現到國內銀行（美元結匯） |
-| Payoneer | ⚠️ 半成品：`CreatePayment` 返回 `checkout.payoneer.example` 佔位 URL；回調 HMAC-SHA256 驗簽已寫好 | HMAC-SHA256 用 WebCrypto 原生；**未投產 → 整個 provider 延後**（保留接口形狀即可） |
-| Stripe | 未投產 | **待定**：等真實跨境收款需求出現再評估（需海外主體）；接口形狀與 §5.1 其他通道相同，要做時 ≈ 100–150 行 |
-| Mock | 開發用 | 保留（本地 vitest 對拍用） |
-
-**訂單激活事務**（`activateSubscriptionTx` → D1）：
-
-```ts
-// 回調驗簽通過後（冪等：order 已是 paid 直接返回 ok）
-env.DB.batch([
-  env.DB.prepare("UPDATE orders SET status='paid', updated_at=? WHERE id=? AND status='pending'"),
-  env.DB.prepare("UPDATE users SET subscription_status='active', subscription_tier=?, expire_time=? WHERE id=?"),
-]);
-// expire_time = max(now, 現有 expire_time) + 產品時長 —— 順延語義與 Go 一致
-```
-
-**Worker Secrets 清單**：`JWT_SECRET`、`BEPUSDT_API_URL`、`BEPUSDT_TOKEN`、`BEPUSDT_SECRET`（回調驗簽，缺省回落 TOKEN，與 Go 一致）、`PAYPAL_CLIENT_ID`、`PAYPAL_CLIENT_SECRET`、`PAYPAL_WEBHOOK_ID`、`TURNSTILE_SECRET`。
-
-**網絡位址**：BEpusdt 留 VPS，掛 Tunnel 主機名 `pay.rfplay.uk`；Worker 服務端調用與 BEpusdt 回調全走這個域名，VPS 不開任何公網端口。回調 URL 在建單時傳 `notify_url = https://api.rfplay.uk/api/v1/public/payment/callback/bepusdt`（即 Worker route）。
-
-**無需獨立 VPS**：支付邏輯（建單/驗簽/激活）全在 Worker + D1，唯一 VPS 組件是 BEpusdt 進程，與 xray 節點同居即可——Tunnel 已消除「支付暴露 IP 被節點牽連」的舊問題，BEpusdt 無狀態（訂單真源在 D1），掛掉只暫停新收款、`docker run` 數分鐘恢復。若擔心節點 VPS 被供應商封號連累收款，屆時拆一台 $3–4/月 小雞專跑 BEpusdt + Tunnel 即可（隨時可拆，不必預先承擔）。做到支付 0 VPS 的可選路線：換託管型 USDT 收單（Cryptomus/NOWPayments，webhook 同構），代價是收款地址託管第三方 + 費率 ~0.4–1%，不默認。
-
-**BEpusdt 資源**（官方 `docs/faq/server.md`）：最低 1 核 / 1GB / 10GB SSD；單鏈掃塊內存 <100MB，多鏈線性增長；**持續掃塊日流量數 GB**（唯一真實成本項）；必配 NTP；避免網絡受限地區。本項目 VPS 節點流量本為大戶、SSD、牆外機房，全部天然滿足——**建議只開 TRON 單鏈**（USDT-TRC20 為主流付款方式），內存與掃塊流量最小化，僅需留意 VPS 月流量配額。
-
-**冪等與重試**：BEpusdt 回調會重試；Worker 端以 `order.status='pending'` 為更新條件（已 paid 的重複回調零副作用），語義與 Go 一致。
-
-### 5.2 新增通道：PayPal（大陸用戶可用）
-
-定位：BEpusdt 只覆蓋 USDT；PayPal 補上**卡類跨境通道**——大陸用戶註冊 PayPal 後可綁銀聯/Visa/Master 卡付款。XunhuPay（人民幣掃碼）已從計劃刪除；Stripe / Paddle 等 MoR **待定**，接口形狀相同。
-
-**集成流程**（與 BEpusdt 同構，走同一條激活事務）：
-
-```
-① portal 下單     POST /user/orders（provider="paypal"）
-② Worker → PayPal  OAuth2 client credentials 取 access_token（KV 緩存）
-                   → POST /v2/checkout/orders（intent=CAPTURE）
-                   → 返回 approve 託管頁 URL，存 orders.payment_url
-③ 用戶付款         PayPal 託管頁登錄/綁卡付款
-④ PayPal → Worker  POST /public/payment/callback/paypal
-                   （webhook 事件 PAYMENT.CAPTURE.COMPLETED）
-⑤ Worker 驗簽       POST /v1/notifications/verify-webhook-signature（官方驗簽接口，
-                   免自行處理證書鏈）→ 同 §5.1 的 D1 batch 激活事務（冪等、順延語義共用）
-```
-
-**TS 實現量**：~180 行（`provider_paypal.ts`）——OAuth2 token 管理 + Orders 建單 + webhook 驗簽，全部官方 REST，無 SDK（Workers 上不裝 Node SDK，直接 `fetch`）。`PaymentProvider` 接口與 Go 時代形狀一致。沙箱：`api-m.sandbox.paypal.com` 先行對拍，生產切 `api-m.paypal.com`。
-
-**多幣種**：`products` 表加 `currency` 欄位（`0001_schema.sql` 直接帶上）：PayPal 產品以 **USD** 計價（付款人卡自動換匯），BEpusdt 維持現行錨定計價，未來 Stripe/MoR 直接復用。
-
-**依賴與風險**：
-- **費率高**：跨境 ~4.4%+固定費 + 貨幣轉換價差；**拒付（chargeback）窗口 180 天** → 訂閱交付設計為「到期/止付即停」，遭遇惡意拒付時損失封頂
-- **大陸付款體驗**：無人民幣掃碼，付款人需註冊 PayPal 並綁卡（銀聯），轉化率低於支付寶/微信——USDT 為保底通道；若日後要恢復人民幣掃碼，按 §5.1 形狀接易支付類即可（MD5 復用 `md5.ts`）
-- 商戶賬戶實名 + 提現到國內銀行（美元結匯，個人年度便利化額度內）
-| Docker/ nginx / certbot | 全部退役：Worker route + Pages + Tunnel | VPS 只剩 xray + BEpusdt |
+| Workers | 10 万请求/天 | 订阅拉取为主；超限升级 $5/月 Workers Paid，无架构变更 |
+| D1 | 500 万行读、**10 万行写**/天 | 流量上报是写入大户：上报间隔 × 节点数 × 用户数要控制；必要时先进 KV 聚合，再由 Cron 批量写入 |
+| KV | **1 千写**/天 | 只缓存订阅响应（60s TTL），禁止按请求写 |
 
 ---
 
-## 6. 數據遷移（GORM SQLite → D1）
+## 4. 未完成功能与已知 bug
 
-1. **Schema 落地**：本機起 Go manager 跑一次 AutoMigrate → `sqlite3 .dump` 整理為 `migrations/0001_schema.sql`（人工審一遍索引）。
-2. **數據導出**：`sqlite3 manager.db ".mode insert" > seed.sql`（或 `wrangler d1 export` 反向不可用，用 dump）。
-3. **導入**：`wrangler d1 import rfplay --file=seed.sql --remote`。
-4. **敏感字段**：`password_hash`(bcrypt)、`client_token`、`node.token` 全部原樣遷移——**哈希算法不變**，用戶無感。
-5. **雙寫窗口不需要**：Go 退役採「停機窗口切換」（小用戶量，維護頁 5 分鐘），比雙寫簡單一個量級。
+> 2026-09-23 代码审查。P0 = 不修无法运营；P1 = 资损/投诉；P2 = 体验或运维。✅ = 已修复，— = 因决策作废。编号供 §5 引用。
 
----
+### 4.1 P0：节点链路不通
 
-## 7. 額度風險與對策（免費層實測數據）
+| # | 问题 | 位置 |
+| :--- | :--- | :--- |
+| 1 | ✅ Worker 没有 daemon 调用的 `GET /api/v1/node/:token/config` 和 `POST /api/v1/node/:token/traffic/report`（A2：`routes/node.ts` + HMAC） | `index.ts`；daemon `sync.go:166,404` |
+| 2 | ✅ 补路由须对齐格式：daemon 期望 `{node_id,name,protocol,config}`，批量上报 `{node_id,traffic:[...]}`（A2） | `sync.go:157,398` |
+| 3 | ✅ 无按用户流量统计（A2：`email: u{id}` + StatsService，daemon 用 `statsquery` 读取） | `admin.ts` buildNodeXrayConfig；`sync.go:430` |
+| 4 | — Reality `privateKey` 为空（Reality 已删除） | |
+| 5 | ✅ 配置版本号只按用户 ID 集合计算，改节点端口/传输后 daemon 不重载（A2：版本号含传输配置） | `admin.ts` userSetVersion；`sync.go:228` |
+| 6 | ✅ 服务端与客户端共用一个 `security` 字段，inbound 监听所有网卡（A2：固定 Tunnel 形态，只监听 127.0.0.1） | `xrayuri.ts`；`admin.ts` |
+| 7 | ✅ 部署脚本写死 `node_id: 1`（A2：取自配置响应） | `deploy/node-*/deploy-*.sh` |
+| 8 | ✅ Shadowsocks / Trojan 已从白名单、订阅、Clash 下线，存量节点由 `0002` 置为 inactive | |
 
-| 資源 | 免費額度 | 本項目預估 | 風險/對策 |
-| :--- | :--- | :--- | :--- |
-| Workers | 10 萬 req/天，10ms CPU/次 | 訂閱拉取 + verify 為大頭 | 冷啟動夠；**verify 每連接一次**，用戶量漲先爆 → $5/月（1000 萬 req/月）一檔全解 |
-| D1 | 500 萬行讀/天，**10 萬行寫/天**，5GB | 讀為主 | ⚠️ **traffic report 是寫入大戶**：方案見 §8-P2「寫入合併」；公式 = 節點數×1440×上報頻率倒數 + 用戶彙總行 |
-| KV | 10 萬讀/天，**1 千寫/天** | 訂閱/token 只讀緩存 | 僅 token 變更時寫；禁止 per-request 寫 |
-| R2 | 10GB，出口免費 | DB 每日備份 | 隨便用 |
-| Pages | 請求無限，500 builds/月 | portal/admin | 無 |
-| Workers Logs | 20 萬 events/天 | 替代自建 Loki | 留 3 天；歸檔走 R2 |
-| DO (SQLite) | 10 萬 req/天 | （可選限流器） | 先不用，見上 |
-| Turnstile / Access / Tunnel / Email Routing | 免費 | P0 直接吃 | 無 |
+### 4.2 P0：到期、超额、封禁不停服
 
----
-
-## 8. 分階段執行計劃
-
-### P0 — 零代碼紅利（半天）
-1. `cloudflared` Tunnel 收編 api 源站與 BEpusdt webhook 域名；VPS 防火牆關 443/80，退役 nginx + certbot 容器
-2. **退役 `client/` Flutter 目錄**（git 留檔即可恢復）；README 架構表同步為「通用 Clash 客戶端」
-3. CF Access（免費 50 席）套 `admin.rfplay.uk`
-4. Turnstile 申請 site key/secret（portal 改造放在 P1 一起驗收）
-5. 備份：Workers Cron 定時 `D1 export` 推 R2（舊 `backup.sh` 針對 Docker SQLite，已刪除）
-6. Email Routing：`support@rfplay.uk` → 個人郵箱
-7. Claude Code 安裝官方 skills：`/plugin marketplace add cloudflare/skills` → `/plugin install cloudflare@cloudflare`
-
-### P1 — Worker 骨架 + 訂閱數據面（1–2 天）
-1. `workers/api` 腳手架（Hono + wrangler + vitest-pool-workers）；D1 schema + `d1 import`
-2. 實現：`/health`、`/client/config`、`/client/links/:token{,/clash,/singbox}`、`/client/subscription`（JWT）、`/node/:token/config`（HMAC）——**先切最高頻的讀路徑**
-3. KV 緩存層（60s）替換原 `linkRateLimiters` 位置
-4. route 灰度：`api.rfplay.uk/api/v1/client/*` 與 `/api/v1/node/*` 掛 Worker route（路徑級，**舊訂閱 URL 不死**）；Go 與 Worker 並行對拍
-5. qrcode：先交付 SVG；PNG 確認 portal 端無依賴後直接砍（YAGNI）
-
-### P2 — 節點上報 + 寫入合併（1 天）
-1. `POST /node/:token/traffic/report` → Worker
-2. **寫入合併**（D1 寫額度保命）：
-   - daemon 每 60s 的報告先進 KV（累加），Workers Cron（每 5 分鐘）批量 `INSERT` traffic_records + `UPDATE users.traffic_used_bytes`
-   - 寫入公式 ≈ 288(次/天)×(節點數+用戶數) → 100 用戶約 3 萬行寫/天，安全
-3. daemon 只改 `DAEMON_MANAGER_URL` 指向 Worker
-
-### P3 — 會話與管理面（2.5–3.5 天）
-1. `lib/jwt.ts` 對拍 Go 簽發的 token（**同一 `JWT_SECRET` 下 Worker 能驗舊 token**，會話不斷）
-2. `/public/*`（register/login）+ Turnstile siteverify；刪圖形驗證碼
-3. `/auth/*`、`/admin/auth/*`、`/user/*`、`/web/*`、`/admin/*` 全量端點 + CSRF
-4. 支付（第一批兩通道）：BEpusdt（USDT，驗簽 + 訂單狀態機）+ **PayPal（新增，§5.2）**；共用 D1 激活事務；XunhuPay 已刪除；Stripe/MoR **待定**
-5. portal 小改（~1 小時）：`subscriptionUrl.ts` **雙格式展示**——默認 `/clash` 連結（Clash Meta 系）+ 保留 base64 通用連結 `/links/:token`（v2rayA/v2rayN/OpenWrt 路由器等非 Clash 客戶端）（含對應測試 `subscriptionUrl.test.ts`）；SetupGuide 文案確認；支付頁 provider 選項為「USDT / PayPal」
-6. portal/admin 其餘零改動驗收（cookie 名/CSRF 頭不變）
-
-### P4 — 退役收尾（半天）
-1. 維護窗口：DNS/route 全量切 Worker → `docker compose down manager nginx certbot`
-2. 刪 `manager/` 目錄（git 歷史留檔）；更新 README 架構表
-3. `manager-data` volume 最後一次備份推 R2 後刪除
-4. VPS 只剩：xray 節點 + BEpusdt（連 Tunnel）
-
----
-
-## 9. 驗收與測試
-
-- **契約對拍**：`test/` 內每端點「Go 響應 vs Worker 響應」斷言（JSON 結構、cookie 屬性、`Subscription-Userinfo` 頭、YAML 可被 clash 解析）
-- **通用 Clash 客戶端**：Clash Meta / Clash Verge / Stash 導入 `/links/:token/clash` 訂閱 → 連接真實節點 → 訂閱詳情頁顯示流量/到期（`Subscription-Userinfo`）
-- **portal**：Dashboard/Account/Subscription 三頁數據正常（`/client/subscription` 走 Worker）；複製的訂閱連結為 `/clash` 格式
-- **daemon**：verify/sync 對 Worker 跑 24h 無誤
-- **D1 寫入量監控**：Dashboard → D1 metrics 每日檢查，逼近 80% 額度即觸發 §8-P2 進一步降頻
-
----
-
-## 10. 風險清單
-
-| 風險 | 緩解 |
+| # | 问题 |
 | :--- | :--- |
-| Workers 無 Go runtime（本方案的起因） | 全量 TS 重寫，§4 結構已劃分到檔案級 |
-| D1 寫額度爆（traffic report） | P2 寫入合併 + Cron 批量，§8-P2 公式 |
-| HMAC/細節對不齊導致 daemon 全掛 | `nodehmac.ts` 逐字節對拍 + 灰度 route（node 流量最後切） |
-| 舊 JWT 在切換日失效 | 同 `JWT_SECRET` 遷移，Worker 直接驗舊 token（§8-P3.1） |
-| 免費額度隨用戶增長見頂 | 升級路徑單一：$5/月 Workers Paid（額度×100），無架構變更 |
-| 單 Worker request/天超限 | 臨界前拆「node 面」獨立 Worker（路由已分層，拆分成本低） |
-| 用戶端換成第三方 Clash，行為/版本不可控 | 訂閱格式對拍主流內核（Clash Meta/Verge/Stash）；portal SetupGuide 引導下載 clash-verge-rev；vless 節點要求 Meta 內核（文檔與 SetupGuide 標註） |
-| 原 Flutter 用戶（若有側載）失去 App | 訂閱 URL 本就是憑證，直接貼進任意 Clash 客戶端即可遷移；portal SetupGuide 承接 |
-| PayPal 高費率/拒付（180 天窗口） | 訂閱止付即停，惡意拒付損失封頂；**USDT（BEpusdt）保底通道永遠在線** |
-| 無人民幣掃碼通道（XunhuPay 已刪除） | 大陸用戶走 PayPal 綁卡（銀聯）或 USDT；要恢復 RMB 掃碼按 §5.1 形狀接易支付類即可（MD5 復用 `md5.ts`）；大陸個人通道實名不可避免——需身份隔離用境外渠道或 USDT，惟身份隔離不消除法律風險本身 |
-| 全部節點流量走 CF 邊緣（Reality 已刪除，CF-WS Tunnel 回源定案） | 用戶連接的都是 CF anycast IP：源站永不暴露、永不因 IP 被封；代價是 **CF 被 QoS/限速時無直連備胎** → 客戶端配置改用 CF 償選 IP/域名緩解（SNI/Host 不變）；**訂閱即切換**：改 D1 節點記錄 → 訂閱版本 +1 → 用戶更新訂閱即恢復 ＋ Worker Cron 撥測告警（P2 後補） |
-
----
-
-## 11. 節點面二次開發選型：3X-UI vs Marzban（評估結論 2026-09-06）
-
-背景：成熟機場用開源面板（Marzban / 3X-UI）承擔節點面（xray 入站管理、用戶級流量強制、訂閱生成）。評估是否引入以替代自研 daemon + Worker 節點面。
-
-### 11.1 對比
-
-| 維度 | Marzban | 3X-UI |
-| :--- | :--- | :--- |
-| 技術棧 | Python (FastAPI) + React；SQLAlchemy（MySQL/SQLite） | Go 單二進制 + Vue |
-| **多節點架構** | ✅ 原生：面板 + marzban-node agent，中央編排入站/用戶 | ❌ 單機工具：每台 VPS 一個獨立實例，無中央編排 |
-| API | ✅ API-first，REST 完整（用戶 CRUD/流量/過期/訂閱），為被編排而生 | ⚠️ 有 API 但偏管理 UI 向，非為被另一控制面調用設計 |
-| 訂閱端點 | ✅ 內置多格式（v2ray/clash/clash-meta/sing-box/outline…），模板可配 | ⚠️ 近年版本有，非重點 |
-| 附帶 | Telegram bot 管理、webhook | Telegram bot |
-| 許可 | **AGPL-3.0**（網絡服務型二次開發有開源義務） | GPL-3.0 |
-| 上游健康 | ⚠️ Gozargah 商業化風波 → 社區分叉（Marzneshin 等），長期節奏有不确定性 | ✅ MHSanaei 持續高頻維護 |
-
-### 11.2 結論
-
-**二選一則 Marzban**——唯一有中央編排 + API-first + 內置多格式訂閱的，與本項目「中央控制面 + 邊緣節點」形狀同構；3X-UI 是單機管理 UI，與中央化架構相性差，僅適合純手動小規模。
-
-**但引入前先想清楚兩種玩法**：
-
-| 玩法 | 做法 | 代價/收益 |
-| :--- | :--- | :--- |
-| **A. 不引入（當前方案默認）** | 自研 daemon 已存在且是 Node，P2 改 `DAEMON_MANAGER_URL` 即用；Workers + D1 唯一大腦 | 零新工作量、單一事實源；節點面靠自研 |
-| **B. 節點面外包給 Marzban** | 一台 VPS 跑 Marzban 面板（唯一節點大腦），節點跑 marzban-node（xray 監聽 127.0.0.1，Tunnel 回源不變）；Workers 瘦身為 portal BFF + 支付 + 會員，經 Marzban REST 讀寫節點/用戶數據 | 白拿多節點編排/TG bot/訂閱模板；代價精算見下 |
-
-**代價精算（B 的四項成本逐項核實）**：
-
-| 成本 | 必須？ | 說明 |
-| :--- | :--- | :--- |
-| D1 降級為計費庫 | ✅ 本架構下硬 | Marzban 用 SQLAlchemy（MySQL/SQLite 線協議），D1 只暴露 HTTP API，技術上接不上；除非魔改（不如不引入）。但「面板管節點、計費管錢」是行業常見分工（SSPanel 生態同構），屬架構取捨而非缺陷 |
-| 雙庫同步 | ⚠️ 存在，可做薄 | 兩條單向管道：① D1 業務事件 → Marzban REST（建戶/續費/到期止付，實時 push）② Cron 定時拉流量彙總回 D1（小時級）。≈ 百行級同步模組，非雙向一致性問題 |
-| AGPL 義務 | ❌ 可避免 | 傳染條件是「修改源碼且對公網提供服務」。不改 Marzban 內部、只從 Workers 調 REST API → 不受傳染；魔改內部才觸發 |
-| 上游分叉風險 | ⚠️ 必在，可控 | 選活躍分叉（Marzneshin）或自行 vendor 鎖版本（AGPL 允許），轉成自己的維護預算 |
-
-**建議**：A 走完 P0–P2 起步；若一開始就預期多節點擴張/想用面板生態，B 的真實門檻只 = 接受 D1 降級 + 一條薄同步管道，直接上 B 也成立。兩者都比自研面板省——差別只在事實源放哪。
-
-### 11.3 玩法 A 的設計借鑑清單（抄設計不抄代碼，2026-09-06）
-
-許可現實：本生態無寬鬆許可項目（Marzban 系 AGPL、3X-UI/V2bX GPL、edgetunnel GPL-2.0）——代碼一律不混入，只做設計級借鑑；模板文件（YAML/TOML 配置數據）參考結構不受限。
-
-| 需求 | 借鑑來源 | 抄什麼 | 自研實現量 |
-| :--- | :--- | :--- | :--- |
-| 多節點編排 | Marzban 面板↔節點協議、V2bX agent 行為 | 配置版本號 push、心跳/在線狀態機、流量定時 pull、斷點續傳上報 | daemon 已有 80%，補節點註冊表+撥測 ≈ 200 行 |
-| TG bot | Marzban bot 功能清單 | 查流量/續費鏈接/到期提醒/節點狀態/管理廣播；技術用 CF 官方 TG-webhook 模式 + grammY | ≈ 400 行，Cron 免費額度內 |
-| 訂閱模板 | Marzban clash/sing-box 模板、subconverter 策略組 | 模板結構與策略組思路 → `subformats.ts` 模板常量 | 已在 P1 內，+0 |
-
-同架構（Workers 控制面 + 真實節點 + 計費）無現成開源可二開；edgetunnel 系（Worker 內直接跑代理）為「無 VPS 純邊緣」路線，CF ToS 灰色 + 100k req/day 限制，僅個人兜底實驗價值，不進主方案。結論：**A + 設計借鑑 ≈ 600 行 TS 拿到 B 的功能清單，零許可/上游/D1 代價**。
-
----
-
-## 12. 上線手冊（部署 / 測試 / 驗證）
-
-### 12.0 前置憑證（一次性，安全紅線）
-
-| 憑證 | 用途 | 存放位置（**永不進聊天/代碼/文檔**） |
-| :--- | :--- | :--- |
-| CF API Token | wrangler CLI / GitHub Actions 部署 | `wrangler login`（瀏覽器 OAuth，本地免 token）；CI 用 GitHub Secrets `CLOUDFLARE_API_TOKEN`，權限最小化：Workers Scripts:Edit + D1:Edit + KV:Edit + R2:Edit + Zone Routes:Edit |
-| GitHub PAT | 僅 CI 用（本地推送走已有 git 憑證） | GitHub Settings 建 fine-grained（僅本 repo）→ repo Secrets |
-| cloudflared 認證 | Tunnel 管理 | VPS 上 `cloudflared tunnel login`（一次性瀏覽器授權） |
-| 業務 Secrets | JWT/BEPUSDT_*/PAYPAL_*/TURNSTILE_SECRET | `wrangler secret put <NAME>`（互動輸入，落 Workers Secrets） |
-
-### 12.1 資源開通（依賴順序）
-
-```bash
-# 1. D1：建庫 → schema → 數據遷移（切換日才導數據）
-wrangler d1 create rfplay                      # database_id 回填 wrangler.jsonc
-wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql
-# 切換日： sqlite3 manager.db ".dump" 整理後
-wrangler d1 import rfplay --remote --file=seed.sql
-
-# 2. KV（訂閱緩存/OAuth token 緩存）
-wrangler kv namespace create CACHE             # id 回填 wrangler.jsonc
-
-# 3. R2（備份歸檔；dashboard 先啟用 R2 一次）
-wrangler r2 bucket create rfplay-backups
-
-# 4. Worker 部署（灰度 routes 寫在 wrangler.jsonc：
-#    api.rfplay.uk/api/v1/client/* → 先讀路徑）
-wrangler deploy
-
-# 5. Secrets（逐個互動輸入）
-wrangler secret put JWT_SECRET
-wrangler secret put BEPUSDT_API_URL   # https://pay.rfplay.uk
-wrangler secret put BEPUSDT_TOKEN
-wrangler secret put BEPUSDT_SECRET
-wrangler secret put PAYPAL_CLIENT_ID
-wrangler secret put PAYPAL_CLIENT_SECRET
-wrangler secret put PAYPAL_WEBHOOK_ID   # PayPal developer dashboard 建 webhook 後取得
-wrangler secret put TURNSTILE_SECRET
-```
-
-**Pages**（已 git 連動，零遷移）：portal/admin 加環境變量（`VITE_SUBSCRIPTION_BASE_URL`、Turnstile site key）→ 重新構建；CF Pages 自動管理邊緣證書。
-
-**Tunnel**（VPS 上，收編 api 舊源站過渡期 / BEpusdt / 節點回源）：
-
-```bash
-cloudflared tunnel login
-cloudflared tunnel create rfplay-vps
-cloudflared tunnel route dns rfplay-vps pay.rfplay.uk
-# config.yml ingress：
-#   pay.rfplay.uk        → http://localhost:8080   (BEpusdt)
-#   node-xx.rfplay.uk    → http://127.0.0.1:<xray-ws-port>
-#   api.rfplay.uk（過渡期）→ http://localhost:8081  (舊 Go)
-cloudflared service install                     # 開機自啟
-```
-
-**Access**：Zero Trust → Applications → Self-hosted → `admin.rfplay.uk` → 策略 Email OTP（≤50 席免費）。
-**Turnstile**：dashboard 加站點拿 site key（env）+ secret（Worker secret）。
-
-### 12.2 SSL/TLS 結論（無任何證書要買/續）
-
-| 面 | 證書 |
-| :--- | :--- |
-| 邊緣（用戶↔CF） | Universal SSL 自動覆蓋 `*.rfplay.uk`，零操作 |
-| api.rfplay.uk | Worker route 接管，**無源站無證書概念** |
-| Tunnel 回源（cloudflared→localhost） | 明文 http 走本機 loopback，不出機器，無需證書 |
-| Pages | CF 託管 |
-
-→ **certbot / Let's Encrypt 整條鏈退役**；VPS 防火牆關閉全部公網入站（SSH 可留或改走 Access）。
-
-### 12.3 測試與灰度（對應 P1→P4 順序）
-
-1. **本地**：`wrangler dev`（模擬 D1/KV）+ `@cloudflare/vitest-pool-workers` 契約用例
-2. **對拍**：過渡期同一請求打 Go 與 Worker，diff 響應（JSON 結構 / cookie 屬性 / `Subscription-Userinfo` / YAML 可解析）；腳本化，全綠才加下一條 route
-3. **灰度順序**：`/api/v1/client/*`（讀，最低風險）→ `/api/v1/node/*`（daemon soak 24h）→ 停機窗口切 `/auth /web /user /admin /public`
-4. **支付**：PayPal sandbox 全流程 → BEpusdt 小額真實單；重複回調冪等驗證
-5. **客戶端驗收**：Clash Meta / Verge / Stash 導入 `/clash` 訂閱連真實節點；v2rayA 導入 base64 格式；訂閱詳情顯示流量/到期
-
-### 12.4 上線驗證清單（每條可勾）
-
-- [ ] `/health` 200（Worker）
-- [ ] 訂閱三格式（base64/clash/singbox）與 Go 輸出對拍一致 + `Subscription-Userinfo` 頭存在
-- [ ] 註冊/登入/CSRF/refresh 全鏈路，cookie 屬性（httpOnly/Secure/SameSite/MaxAge）與 Go 一致
-- [ ] 舊 JWT（同 `JWT_SECRET`）在 Worker 驗證通過，會話不斷
-- [ ] 支付：BEpusdt + PayPal 全流程 + 重複回調冪等 + 拒付止付生效
-- [ ] daemon verify/sync 對 Worker 24h 無誤、流量數字與節點側一致
-- [ ] D1 日寫入 <80% 額度；Workers 日請求 <80% 額度
-- [ ] Tunnel 雙主機名穩定 72h；VPS 公網入站全關
-- [ ] admin.rfplay.uk Access 門生效（無 token 訪問被擋）
-- [ ] Turnstile 擋未通過校驗的註冊/登入
-- [ ] 備份：D1 導出已定時推 R2 且可恢復演練一次；上線前 `wrangler d1 export` 留底
-
-### 12.5 回滾（過渡期內）
-
-Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站（同域名，無 DNS 變更、無用戶感知）。P4 刪除 Go 之後回滾=重新部署 git 上一版 Worker。
-
-### 12.6 CI/CD
-
-- **Workers**：GitHub Actions `cloudflare/wrangler-action`，push main → `wrangler deploy`（Secrets：`CLOUDFLARE_API_TOKEN` 最小權限）
-- **Pages**：CF Pages Git 集成自動構建 portal/admin；PR 自動 preview
-- **分支保護**：main 禁 force-push；部署只認 CI
-
-### 12.7 必須人工提供的信息（最小清單，2026-09-06）
-
-過濾原則：資源 ID / Tunnel / DNS / routes 均由 `wrangler`/`cloudflared` 命令自動產出，不需人工經手。GitHub PAT 不需要（Actions 內建 `GITHUB_TOKEN`，本地推送走現有 git 憑證）。
-
-| # | 信息 | 在哪操作 | 填到哪 |
-| :--- | :--- | :--- | :--- |
-| 1 | CF API Token（最小權限） | dashboard → API Tokens → Create | GitHub Secrets `CLOUDFLARE_API_TOKEN` |
-| 2 | Turnstile Site Key + Secret | dashboard → Turnstile 加站點 | site key → Pages env；secret → `wrangler secret put` |
-| 3 | R2 S3 API 憑證（Key/Secret） | dashboard → R2 → Manage API Tokens | 僅在 VPS 側備份時需要；Worker 內用 `BACKUPS` binding 無需憑證 |
-| 4 | Access 應用 + 管理員郵箱白名單 | Zero Trust → Applications | dashboard 內 |
-| 5 | cloudflared 授權（瀏覽器一次） | VPS `cloudflared tunnel login` | 本地憑證 |
-| 6 | wrangler 授權（瀏覽器一次） | `wrangler login` | 本地憑證 |
-| 7 | `JWT_SECRET` 現值 | 舊 Go `.env` 原樣複製 | `wrangler secret put` |
-| 8 | `BEPUSDT_API_URL/TOKEN/SECRET` 現值 | 舊 VPS `.env` 原樣複製 | `wrangler secret put` |
-| 9 | PayPal Client ID/Secret/Webhook ID | PayPal developer dashboard | `wrangler secret put` |
-
-### 12.8 自動化清單（2026-09-06 決策：能自動化就自動化）
-
-| # | 事項 | 自動化方式 | 檔 |
-| :--- | :--- | :--- | :--- |
-| 1 | Worker 部署 | GH Actions + wrangler-action，push main 即部署 | ✅ 已在 §12.6 |
-| 2 | Pages（portal/admin） | CF Pages git 集成自動構建 | ✅ 已就緒 |
-| 3 | D1 schema 遷移 | CI 內 `wrangler d1 execute --remote --file=migrations/*`，隨部署執行 | 🆕 併入 #1 的 workflow |
-| 4 | 節點註冊 | admin 後台建節點 + `POST /admin/nodes/:id/token` 產 token | ✅ 已有 |
-| 5 | 節點 VPS 供應 | `deploy-node-cf-ws.sh --manager-url --node-token`（裝 xray+daemon+systemd） | ✅ 已有 |
-| 6 | **Tunnel 公共主機名 + DNS**（新增節點的第③步） | 腳本調 CF API：`PUT /cfd_tunnel/{id}/configurations` 加 ingress + `POST dns_records` 加 CNAME→`<tunnel-id>.cfargotunnel.com`；與 #4/#5 合併成 **`add-node.sh` 一條命令新增節點** | 🆕 方案內 |
-| 7 | Secrets 供應 | `script: 讀 .env 逐個 wrangler secret put`（一次性執行，不進 git 的本地 .env） | 🆕 方案內 |
-| 8 | 數據遷移 dump→seed | 腳本：`sqlite3 .dump` → 過濾 sqlite 內部表/觸發器整理成 D1 可導入 SQL | 🆕 方案內 |
-| 9 | Go↔Worker 對拍 | 同請求雙打 diff 腳本，進 CI（過渡期每次部署跑） | 🆕 方案內 |
-| 10 | R2 備份 + 輪轉 | Workers Cron：D1 導出 → R2，刪除 >30 天 | 🆕 未實現 |
-| 11 | 節點撥測→自動摘除 | Worker Cron 撥測失敗 → 自動置 `status=inactive` → 訂閱不再下發（「訂閱即切換」的自動版）+ TG 告警 | 🆕 P2 後（TG bot 一部分） |
-| 12 | 流量彙總寫 D1 | Workers Cron 批量 UPSERT（§8-P2 已設計） | 🆕 P2 |
-| 13 | 額度監控告警 | CF GraphQL Analytics API 每日查 D1 寫入/Workers 請求，>80% TG 告警 | 🆕 P2 後 |
-| 14 | 被牆自動換 IP | 撥測失敗→供應商 API 換 IP→更新 D1→訂閱自動生效 | ⛔ 先不做（節點全走 CF 邊緣，IP 不暴露，需求本身弱化） |
-| 15 | 證書續期 | CF 全託管 | ✅ 天然自動 |
-| 16 | Secrets 輪換 | 手動（低頻高危，不自動） | ⛔ 保持手動 |
-
-> 落地順序：#6/#7/#8 在 P1 腳手架時順手寫；#9 過渡期必備；#11-13 跟 TG bot（§11.3）一起。
-
----
-
-## 13. 開發計劃（執行清單，2026-09-06）
-
-> 依賴順序：M1 → M2 → M3 → M4；M5 非阻塞可並行。每項有明確驗收，全綠才進下一項。
-
-### M0 環境與憑證（人工，接近完成）
-- [x] wrangler login / cloudflared cert.pem
-- [x] D1 `rfplay` / KV `CACHE` / R2 `rfplay-backups` 建立並記錄 ID
-- [ ] Turnstile Spin：拿 Site Key + Secret
-- [ ] VPS：dashboard 建 Tunnel → token 裝 cloudflared → connector 綠 → 公共主機名（pay / node-xx / api 過渡回源），先 `tunnel-test` 驗證再切 A 記錄
-- [ ] Access 套 `admin.rfplay.uk`；Email Routing 開啟
-
-### M1 訂閱讀路徑上 Worker（P1，~2–3 天）
-- [ ] `workers/api` 腳手架收尾：npm install、`wrangler dev` 本地 `/health` 200（半成品已落：wrangler.jsonc/index.ts/0001_schema.sql）
-- [ ] schema 導入本地 D1 + `d1 import` 演練（dump→seed 腳本，自動化 #8）
-- [ ] `lib/subformats.ts`：base64 / Clash YAML / sing-box 生成 + `Subscription-Userinfo` 頭（對拍 `subscription.go`）
-- [ ] 端點：`/client/links/:token{,/clash,/singbox}`、`/client/config`（D1 讀 + KV 60s 緩存）
-- [ ] 對拍腳本（自動化 #9）：Go vs Worker 同請求 diff
-- [ ] **驗收**：三格式與 Go 逐字節一致；route `api.rfplay.uk/api/v1/client/*` 灰度上線，舊訂閱 URL 不死
-
-### M2 節點面上 Worker（P2，~1–2 天）
-- [ ] `/node/:token/config`（HMAC 對拍 `node_auth.go` 逐字節）
-- [ ] `/node/:token/traffic/report`：KV 聚合 + Cron 批量 UPSERT（寫入合併，§8-P2 公式）
-- [ ] daemon 改 `DAEMON_MANAGER_URL` → 24h soak
-- [ ] `add-node.sh` 一條命令新增節點（自動化 #6：admin API + CF API ingress/DNS）
-- [ ] **驗收**：節點配置與流量數字兩邊一致；D1 日寫入 <80% 額度
-
-### M3 會話 + 管理面 + 支付（P3，~3–4 天）
-- [ ] `lib/jwt.ts`（同 `JWT_SECRET` 驗舊 token）+ cookies.ts + csrf.ts
-- [ ] `/public/register|login` + Turnstile siteverify（M0 的鑰匙接入）；刪圖形驗證碼
-- [ ] `/auth/*`、`/admin/auth/*`、`/user/*`、`/web/*`、`/admin/*` 全量端點
-- [ ] 支付：`md5.ts` + BEpusdt provider；`provider_paypal.ts`（sandbox 對拍）；D1 batch 激活事務（冪等 + 順延）
-- [ ] portal 小改：subscriptionUrl 雙格式、Turnstile 組件、支付頁 provider=USDT/PayPal
-- [ ] **驗收**：portal/admin 全功能過關（cookie 屬性/CSRF 頭不變）；支付沙箱全流程 + 重複回調冪等
-
-### M4 切換與退役（P4，~1 天）
-- [ ] 維護窗口：api 全量 route 切 Worker → `docker compose down manager nginx certbot`
-- [ ] 觀察 72h → 刪 `manager/`（git 留檔）→ manager-data volume 最後備份推 R2
-- [ ] CI/CD：GH Actions wrangler workflow + D1 migration 步驟（自動化 #1/#3）+ R2 備份 cron/輪轉（#10）
-- [ ] **驗收**：§12.4 上線清單全勾
-
-### M5 增強（非阻塞，M2 後任意時間）
-- [ ] TG bot：查流量/續費鏈接/到期提醒/節點狀態/廣播（§11.3）
-- [ ] 節點撥測 → 自動摘除 + TG 告警（#11）
-- [ ] 額度監控 >80% 告警（#13）
-
----
-
-## 14. 上線狀態（2026-09-06 更新）
-
-### 14.1 關鍵發現：這是首次上線，不是切換
-
-`api.rfplay.uk` **無 DNS 記錄（NXDOMAIN）**——Go manager 從未上線生產。因此：
-- §12.3 的「Go↔Worker 對拍」**不適用**（無 Go 實例可比）
-- 無生產流量保護需求，`api.rfplay.uk` 可直接掛 Worker route（風險遠低於原評估）
-- 舊 Go `.env` 若存在正式 `JWT_SECRET`/BEPUSDT 值，切換日仍需搬運；若從未生成，則用新值即可
-
-### 14.2 已上線（workers.dev = staging+生產候選）
-
-| 項 | 狀態 |
-| :--- | :--- |
-| Worker `rfplay-api` | ✅ CI 綠，`https://rfplay-api.vincent4flamewings.workers.dev` |
-| 訂閱三格式 + Userinfo 頭 | ✅ 真機驗證（testuser seed 數據） |
-| 登錄/bcrypt/cookie 會話/CSRF | ✅ 真機驗證 |
-| mock 支付全閉環 | ✅ 建產品→下單→回調→expire +30 天順延→冪等 |
-| admin 17+4 條路由 | ✅ stats/products 真機驗證 |
-| D1 schema + seed | ✅ 遠端已應用（testuser/basic-monthly 產品） |
-| `MOCK_PAY_ENABLED=1` | ⚠️ 暫開（對齊 Go 生產常開）；正式收款前評估改 "0" |
-
-### 14.3 剩餘必須人工的清單（最短集）
-
-| # | 事項 | 阻塞什麼 |
-| :--- | :--- | :--- |
-| 1 | Turnstile Spin 鑰匙 → Pages env + `wrangler secret put TURNSTILE_SECRET` | 註冊/登錄防灌水生效 |
-| 2 | PayPal developer 建應用 → 3 個 secrets → 沙箱對拍 | PayPal 通道可用 |
-| 3 | BEPUSDT_*/JWT_SECRET 正式值（若舊 .env 有）→ `deploy/cloudflare/push-secrets.sh` | BEpusdt 通道 + 正式會話 |
-| 4 | api.rfplay.uk DNS 記錄（proxied A 或 CNAME）+ wrangler.jsonc routes 解註 → `wrangler deploy` | 正式域名上線 |
-| 5 | VPS：dashboard Tunnel token + 公共主機名（pay/node） | BEpusdt 可達 + 節點回源 |
-| 6 | Access 套 admin、Email Routing、D1→R2 定時備份 | 運維三件套 |
-| 7 | 真實用戶數據：VPS `manager.db`（若存在）→ `dump-to-seed.sh` → `d1 import` | 老用戶遷移（無則跳過） |
-
-以上完成後：`wrangler.jsonc` routes 解註解 → deploy → `www.rfplay.uk` portal 環境變量（`VITE_SUBSCRIPTION_BASE_URL` 指 api 域名）→ 上線完成。
-
----
-
-## 15. 未完成功能与已知 bug
-
-> 2026-09-23 代码审查，以代码为准逐条核实。P0 = 不修无法正式运营；P1 = 会造成资损/用户投诉；P2 = 体验或运维问题。
-> §4 的目录结构是规划稿：`routes/node.ts`、`lib/nodehmac.ts`、`types.ts`、`0002_indexes.sql`、`test/` 均不存在。
-
-### 15.1 P0：节点链路不通
+| 9 | ✅ 过期用户可无限使用（A1：统一资格判定 + Cron 标记过期） |
+| 10 | ✅ 流量上限不生效（A1） |
+| 11 | ✅ 封禁不停服（订阅与节点侧 A1；登录态接口 A3 回库检查 `status`） |
+| 12 | ✅ 改用户状态会重生 `client_token`（A0） |
+| 13 | 流量按月重置 ✅（A1）；限速为已知限制：Xray 不支持按用户限速，`rate_limit_bps` 不下发（推迟） |
+
+### 4.3 P1：支付与订单（里程碑 B）
 
 | # | 问题 | 位置 |
 | :--- | :--- | :--- |
-| 1 | Worker 没有 daemon 调用的 `GET /api/v1/node/:token/config` 和 `POST /api/v1/node/:token/traffic/report`，节点拉不到配置、报不了流量 | `workers/api/src/index.ts`；daemon `sync.go:166,404` |
-| 2 | 补路由时须对齐格式：daemon 期望 `{node_id,name,protocol,config}`，现有 `/admin/nodes/:id/config` 返回裸配置；daemon 批量上报 `{node_id,traffic:[...]}`，`/admin/traffic/report` 只收单条 | `sync.go:157,398`；`admin.ts` |
-| 3 | 按用户流量统计从根上不存在：Xray 客户端条目无 `email`、无 StatsService/api 入站；daemon 读的 `traffic_stats.json` 没有任何东西写 | `admin.ts` buildNodeXrayConfig；`sync.go:430` |
-| 4 | ~~Reality `privateKey` 固定为空~~ 作废：Reality 已从方案删除，Reality 相关代码在 A2 移除 | `admin.ts` buildNodeXrayConfig |
-| 5 | 配置版本号只按用户 ID 集合计算；改节点端口/传输/TLS 后版本不变，daemon 跳过不应用 | `admin.ts` userSetVersion；`sync.go:228` |
-| 6 | Tunnel 回源要求服务端 `listen 127.0.0.1` + `security=none`、客户端链接 `tls` + 443；现在服务端和客户端共用一个 `security` 字段，且 inbound 监听所有网卡。A2 改为固定的 Tunnel 形态解决 | `nodes` 表；`xrayuri.ts`；`admin.ts` |
-| 7 | 部署脚本写死 `node_id: 1` | `deploy/node-*/deploy-*.sh` |
-| 8 | Shadowsocks / Trojan 节点：服务端配置只生成 VLESS 格式的 clients，跑不起来；Clash 订阅里两者密码写死 `rf-{id}-pass` | `admin.ts`；`subformats.ts` |
+| 14 | PayPal 下单无 `return_url/cancel_url`，无 capture 调用，订单永远不完成 | `payments.ts` |
+| 15 | PayPal webhook 验签传重新序列化的字符串，很可能恒失败；缺 `custom_id` 时回退 PayPal 订单号，可能激活错订单 | `payments.ts`；`payment.ts` |
+| 16 | BEpusdt 付款后跳转不存在的 `API域名/user/orders/:id`；`PayResult.vue` 无入口 | `web.ts` |
+| 17 | 回调不核对金额/币种；先收到 failed 再来 paid 不会激活 | `payment.ts` |
+| 18 | ✅ 商品时长/流量写死（A1：按商品字段开通） | |
+| 19 | 下单即扣库存，pending 不过期、失败不回补，可被刷空；默认 provider 为已关闭的 `mock` | `web.ts` |
+| 20 | 退款不收回时长和流量；UPDATE 无 `status='paid'` 条件，并发退款重复加库存 | `admin.ts` |
+| 21 | ✅ portal 价格单位与币种符号（A0） | |
+| 22 | 回调交易号被丢弃，orders 无 `transaction_id/paid_at`，无法对账 | `payment.ts`；schema |
 
-### 15.2 P0：到期、超额、封禁不停服
-
-| # | 问题 | 位置 |
-| :--- | :--- | :--- |
-| 9 | 没有任何代码把用户置为 `expired`（无 Cron），订阅与节点配置也不比较 `expire_time`，过期用户可无限使用 | `client.ts:128,190`；`admin.ts` buildNodeXrayConfig |
-| 10 | 不检查 `traffic_used_bytes >= traffic_limit_bytes`，流量上限不生效 | 同上 |
-| 11 | 不检查 `users.status`：banned/suspended 用户仍可拉订阅、进节点、调接口 | `client.ts`；`auth.ts`；`web.ts` 中间件 |
-| 12 | 管理员改用户状态时，未带 `client_token` 就重新生成一个 → 每次封禁/解封都让用户订阅链接失效 | `admin.ts:212-216`；`admin/src/views/Users.vue` |
-| 13 | 限速 `rate_limit_bps` 激活时被清零且节点侧未实现；流量无按月重置 | `payments.ts`；`admin.ts` |
-
-### 15.3 P1：支付与订单
+### 4.4 P1：认证与会话
 
 | # | 问题 | 位置 |
 | :--- | :--- | :--- |
-| 14 | PayPal 下单无 `return_url/cancel_url`，全仓库无 capture 调用 → 订单永远不完成 | `payments.ts:176-190` |
-| 15 | PayPal webhook 验签传的是重新序列化的字符串，很可能恒失败；缺 `custom_id` 时回退到 PayPal 订单号再 `parseInt`，可能激活错订单 | `payments.ts:228,242`；`payment.ts:104` |
-| 16 | BEpusdt 付款后跳转 `API域名/user/orders/:id`（不存在），`PayResult.vue` 无入口 | `web.ts:170` |
-| 17 | 回调不核对金额/币种；订单先收到 failed 后再来 paid 不会激活 | `payment.ts:117,126` |
-| 18 | 所有商品固定 30 天，流量 = 价格数值 × 1 GiB（9.99 元 → 9.99 GiB）；products 表无 `duration_days/traffic_bytes`，Checkout 页展示的这些字段永远为空 | `payments.ts:30,331`；`0001_schema.sql`；`Checkout.vue` |
-| 19 | 下单即扣库存，pending 不过期、失败/取消/建单失败不回补 → 可被刷空；默认 provider 为已关闭的 `mock` | `web.ts:141,181` |
-| 20 | 退款不收回时长和流量；UPDATE 无 `status='paid'` 条件，并发退款重复加库存 | `admin.ts:313-322` |
-| 21 | 价格 ≥100 时前端除以 100 显示（120 元显示 $1.20），且一律显示 `$` | `Checkout.vue:197` |
-| 22 | 回调的 transactionId 被丢弃，orders 无 `transaction_id/paid_at`，无法对账 | `payment.ts`；schema |
+| 23 | ✅ `/auth/refresh` 要求 session 仍有效，refresh token 形同虚设；跨站 Bearer 24h 后掉线（A3：只看 refresh token，前端 401 自动续期） | `auth.ts` |
+| 24 | ✅ admin 初始化调 `/auth/validate`，优先读 portal 的 `session` cookie（A3：新增 `/admin/auth/validate`） | `auth.ts`；`admin/src/stores/auth.ts` |
+| 25 | ✅ JWT 不可吊销，`role` 取自 token（A3：`token_version` 吊销，role 以库为准；改密接口尚不存在） | `jwt.ts`；`admin.ts` guard |
+| 26 | ✅ 清除 csrf cookie 缺 `Secure`（A0） | |
+| 27 | ✅ 未配 Turnstile secret 时放行（A0，改为 fail closed） | |
+| 28 | ✅ 改用户名不校验空值/重名（A0） | |
 
-### 15.4 P1：认证与会话
+### 4.5 P2：daemon
 
 | # | 问题 | 位置 |
 | :--- | :--- | :--- |
-| 23 | `/auth/refresh` 要求 session 仍有效，refresh token 形同虚设；跨站 Bearer 24h 无续期，用户每天掉线 | `auth.ts:83`；`public.ts` |
-| 24 | admin 初始化调 `/auth/validate`，优先读 portal 的 `session` cookie，无独立 admin 校验 | `auth.ts:51`；`admin/src/stores/auth.ts` |
-| 25 | JWT 不可吊销，`role` 取自 token：降权/封号/改密最长 30 天内仍有效 | `jwt.ts`；`admin.ts` guard |
-| 26 | 清除 csrf cookie 时去掉 `Secure` 但保留 `SameSite=None`，浏览器拒收，清不掉 | `cookies.ts:37` |
-| 27 | 未配 `TURNSTILE_SECRET` 时直接放行 | `turnstile.ts:17` |
-| 28 | 改用户名不校验空值/重复（重复返回 500）；`sanitizedUser` 返回完整 `client_token` | `web.ts:85-92`；`user.ts:35` |
+| 29 | ✅ 上报前就更新流量快照，上报失败则增量丢失；拉配置失败时本轮不上报（A2） | `sync.go` |
+| 30 | 部分 ✅ Xray 重启失败仍记为已应用、不重试；崩溃不拉起；daemon 退出留孤儿进程（A2 已修）。剩余：用户变更仍整进程重启 Xray，全节点连接会断一次 | `sync.go`；`main.go` |
+| 31 | `sync_interval` 是 `time.Duration`，JSON 须写纳秒整数（`60000000000`），写 `"30s"` 解析失败 | `config.go` |
+| 32 | 部分 ✅ 默认 `default-token`/`localhost:8080` 能通过校验；`:9090` HTTP API 无鉴权（A2：默认值与非回环 `listen_addr` 拒绝启动）。剩余：`/api/v1/traffic` 流量恒为 0 | `config.go`；`server.go` |
 
-### 15.5 P2：daemon
-
-| # | 问题 | 位置 |
-| :--- | :--- | :--- |
-| 29 | 上报前就更新流量快照，上报失败则该段增量永久丢失；拉配置失败时本轮也不上报 | `sync.go:124-131,390,412-420` |
-| 30 | 重启 Xray 失败仍记为已应用、不重试；Xray 崩溃不自动拉起；daemon 退出留下孤儿进程；每次用户变化整进程重启、断开所有连接 | `sync.go:270-336`；`main.go:67` |
-| 31 | `sync_interval` 是 `time.Duration`，JSON 须写纳秒整数（部署脚本已正确写 `60000000000`），写 `"30s"` 会解析失败 | `config.go:16` |
-| 32 | 默认 `default-token`/`localhost:8080` 能通过校验；`:9090` HTTP API 无鉴权，`/api/v1/traffic` 恒返回 0；HMAC 密钥由 URL 中的 token 推导，不增加安全性 | `config.go`；`server.go:121`；`sync.go:200-218` |
-
-### 15.6 P2：未实现的功能
+### 4.6 P2：未实现的功能
 
 | # | 功能 | 现状 |
 | :--- | :--- | :--- |
-| 33 | sing-box 订阅 | `/links/:token/singbox` 仅输出节点名+协议名；portal 引导页已下线该入口 |
-| 34 | 订阅二维码接口 | `/links/:token/qrcode` 返回 501（portal 在前端自行生成二维码） |
-| 35 | D1 → R2 定时备份 | `BACKUPS` binding 已配置，无代码使用 |
-| 36 | 后台修改用户到期/流量/限速/订阅状态、修改商品币种 | 无接口，只能直接改库 |
+| 33 | sing-box 订阅 | 仅输出节点名 + 协议名；portal 已下线入口 |
+| 34 | 订阅二维码接口 | 返回 501；portal 前端自行生成，暂不需要 |
+| 35 | D1 → R2 备份 | 未实现 |
+| 36 | ✅ 后台改用户到期/流量/订阅状态、商品币种（A1） | |
 | 37 | 设备管理页 | `AccountDevices.vue` 为占位 |
 | 38 | Hysteria2 / gRPC / XHTTP | 不支持 |
-| 39 | 杂项 | `PORTAL_URL` 未配置（`/client/config` 返回 localhost）；`online_nodes` 统计把 active 直接算在线；营收按下单时间而非付款时间；`Pay.vue` 超时提示永不显示；Dashboard"无订阅"空状态永不显示 |
+| 39 | 杂项 | `PORTAL_URL` ✅；`online_nodes` 把 active 算在线；营收按下单时间；`Pay.vue` 超时提示不显示；Dashboard 空状态不显示 |
 
 ---
 
-## 16. 修复计划
+## 5. 修复计划
 
-> 编号对应 §15。2026-09-23 制定。
-
-### 16.0 已确定的决策
-
-| 问题 | 决策 | 影响 |
-| :--- | :--- | :--- |
-| 节点形态 | **所有节点都走 Cloudflare，CF-WS + cloudflared Tunnel 回源**（沿用 §1、§10 的定案，Reality 已从方案删除）：Xray 只监听 `127.0.0.1`，节点零公网端口，不需要证书 | 节点传输固定，后台不再提供 security/Reality 选项（见 16.3）；#4、#6 随之作废 |
-| Shadowsocks / Trojan | **先从后台协议白名单下线** | #8 不修，只做下线 |
-| 商品模型 | **每个商品单独配置**时长、流量、限速 | products 表加字段（见 16.2） |
-| 支付 | **暂不做，先跑通**。首个里程碑由管理员在后台手动开通订阅 | #14–#22 整体移到里程碑 B；原 #36（后台改用户订阅）提前到里程碑 A |
-| 出口 IP | **不处理**：节点出站直连（`freedom`），目标网站可见 VPS 出口 IP | 不引入 WARP / 落地机 / 住宅代理 |
-
-### 16.1 里程碑 A — 跑通（无支付，约 6–8 天）
+### 5.1 里程碑 A — 跑通（无支付）
 
 **目标**：管理员在后台建节点、给用户开通商品 → 用户导入订阅 → 通过 Tunnel 节点正常上网 → 流量被计入 → 到期、超额或封禁后一个同步周期内被踢下线。
 
-| 阶段 | 内容 | 工作量 |
+| 阶段 | 内容 | 状态 |
 | :--- | :--- | :--- |
-| A0 小修 | 见 16.2 | 0.5 天 |
-| A1 服务资格 + 后台开通 | 见 16.2 | 1.5 天 |
-| A2 节点链路（Tunnel） | 见 16.3 | 3–4 天 |
-| A3 认证与会话 | 见 16.4 | 1–2 天 |
-| 验收 | 见 16.5 | 0.5 天 |
+| A0 小修 | #12 #21 #26 #27 #28 #39 #8 | ✅ |
+| A1 服务资格 + 后台开通 | 见 5.2 | ✅ |
+| A2 节点链路（Tunnel） | 见 5.3 | ✅（待 VPS 实测） |
+| A3 认证与会话 | 见 5.4 | ✅ |
+| 验收 | 见 5.5 | |
 
-### 16.2 A0 小修 + A1 服务资格与后台开通
+### 5.2 A1 服务资格与后台开通（✅ 2026-09-23）
 
-**A0（✅ 已完成 2026-09-23）**
+- 迁移改为 `wrangler d1 migrations apply`。生产库首次执行会重跑 `0001`（全部 `IF NOT EXISTS`，安全），然后执行 `0002`
+- `0002`：products 加 `duration_days`、`traffic_bytes`、`speed_limit_bps`、`description`；users 加 `token_version`（A3 用）；补齐缺失的 `vless_uuid`；ss/trojan 节点置为 inactive
+- `lib/entitlement.ts`：`serviceBlock()` 与等价 SQL `SERVICEABLE_SQL`，订阅链接、`/client/subscription`、节点配置用户列表共用；拒绝原因 `ACCOUNT_DISABLED` / `SUBSCRIPTION_PENDING` / `SUBSCRIPTION_EXPIRED` / `TRAFFIC_EXCEEDED`
+- `activationStatement()`：按商品开通或顺延（到期 = max(now, 旧到期) + 时长），后台开通与支付回调共用
+- Cron（每小时）：标记过期用户；按 `traffic_period_start` 对齐 30 天周期重置已用流量
+- 后台：`POST /admin/users/:id/grant {product_id}`；`PUT /admin/users/:id` 可改订阅状态、到期、流量上限/已用、限速；商品增改支持新字段与币种（USD/CNY）
 
-- #12：管理员改用户状态不再重生 `client_token`；只有显式传 `client_token` 或 `regenerate_token: true` 才变更
-- #21：portal 价格按主币单位显示并带币种符号（`portal/src/utils/price.ts`），Products 与 Checkout 共用
-- #26：清除 csrf cookie 时带上 `Secure`
-- #27：未配 `TURNSTILE_SECRET` 时 fail closed，只有 `TURNSTILE_DISABLED="1"` 才跳过。⚠️ `wrangler.jsonc` 目前显式设了 `TURNSTILE_DISABLED="1"`，配好 secret（§14.3 #1）后必须删掉
-- #28：修改用户名校验 1–64 字符与重名（409）。审查里"`sanitizedUser` 返回完整 `client_token`"不是 bug：portal 靠它给用户本人拼订阅链接
-- #39：wrangler vars 配置 `PORTAL_URL=https://www.rfplay.uk`
-- #8：协议白名单改为 `vmess`、`vless`（新建与更新都校验）；节点编辑页去掉两个选项；订阅与 Clash 不再输出这两种协议（Clash 的 proxy-groups 同步过滤）。已有此类节点在 A1 的 `0002` 迁移里改为 `inactive`
+### 5.3 A2 节点链路（Tunnel 方案）（✅ 2026-09-23，待 VPS 实测）
 
-**A1（✅ 已完成 2026-09-23）**
+**完成情况**
 
-- 迁移改为 `wrangler d1 migrations apply`（CI 与 `npm run db:migrate[:remote]`）。生产库首次执行时会重跑 `0001`（全部 `IF NOT EXISTS`，安全），然后执行 `0002`
-- `lib/entitlement.ts`：`serviceBlock()` 与等价 SQL `SERVICEABLE_SQL`（测试逐组合比对两者结论一致），订阅链接、`/client/subscription`、节点配置用户列表三处共用；拒绝原因为 `ACCOUNT_DISABLED` / `SUBSCRIPTION_PENDING` / `SUBSCRIPTION_EXPIRED` / `TRAFFIC_EXCEEDED`
-- `activationStatement()` 即计划中的 `activateProduct`：按商品 `duration_days`、`traffic_bytes`、`speed_limit_bps` 开通或顺延；支付回调改用它（旧逻辑把价格当 GB 数、时长固定 30 天）
-- 流量语义：`traffic_bytes` 为**每 30 天**额度，0 = 不限；Cron（每小时 `0 * * * *`）标记过期用户，并按 `traffic_period_start` 对齐 30 天周期重置已用流量
-- 后台：`POST /admin/users/:id/grant {product_id}`；`PUT /admin/users/:id` 新增 `subscription_status`、`expire_time`、`traffic_limit_bytes`、`traffic_used_bytes`、`rate_limit_bps`；商品增改支持新字段与币种（USD/CNY）。Users 页新增 Manage 弹窗，Products 页新增字段，并修复类型下拉与后端白名单不一致导致无法建商品的问题
-- 测试改为在 `node:sqlite` 上跑真实迁移与 SQL（`src/testing/d1.ts`），因此发现并修复了 JS 数字按浮点绑定导致周期对齐错误的问题
-
-原计划条目：
-
-1. **迁移机制**：改用 `wrangler d1 migrations apply`（`deploy-worker.yml` 目前只执行 `0001_schema.sql`，新迁移不会上线）
-2. **迁移 `0002`**：products 加 `duration_days`、`traffic_bytes`、`speed_limit_bps`、`description`；users 加 `token_version`（A3 使用）；缺 `vless_uuid` 的用户一次性补齐（修 §15 审查中"节点端与订阅端 UUID 不一致"的问题）；`protocol IN ('shadowsocks','trojan')` 的节点置为 `inactive`
-3. **统一判定 `isServiceable(user, now)`**：`status='active'` 且 `subscription_status='active'` 且 `expire_time > now` 且未超流量。订阅链接、`/client/subscription`、节点配置用户列表三处共用（#9、#10、#11）
-4. **Workers Cron（每小时）**：把已过期用户标记为 `expired`；按 `traffic_period_start` 每月重置流量（#13 的重置部分）
-5. **激活函数 `activateProduct(user, product)`**：按商品的时长、流量、限速开通或顺延。后台和日后的支付回调共用这一个函数
-6. **后台接口 + 页面**（原 #36）：给用户开通某个商品；直接修改到期时间、流量上限、订阅状态；商品编辑页支持新字段和币种
-7. **测试**：`isServiceable` 与 `activateProduct` 的单元测试；三个调用点各覆盖过期、超额、封禁
-
-### 16.3 A2 节点链路（Tunnel 方案）
+- Worker：`routes/node.ts`（`GET /node/:token/config`、`POST /node/:token/traffic/report`）+ `lib/nodehmac.ts`（与 daemon `signRequest` 同算法，时间戳容差 ±300s，签名覆盖 body）。上报经 `json_each` 展开，一个 batch 固定 2–3 条语句，与用户数无关（D1 单次调用有查询数上限）；同一用户多条合并，不存在的用户不记录，节点计数与心跳一并更新。节点非 active 时下发空用户列表（daemon 应用后断开所有连接），而不是 403（403 会让 daemon 保留旧配置继续服务）
+- `lib/nodeconfig.ts`：`buildNodeXrayConfig` 从 `admin.ts` 移出，后台预览与节点接口共用；用户列表用 `SERVICEABLE_SQL`，缺 `vless_uuid` 的用户跳过（不再内存补随机 UUID）。StatsService 走 `127.0.0.1:10085`（与节点端口冲突时 10086，写入 `_meta.api_port`）。路由屏蔽私网/回环目标，否则用户可经代理连本机 StatsService 重置流量计数；为此去掉了 `inboundTag → direct` 规则，让域名目标经 `IPIfNonMatch` 解析后再匹配 IP 规则。版本号 = FNV-1a（配置结构版本、协议、端口、path、api 端口、每个用户 `id:uuid`）截成 53 位，JSON 往返不丢精度
+- #13 已知限制：Xray 没有按用户限速（policy 只有超时与统计开关），`speed_limit_bps` / `rate_limit_bps` 不下发到节点，推迟处理
+- 订阅：`xrayuri.ts`、`subformats.ts` 固定 ws + tls + 443、host/sni = 节点域名，`server_name`/Reality 不再参与；`nodes.port` 只作本机端口。后台节点接口只收 `ws_path`（新建时 network/security 写死 `ws`/`none`），输出不再含停用列；节点页只留 名称/类型/协议/域名/本地端口/WS Path/状态，并新增「Token」按钮（此前后台拿不到 `nd_...` token）。`/admin/nodes/:id/config` 预览不再记心跳
+- daemon：`xray api statsquery -reset` 读流量，读出的增量进 `pending`，上报 200 后才扣除；拉配置失败也上报；应用新配置前先 `xray run -test`，失败保留旧进程；重启前先收一次流量；重启失败不记为已应用（下轮重试）；崩溃后指数退避自动拉起；`Stop()` 与退出时结束 Xray（`main.go` 不再 `log.Fatalf` 跳过清理）；`node_id` 取自配置响应（配置里可省略）；默认 token/地址、非回环 `listen_addr` 拒绝启动
+- 部署脚本：安装 cloudflared 并 `cloudflared service install <tunnel token>`；给 `--cf-api-token` 时经 API 写 Tunnel ingress（`hostname → http://127.0.0.1:<port>`）与橙云 CNAME，否则打印手动步骤；Xray 改由 daemon 独占管理（停用 `xray.service` 与旧 `rfplay-xray.service`，避免两个 Xray 抢端口）；结尾检查节点端口、9090、10085/10086 只监听回环地址，否则报错退出。原固定的 Xray `v25.3.8` 不存在（404），改为已验证的 `v26.3.27`（Xray 26 已把 WS 与 VMess 标为 deprecated，升级前需确认）
+- 已删除 `deploy/node-reality/`
+- 验证：`node.routes.test.ts`（真实 SQLite，19 例：签名正确/错误/过期/篡改 body、配置只含可服务用户、版本号变化、上报记账）；`subformats.test.ts` 更新。daemon 用本机缓存的 Go 1.26.5 工具链 `go vet` + `go test -race` 通过；并用 Xray 26.3.27 实测：生成的 vless/vmess 配置 `-test` 通过，经 WS 代理正常上网，`statsquery` 读到 `u{id}` 流量，经代理访问 `127.0.0.1:10085`/`localhost` 被拦；daemon 对假 manager 实测上报失败重发、`kill -9` 后 2s 拉起、SIGTERM 后 Xray 退出
+- 未验证：cloudflared 注册与 Tunnel API 调用、脚本在真实 VPS 上的完整执行（需 Tunnel token 与 API token）；验收见 5.5
 
 **节点模型（唯一形态）**
 
@@ -739,38 +214,18 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 | DNS | Tunnel 自动创建的 CNAME（橙云），源站 IP 不出现在任何 DNS 记录里 |
 | VPS 防火墙 | 入站只留 SSH（建议 SSH 也限制来源或改用 Cloudflare Access） |
 
-**移除 Reality 与可选传输**
+nodes 表的 `security`、`network`、`server_name`、`reality_*` 列已停用（D1 删列需重建表，暂不删）。
 
-- 订阅生成（`xrayuri.ts`、`subformats.ts`）固定输出 ws + tls + 443，删除 Reality 分支和 `security`/`network` 判断
-- 服务端配置生成（`buildNodeXrayConfig`）固定输出 127.0.0.1 + ws + none，删除 TLS 证书和 Reality 分支；不再下发 Vision flow
-- 节点编辑页只保留 名称、域名、本地端口、WS Path；去掉 Network/Security/SNI/Reality 字段
-- 删除 `deploy/node-reality/`；nodes 表的 `security`、`network`、`server_name`、`reality_*` 列停用（D1 删列需重建表，暂不删）
+### 5.4 A3 认证与会话（✅ 2026-09-23）
 
-**Worker**
+- #25 / #11：`lib/session.ts` 统一校验。JWT 带 `tv`（缺省视为 0，旧 token 平滑过渡）；portal/web、admin、`/client/subscription` 每次请求回库比对 `token_version` 与 `status`，`role`/`username` 以库为准（降权下一次请求即生效）。退出（portal 与 admin）、后台把用户改为 `suspended`/`banned` 时版本号加一，该用户所有设备的 access/refresh 全部失效；解封不会恢复旧 token。退出只接受当前版本的 token 触发加一，被盗旧 token 不能反复踢人
+- refresh token 带 `typ: 'refresh'`，不能当 access 用；access 也不能拿来续期。⚠️ 上线前签发的 refresh cookie 没有 `typ`，用户需重新登录一次
+- #23：`POST /auth/refresh` 与新增的 `POST /admin/auth/refresh` 只看 refresh token（cookie 或 body `refresh_token`），不要求 access 有效。登录/注册响应新增 `refresh_token`；portal 与 admin 的 axios 拦截器在 401 时单飞续期并重放原请求，失败才跳回首页
+- #24：新增 `GET /admin/auth/validate`（只读 `admin_session` + Bearer 兜底，非 admin 403）；admin 前端初始化改调它
+- 未做：仓库里没有改密接口，目前无处可挂"改密加一"；以后加改密时调用 `bumpTokenVersion`
+- 测试：`src/routes/session.routes.test.ts`（真实 SQLite，17 例）
 
-- #1、#2：新建 `routes/node.ts`，实现 `GET /node/:token/config` 和 `POST /node/:token/traffic/report`。按 `nodes.token` 定位节点并校验 daemon 的 HMAC 签名；响应对齐 `{node_id,name,protocol,config}`；上报支持批量，写 `traffic_records` 并累加 `users.traffic_used_bytes`；同时更新心跳
-- #3：每个用户 client 带 `email: "u{id}"`，打开 `stats`、`api`（StatsService）入站和 policy 的按用户统计
-- #5：配置版本号 = 用户集合 + 节点传输配置的哈希
-- #13：把商品的 `speed_limit_bps` 映射成 Xray 的 level/policy。如果 Xray 本身做不到按用户限速，就记为已知限制，推迟处理
-**daemon**
-
-- #3：流量改为通过 Xray StatsService API 读取（`statsquery`，读后重置），不再读 `traffic_stats.json`
-- #29：流量快照在上报成功后才更新；拉配置失败的那一轮仍上报流量
-- #30：Xray 重启失败时重试；崩溃后自动拉起；daemon 退出时结束 Xray
-- #7：`node_id` 从配置接口响应里取，部署脚本不再写死
-- #32：检测到默认 token 或默认地址时直接报错退出；`:9090` 只监听 `127.0.0.1`
-
-**部署脚本**
-
-- `deploy-node-cf-ws.sh`：安装 cloudflared，用 Tunnel token 注册成系统服务，写好 ingress；不再需要源站证书；脚本最后检查 Xray 端口未监听公网网卡
-
-### 16.4 A3 认证与会话
-
-- #25：JWT 携带 `token_version`，每次请求与数据库比对；退出、改密、封号时版本号加一。`role` 从数据库读取。同一次查询顺带检查 `users.status`（#11）
-- #23：`/auth/refresh` 只校验 refresh token；跨站 Bearer 场景也能续期
-- #24：新增 `/admin/auth/validate`，只读 `admin_session`
-
-### 16.5 里程碑 A 验收
+### 5.5 里程碑 A 验收
 
 在一台测试 VPS 上完成下面全部步骤：
 
@@ -783,22 +238,22 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 - [ ] 管理员被降权后，下一次请求即失去后台权限
 - [ ] 从外网扫描该 VPS：除 SSH 外无开放端口；节点域名解析结果只有 Cloudflare IP
 
-### 16.6 里程碑 B — 支付（暂缓）
+### 5.6 里程碑 B — 支付（暂缓）
 
 里程碑 A 验收通过后再排期。首发只接 BEpusdt，PayPal 放在最后。
 
 - 迁移：orders 加 `transaction_id`、`paid_at`
-- 回调统一调用 A1 的 `activationStatement`（#18，已接入 `activateSubscription`）
 - #17、#22：核对金额与币种；failed 之后到达的 paid 回调仍然激活；记录交易号与付款时间
 - #16：BEpusdt 付款后跳回 portal 的 `PayResult` 页
 - #19：pending 订单 30 分钟未付由 Cron 释放库存；失败、取消、建单失败都回补；默认 provider 不再是 `mock`
 - #20：退款收回时长与流量；UPDATE 加 `status='paid'` 条件
 - #14、#15（PayPal）：`return_url`/`cancel_url`、capture 接口、webhook 验签传原始事件对象、缺 `custom_id` 时拒绝
 
-### 16.7 里程碑 C — 功能补全（按需）
+### 5.7 里程碑 C — 功能补全（按需）
 
 - #33：sing-box 订阅，完成后恢复 portal 引导页的 Sing-box 标签
-- #35：备份。先依靠 D1 Time Travel（可回到 30 天内任意时间点），再加每周 CI 任务执行 `wrangler d1 export` 上传 R2
-- #37、#39：设备管理页；统计口径（在线节点、营收按付款时间）；`Pay.vue` 超时提示；Dashboard 空状态
+- #35：备份。先依靠 D1 Time Travel，再加每周 CI 任务执行 `wrangler d1 export` 上传 R2
+- #37、#39：设备管理页；统计口径；`Pay.vue` 超时提示；Dashboard 空状态
 - #8：如有需要，再补齐 Shadowsocks / Trojan 的服务端配置与真实密码
 - #38：Hysteria2 等新协议
+- 运维增强：节点拨测失败自动置 inactive + 告警；额度 >80% 告警；Telegram bot（查流量、续费、到期提醒）

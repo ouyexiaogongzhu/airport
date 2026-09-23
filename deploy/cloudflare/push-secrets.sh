@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# push-secrets.sh — 從 .env 讀取業務 Secrets，逐個寫入 Worker（自動化清單 §12.8 #7）
+# push-secrets.sh — 從 .env 讀取業務 Secrets，逐個寫入 Worker
 #
 # 用法：
 #   cd workers/api

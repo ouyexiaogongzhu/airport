@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dump-to-seed.sh — GORM SQLite 庫 → D1 可導入 seed.sql（自動化清單 §12.8 #8）
+# dump-to-seed.sh — GORM SQLite 庫 → D1 可導入 seed.sql
 #
 # 用法：
 #   ../deploy/cloudflare/dump-to-seed.sh /path/to/manager.db > seed.sql

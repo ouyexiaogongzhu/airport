@@ -1,5 +1,5 @@
 // 纯 JS MD5（RFC 1321）— WebCrypto 不支持 MD5；BEpusdt 是遗留 MD5 签名方案，无法更换只能重现
-// （cloudflare_migration_plan.md §5.1）。输入按 UTF-8 编码（等价 Go md5.Sum([]byte(s))），输出小写 hex。
+// 输入按 UTF-8 编码（等价 Go md5.Sum([]byte(s))），输出小写 hex。
 
 const SHIFTS = [
   7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,

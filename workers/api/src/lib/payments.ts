@@ -17,7 +17,7 @@ export type PaymentEnv = {
   PAYPAL_CLIENT_ID?: string;
   PAYPAL_CLIENT_SECRET?: string;
   PAYPAL_WEBHOOK_ID?: string;
-  // 沙箱对拍旋钮（§5.2）：默认生产 https://api-m.paypal.com，沙箱设 https://api-m.sandbox.paypal.com
+  // 沙箱开关：默认生产 https://api-m.paypal.com，沙箱设 https://api-m.sandbox.paypal.com
   PAYPAL_API_BASE?: string;
 };
 
@@ -129,7 +129,7 @@ async function mockVerifyCallback(body: Record<string, unknown>): Promise<Callba
   };
 }
 
-// ── PayPal（§5.2 新增通道，官方 REST，无 SDK）────────────────────────────────
+// ── PayPal（官方 REST，无 SDK）────────────────────────────────
 
 // ponytail: isolate 内存缓存（token 有效期 ~3h，同 isolate 命中足够）；PaymentEnv 无 KV 绑定，
 // 需要跨 isolate 共享时由主线把 CACHE 传进来改 KV
@@ -169,7 +169,7 @@ async function paypalBase(env: PaymentEnv): Promise<string> {
   return env.PAYPAL_API_BASE ?? 'https://api-m.paypal.com';
 }
 
-// PayPal 產品以 USD 計價（§5.2：付款人卡自動換匯；products.currency 留給 web.ts 下單時校驗）
+// PayPal 產品以 USD 計價（付款人卡自動換匯；products.currency 留給 web.ts 下單時校驗）
 async function paypalCreatePayment(order: PaymentOrderInput, env: PaymentEnv): Promise<string> {
   const token = await paypalAccessToken(env);
   const resp = await fetch(`${await paypalBase(env)}/v2/checkout/orders`, {
@@ -195,7 +195,7 @@ async function paypalCreatePayment(order: PaymentOrderInput, env: PaymentEnv): P
   return approve;
 }
 
-// 验签走官方 /v1/notifications/verify-webhook-signature（免自行处理证书链，§5.2）。
+// 验签走官方 /v1/notifications/verify-webhook-signature（免自行处理证书链）。
 // transmission_* 五元组在 HTTP headers 上——路由层合入 body._headers 传入（合约签名只收 body）。
 async function paypalVerifyCallback(
   body: Record<string, unknown>,
