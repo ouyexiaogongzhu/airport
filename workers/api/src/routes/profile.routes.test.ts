@@ -52,7 +52,7 @@ describe('GET /user/profile', () => {
     const { req, auth } = setup();
     const res = await req('/user/profile', { headers: await auth(2) });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as Record<string, unknown>;
     expect(body.username).toBe('alice');
     expect(body.email).toBeNull();
     expect(body.phone).toBeNull();
@@ -76,7 +76,7 @@ describe('PUT /user/profile', () => {
       }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as Record<string, unknown>;
     expect(body.email).toBe('alice@example.com');
     expect(body.phone).toBe('+15550100');
     expect(body.display_name).toBe('Alice A');
@@ -124,7 +124,7 @@ describe('PUT /user/profile', () => {
       body: JSON.stringify({ email: '' }),
     });
     expect(clear.status).toBe(200);
-    expect((await clear.json()).email).toBeNull();
+    expect(((await clear.json()) as Record<string, unknown>).email).toBeNull();
 
     const rename = await req('/user/profile', {
       method: 'PUT',
@@ -132,7 +132,7 @@ describe('PUT /user/profile', () => {
       body: JSON.stringify({ username: 'alice2' }),
     });
     expect(rename.status).toBe(200);
-    expect((await rename.json()).username).toBe('alice2');
+    expect(((await rename.json()) as Record<string, unknown>).username).toBe('alice2');
   });
 
   it('requires at least one allowlisted field', async () => {

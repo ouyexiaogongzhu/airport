@@ -114,7 +114,7 @@ export function webRoutes() {
 
     if ('email' in updates) {
       const email = updates.email;
-      if (email !== null && email !== '' && !isValidEmail(email)) {
+      if (email != null && email !== '' && !isValidEmail(email)) {
         return c.json({ error: 'invalid email format' }, 400);
       }
       // 空字串視為清除
@@ -129,7 +129,7 @@ export function webRoutes() {
 
     if ('phone' in updates) {
       const phone = updates.phone;
-      if (phone !== null && phone.length > 32) {
+      if (phone != null && phone.length > 32) {
         return c.json({ error: 'phone must be at most 32 characters' }, 400);
       }
       if (phone === '') updates.phone = null;
@@ -137,7 +137,7 @@ export function webRoutes() {
 
     if ('display_name' in updates) {
       const name = updates.display_name;
-      if (name !== null && name.length > 128) {
+      if (name != null && name.length > 128) {
         return c.json({ error: 'display_name must be at most 128 characters' }, 400);
       }
       if (name === '') updates.display_name = null;
@@ -145,7 +145,7 @@ export function webRoutes() {
 
     if ('billing_address' in updates) {
       const addr = updates.billing_address;
-      if (addr !== null && addr.length > 512) {
+      if (addr != null && addr.length > 512) {
         return c.json({ error: 'billing_address must be at most 512 characters' }, 400);
       }
       if (addr === '') updates.billing_address = null;
