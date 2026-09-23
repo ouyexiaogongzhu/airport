@@ -1,5 +1,12 @@
 name: deploy-worker
 
+# GitHub secret CLOUDFLARE_API_TOKEN must include (Account scope, this account):
+#   - Workers Scripts → Edit
+#   - D1 → Edit
+# Pages-only tokens fail Apply D1 migrations with Cloudflare API 7403.
+# Use CLOUDFLARE_PAGES_API_TOKEN in deploy-pages.yml for Pages; do not replace
+# the Workers token with a Pages-only token.
+
 on:
   push:
     branches: [main]
@@ -22,6 +29,23 @@ jobs:
       - name: Install deps
         working-directory: workers/api
         run: npm install --no-audit --no-fund
+
+      - name: Verify API token can access D1
+        working-directory: workers/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: d3376ef411a0e5f321acb1ee848d2ec1
+          D1_DATABASE_ID: e2e30fd5-d9b7-415b-a39d-3352cef000fa
+        run: |
+          set -euo pipefail
+          http_code=$(curl -sS -o /tmp/cf-d1-probe.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_DATABASE_ID}")
+          if [ "$http_code" != "200" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN cannot access D1 (HTTP ${http_code}). Add Account → D1 → Edit and Account → Workers Scripts → Edit on this token (see deploy-worker.yml header). Pages-only tokens break this job."
+            cat /tmp/cf-d1-probe.json
+            exit 1
+          fi
 
       - name: Apply D1 migrations
         working-directory: workers/api

@@ -13,8 +13,10 @@ permissions:
   contents: read
   deployments: write
 
-# Requires GitHub secret CLOUDFLARE_API_TOKEN with Account → Cloudflare Pages → Edit
-# (Workers-only tokens will fail this workflow with 403 / Authentication error).
+# Requires GitHub secret CLOUDFLARE_PAGES_API_TOKEN (Account → Cloudflare Pages → Edit).
+# Falls back to CLOUDFLARE_API_TOKEN when the Pages secret is not set.
+# Keep Workers/D1 on CLOUDFLARE_API_TOKEN for deploy-worker.yml — do not replace
+# that secret with a Pages-only token.
 
 jobs:
   deploy:
@@ -53,7 +55,7 @@ jobs:
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          apiToken: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN != '' && secrets.CLOUDFLARE_PAGES_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: d3376ef411a0e5f321acb1ee848d2ec1
           workingDirectory: ${{ matrix.app }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}

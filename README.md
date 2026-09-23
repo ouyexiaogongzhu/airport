@@ -85,9 +85,16 @@ npx wrangler deploy
 | `rfplay-portal` | `portal` | `xv.rfplay.uk`（及 `www`） | `npm ci && npm run build` → Direct Upload |
 | `rfplay-admin` | `admin` | `xva.rfplay.uk` | 同上 |
 
-**部署方式**：不依赖 Pages 的 Git 集成。`main` 上 `portal/**` 或 `admin/**` 变更时，`.github/workflows/deploy-pages.yml` 构建静态资源并用 `wrangler pages deploy` 上传（与 Worker 同一套 `CLOUDFLARE_API_TOKEN`）。也可在 Actions 里手动 `workflow_dispatch`。
+**部署方式**：不依赖 Pages 的 Git 集成。`main` 上 `portal/**` 或 `admin/**` 变更时，`.github/workflows/deploy-pages.yml` 构建静态资源并用 `wrangler pages deploy` 上传。也可在 Actions 里手动 `workflow_dispatch`。
 
-> **API Token 权限**：GitHub secret `CLOUDFLARE_API_TOKEN` 除 Workers 外，还必须包含 **Account → Cloudflare Pages → Edit**，否则 `deploy-pages` 会在 Deploy 步骤失败（构建仍可通过）。可在 [API Tokens](https://dash.cloudflare.com/?to=/:account/api-tokens) 编辑现有 token 或新建。
+> **GitHub Secrets 与 API Token 权限**（[API Tokens](https://dash.cloudflare.com/profile/api-tokens)）：
+>
+> | Secret | 用途 | 必需权限（Account） |
+> |--------|------|---------------------|
+> | `CLOUDFLARE_API_TOKEN` | `deploy-worker`（D1 迁移 + Worker 部署） | **Workers Scripts → Edit**、**D1 → Edit** |
+> | `CLOUDFLARE_PAGES_API_TOKEN` | `deploy-pages`（可选；未设置时回退到上一列 secret） | **Cloudflare Pages → Edit** |
+>
+> 勿用「仅 Pages」的 token **替换** `CLOUDFLARE_API_TOKEN`，否则 `deploy-worker` 会在 D1 步骤失败（Cloudflare API **7403**）。推荐：Worker 继续用 `CLOUDFLARE_API_TOKEN`；把 Pages token 存到 `CLOUDFLARE_PAGES_API_TOKEN`。或在**同一个** token 上同时勾选 Workers + D1 + Pages 三项权限。
 
 环境变量模板：`portal.env.example`、`admin.env.example`。CI 构建注入 `VITE_API_BASE_URL=https://api.rfplay.uk`（portal 另有 `VITE_SUBSCRIPTION_BASE_URL`）。
 
