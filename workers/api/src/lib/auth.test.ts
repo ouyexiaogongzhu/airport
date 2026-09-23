@@ -105,6 +105,13 @@ describe('cookies (對齊 auth.go)', () => {
       expect(all.some((v) => v.startsWith(`${n}=`))).toBe(true);
     }
   });
+
+  it('clearAuthCookies always pairs SameSite=None with Secure (browsers reject otherwise)', () => {
+    for (const v of clearAuthCookies()) {
+      expect(v).toContain('SameSite=None');
+      expect(v).toContain('Secure');
+    }
+  });
 });
 
 describe('sanitizedUser', () => {

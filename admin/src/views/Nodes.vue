@@ -86,8 +86,6 @@
                 <option value="">-- Select --</option>
                 <option value="vless">vless</option>
                 <option value="vmess">vmess</option>
-                <option value="shadowsocks">shadowsocks</option>
-                <option value="trojan">trojan</option>
               </select>
             </div>
             <div class="field">

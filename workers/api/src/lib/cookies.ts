@@ -33,12 +33,9 @@ export function csrfCookie(name: string, token: string, domain?: string): string
 export function clearAuthCookies(domain?: string): string[] {
   const out: string[] = [];
   for (const n of ['session', 'refresh', 'csrf', 'admin_session', 'admin_refresh', 'admin_csrf']) {
+    // SameSite=None 必須帶 Secure，否則瀏覽器拒收這條 Set-Cookie
     const parts = [`${n}=`, 'Path=/', 'Max-Age=0', 'Secure', 'SameSite=None'];
-    if (n.includes('csrf')) {
-      parts.splice(parts.indexOf('Secure'), 1); // csrf 非 HttpOnly 也非必須 Secure 清除差異，保持一致性
-    } else {
-      parts.push('HttpOnly');
-    }
+    if (!n.includes('csrf')) parts.push('HttpOnly');
     if (domain) parts.push(`Domain=${domain}`);
     out.push(parts.join('; '));
   }

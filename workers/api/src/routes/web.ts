@@ -82,14 +82,20 @@ export function webRoutes() {
   app.put('/user/profile', webAuth, webCsrf, async (c) => {
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     if (body === null) return c.json({ error: 'invalid request body' }, 400);
-    const updates: Record<string, unknown> = {};
-    if ('username' in body) updates.username = body.username;
-    if (Object.keys(updates).length === 0) {
+    if (!('username' in body)) {
       return c.json({ error: 'no valid fields to update' }, 400);
     }
+    const username = typeof body.username === 'string' ? body.username.trim() : '';
+    if (username === '' || username.length > 64) {
+      return c.json({ error: 'username must be 1-64 characters' }, 400);
+    }
+    const taken = await c.env.DB.prepare('SELECT id FROM users WHERE username = ? AND id != ?')
+      .bind(username, c.get('userId'))
+      .first();
+    if (taken) return c.json({ error: 'username already exists' }, 409);
     const now = new Date().toISOString();
     const result = await c.env.DB.prepare('UPDATE users SET username = ?, updated_at = ? WHERE id = ?')
-      .bind(updates.username, now, c.get('userId'))
+      .bind(username, now, c.get('userId'))
       .run();
     if ((result.meta.changes ?? 0) === 0) {
       return c.json({ error: 'failed to update profile' }, 500);

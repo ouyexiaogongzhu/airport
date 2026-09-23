@@ -84,6 +84,9 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+const VALID_PROTOCOLS = new Set(['vmess', 'vless']);
+const PROTOCOL_ERROR = 'protocol must be one of: vmess, vless';
+
 // 節點傳輸層可選欄位；只收到的鍵才返回，字串 '' 存為 NULL
 function parseTransport(body: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
   const fields: Record<string, unknown> = {};
@@ -197,7 +200,8 @@ export function adminRoutes() {
     return c.json(adminUserJson(user));
   });
 
-  // UpdateUser：client_token（空/缺 → 重產 "rf_"+hex32）+ status 白名單
+  // UpdateUser：status 白名單；client_token 只在顯式給值或 regenerate_token=true 時變更
+  // （改狀態不能順帶換 token，否則封禁/解封會讓用戶訂閱鏈接失效）
   app.put('/admin/users/:id', ...guard, adminCsrf, async (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid user id' }, 400);
@@ -205,31 +209,31 @@ export function adminRoutes() {
     const user = await db.prepare('SELECT id FROM users WHERE id = ?').bind(id).first<{ id: number }>();
     if (!user) return c.json({ error: 'user not found' }, 404);
 
-    const body = await c.req.json<{ client_token?: unknown; status?: unknown }>().catch(() => null);
+    const body = await c.req
+      .json<{ client_token?: unknown; regenerate_token?: unknown; status?: unknown }>()
+      .catch(() => null);
     if (body === null) return c.json({ error: 'invalid request body' }, 400);
 
-    const updates: Record<string, unknown> = {};
+    const sets: string[] = [];
+    const binds: unknown[] = [];
     if (typeof body.client_token === 'string' && body.client_token !== '') {
-      updates.client_token = body.client_token;
-    } else {
-      updates.client_token = 'rf_' + randomHex(32);
+      sets.push('client_token = ?');
+      binds.push(body.client_token);
+    } else if (body.regenerate_token === true) {
+      sets.push('client_token = ?');
+      binds.push('rf_' + randomHex(32));
     }
     if (body.status !== undefined) {
       const valid = new Set(['active', 'suspended', 'banned']);
       if (typeof body.status !== 'string' || !valid.has(body.status)) {
         return c.json({ error: "invalid status, must be 'active', 'suspended', or 'banned'" }, 400);
       }
-      updates.status = body.status;
-    }
-    updates.updated_at = new Date().toISOString();
-
-    const sets = ['client_token = ?', 'updated_at = ?'];
-    const binds: unknown[] = [updates.client_token, updates.updated_at];
-    if (updates.status !== undefined) {
       sets.push('status = ?');
-      binds.push(updates.status);
+      binds.push(body.status);
     }
-    binds.push(id);
+    if (sets.length === 0) return c.json({ error: 'no valid fields to update' }, 400);
+    sets.push('updated_at = ?');
+    binds.push(new Date().toISOString(), id);
     const r = await db
       .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
       .bind(...binds)
@@ -435,10 +439,7 @@ export function adminRoutes() {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       return c.json({ error: 'port must be between 1 and 65535' }, 400);
     }
-    const validProtocols = new Set(['vmess', 'vless', 'shadowsocks', 'trojan']);
-    if (!validProtocols.has(protocol)) {
-      return c.json({ error: 'protocol must be one of: vmess, vless, shadowsocks, trojan' }, 400);
-    }
+    if (!VALID_PROTOCOLS.has(protocol)) return c.json({ error: PROTOCOL_ERROR }, 400);
     const validTypes = new Set(['v2ray', 'xray']);
     if (!validTypes.has(type)) {
       return c.json({ error: 'type must be one of: v2ray, xray' }, 400);
@@ -529,6 +530,9 @@ export function adminRoutes() {
     if ('error' in transport) return c.json({ error: transport.error }, 400);
 
     const updates: Record<string, unknown> = { ...transport.fields };
+    if (body.protocol !== undefined && !VALID_PROTOCOLS.has(String(body.protocol))) {
+      return c.json({ error: PROTOCOL_ERROR }, 400);
+    }
     for (const key of ['name', 'type', 'address', 'protocol', 'status'] as const) {
       if (body[key] !== undefined) updates[key] = body[key];
     }

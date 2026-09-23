@@ -25,7 +25,11 @@ export function buildV2ray(user: UserCreds, nodes: NodeRow[]): FormatOutput | nu
   return { ct: 'text/plain; charset=utf-8', body: b64std(lines.join('\n')) };
 }
 
-export function buildClash(user: UserCreds, nodes: NodeRow[]): FormatOutput {
+// proxy-groups 引用未輸出的節點名時 Clash 會拒絕整份配置，所以先過濾
+const CLASH_PROTOCOLS = new Set(['vmess', 'vless']);
+
+export function buildClash(user: UserCreds, allNodes: NodeRow[]): FormatOutput {
+  const nodes = allNodes.filter((n) => CLASH_PROTOCOLS.has(n.protocol ?? ''));
   const sb: string[] = [];
   sb.push('port: 7890\n');
   sb.push('socks-port: 7891\n');
@@ -69,22 +73,6 @@ export function buildClash(user: UserCreds, nodes: NodeRow[]): FormatOutput {
         sb.push('\n');
         break;
       }
-      case 'shadowsocks':
-        sb.push(`  - name: "${name}"\n`);
-        sb.push('    type: ss\n');
-        sb.push(`    server: ${address}\n`);
-        sb.push(`    port: ${port}\n`);
-        sb.push('    cipher: aes-256-gcm\n');
-        sb.push(`    password: "rf-${user.id}-pass"\n\n`);
-        break;
-      case 'trojan':
-        sb.push(`  - name: "${name}"\n`);
-        sb.push('    type: trojan\n');
-        sb.push(`    server: ${address}\n`);
-        sb.push(`    port: ${port}\n`);
-        sb.push(`    password: "rf-${user.id}-pass"\n`);
-        sb.push('    udp: true\n\n');
-        break;
     }
   }
 

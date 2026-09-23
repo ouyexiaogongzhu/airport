@@ -14,8 +14,6 @@ type UserRow = {
   traffic_used_bytes: number | null;
   expire_time: number | null;
   vless_uuid: string | null;
-  ss_password: string | null;
-  trojan_password: string | null;
 };
 
 type CachedBody = { ct: string; body: string };
@@ -41,8 +39,6 @@ function creds(user: UserRow): UserCreds {
   return {
     id: user.id,
     vless_uuid: user.vless_uuid,
-    ss_password: user.ss_password,
-    trojan_password: user.trojan_password,
   };
 }
 
@@ -96,8 +92,7 @@ export function clientRoutes() {
 
   // GET /client/config — GetClientConfig
   r.get('/config', (c) => {
-    const env = c.env as Env & { PORTAL_URL?: string };
-    const portalURL = env.PORTAL_URL || 'http://localhost:5173';
+    const portalURL = c.env.PORTAL_URL || 'http://localhost:5173';
     return c.body(goJSON({ portal_url: portalURL, renewal_path: '/plans' }), 200, {
       'Content-Type': 'application/json',
     });

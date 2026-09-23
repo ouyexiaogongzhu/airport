@@ -8,8 +8,6 @@ import type { NodeRow, UserCreds } from './xrayuri';
 const user: UserCreds = {
   id: 1,
   vless_uuid: '11111111-2222-3333-4444-555555555555',
-  ss_password: 'sptest',
-  trojan_password: 'tjpass',
 };
 
 const vmessNode: NodeRow = {
@@ -57,7 +55,7 @@ const ssNode: NodeRow = {
 };
 
 const trojanNode: NodeRow = {
-  name: 'TW 01', // 帶空格：驗證 Go QueryEscape 的 '+' 行為
+  name: 'TW 01',
   address: 'tw.example.com',
   port: 443,
   protocol: 'trojan',
@@ -100,16 +98,9 @@ describe('encodeNodeToURI（對齊 links.go）', () => {
     );
   });
 
-  it('shadowsocks：aes-256-gcm:pass@addr:port 整體 base64', () => {
-    expect(encodeNodeToURI(ssNode, user)).toBe(
-      'ss://YWVzLTI1Ni1nY206c3B0ZXN0QGpwLmV4YW1wbGUuY29tOjgzODg=#JP-01',
-    );
-  });
-
-  it('trojan：密碼不轉義，名稱 QueryEscape', () => {
-    expect(encodeNodeToURI(trojanNode, user)).toBe(
-      'trojan://tjpass@tw.example.com:443?security=tls&sni=tw.example.com#TW+01',
-    );
+  it('已下線的 shadowsocks / trojan 回空字串', () => {
+    expect(encodeNodeToURI(ssNode, user)).toBe('');
+    expect(encodeNodeToURI(trojanNode, user)).toBe('');
   });
 
   it('未知協議回空字串', () => {
@@ -132,17 +123,15 @@ describe('buildV2ray（對齊 handleV2rayFormat）', () => {
 });
 
 describe('buildClash（對齊 handleClashFormat）', () => {
-  it('vmess+ss 節點的 YAML 片段逐字一致', () => {
+  it('vmess 節點 YAML 逐字一致；已下線協議不進 proxies 與 proxy-groups', () => {
     const out = buildClash(user, [vmessNode, ssNode]);
     expect(out.ct).toBe('text/yaml; charset=utf-8');
     expect(out.body).toContain(
       '  - name: "HK-01"\n    type: vmess\n    server: hk.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    alterId: 0\n    cipher: auto\n    tls: true\n    servername: hk.example.com\n    network: ws\n    ws-opts:\n      path: "/vcheck/"\n      headers:\n        Host: hk.example.com\n\n',
     );
-    expect(out.body).toContain(
-      '    cipher: aes-256-gcm\n    password: "rf-1-pass"\n\n',
-    );
+    expect(out.body).not.toContain('JP-01');
     expect(out.body.endsWith('rules:\n  - GEOIP,CN,DIRECT\n  - MATCH,Proxy\n')).toBe(true);
-    expect(out.body).toContain('proxy-groups:\n  - name: Proxy\n    type: url-test\n    proxies:\n      - HK-01\n      - JP-01\n');
+    expect(out.body).toContain('proxy-groups:\n  - name: Proxy\n    type: url-test\n    proxies:\n      - HK-01\n    url:');
   });
 });
 

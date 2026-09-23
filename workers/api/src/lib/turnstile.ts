@@ -1,20 +1,21 @@
 // Turnstile siteverify — canonical form-encoded POST（對齊 turnstile-spin skill 的 canonical idiom）。
-// env.TURNSTILE_SECRET 未配置 → 直接放行（開發模式，任務規定）。
+// 只有 TURNSTILE_DISABLED="1" 時跳過；未配 secret 視為配置錯誤 → fail closed。
 // 校驗失敗 / siteverify 不可達 → fail closed。
 
 import type { Env } from '../index';
 
-export type TurnstileResult = { ok: true } | { ok: false; status: 400 | 403; error: string };
+export type TurnstileResult = { ok: true } | { ok: false; status: 400 | 403 | 500; error: string };
 
 const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
 export async function verifyTurnstile(
   token: unknown,
   ip: string | undefined,
-  env: Pick<Env, 'TURNSTILE_SECRET'>,
+  env: Pick<Env, 'TURNSTILE_SECRET' | 'TURNSTILE_DISABLED'>,
 ): Promise<TurnstileResult> {
+  if (env.TURNSTILE_DISABLED === '1') return { ok: true };
   const secret = env.TURNSTILE_SECRET;
-  if (!secret) return { ok: true }; // 開發模式：未配置 secret 直接放行
+  if (!secret) return { ok: false, status: 500, error: 'TURNSTILE_NOT_CONFIGURED' };
   if (typeof token !== 'string' || token.length === 0 || token.length > 2048) {
     return { ok: false, status: 400, error: 'TURNSTILE_TOKEN_REQUIRED' };
   }

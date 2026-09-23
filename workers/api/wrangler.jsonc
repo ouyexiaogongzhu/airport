@@ -27,8 +27,11 @@
     }
   ],
   // security: mock 回調生產關閉（fail-closed）；本地開發在 .dev.vars 設 "1" 才開啟
+  // TURNSTILE_DISABLED：TURNSTILE_SECRET 配好後刪掉這一行（否則註冊/登錄無人機校驗）
   "vars": {
-    "MOCK_PAY_ENABLED": "0"
+    "MOCK_PAY_ENABLED": "0",
+    "TURNSTILE_DISABLED": "1",
+    "PORTAL_URL": "https://www.rfplay.uk"
   },
   // 正式域名：custom_domain=true 時 wrangler 自動建 DNS + 證書（首次上線，直接全量）
   "routes": [

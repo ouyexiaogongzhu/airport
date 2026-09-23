@@ -56,7 +56,7 @@
             <div class="summary-divider"></div>
             <div class="summary-row total">
               <span class="label">Total</span>
-              <span class="value price">${{ formatPrice(plan.price) }}</span>
+              <span class="value price">{{ formatPrice(plan.price, plan.currency) }}</span>
             </div>
           </div>
 
@@ -94,7 +94,7 @@
               @click="placeOrder"
               :disabled="submitting"
             >
-              {{ submitting ? 'Creating Order…' : `Pay $${formatPrice(plan.price)}` }}
+              {{ submitting ? 'Creating Order…' : `Pay ${formatPrice(plan.price, plan.currency)}` }}
             </button>
             <div v-if="submitError" class="error-msg" style="margin-top: 1rem;">{{ submitError }}</div>
           </div>
@@ -109,6 +109,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
+import { formatPrice } from '../utils/price'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -192,11 +193,6 @@ async function placeOrder() {
   } finally {
     submitting.value = false
   }
-}
-
-function formatPrice(cents: number): string {
-  if (cents >= 100) return (cents / 100).toFixed(2)
-  return String(cents)
 }
 
 function formatTraffic(bytes: number): string {

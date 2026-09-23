@@ -1,4 +1,4 @@
-// 對齊 manager/internal/handler/links.go — vless/vmess/ss/trojan URI 生成（逐字節契約）
+// vless / vmess 分享鏈接生成（shadowsocks、trojan 已下線，見遷移方案 §16）
 
 export type NodeRow = {
   name: string | null;
@@ -39,8 +39,6 @@ export function usesVision(protocol: string | null | undefined, t: Pick<Transpor
 export type UserCreds = {
   id: number;
   vless_uuid: string | null;
-  ss_password: string | null;
-  trojan_password: string | null;
 };
 
 // Go base64.StdEncoding（帶 padding，UTF-8 bytes）
@@ -74,10 +72,6 @@ export function encodeNodeToURI(node: NodeRow, user: UserCreds): string {
       return encodeVmess(node, user);
     case 'vless':
       return encodeVless(node, user);
-    case 'shadowsocks':
-      return encodeShadowsocks(node, user);
-    case 'trojan':
-      return encodeTrojan(node, user);
     default:
       return '';
   }
@@ -133,14 +127,4 @@ function encodeVless(node: NodeRow, user: UserCreds): string {
   }
   const qs = params.map(([k, v]) => `${k}=${q(v)}`).join('&');
   return `vless://${user.vless_uuid ?? ''}@${addr}:${node.port ?? 0}?${qs}#${q(node.name ?? '')}`;
-}
-
-function encodeShadowsocks(node: NodeRow, user: UserCreds): string {
-  const ssStr = `aes-256-gcm:${user.ss_password ?? ''}@${node.address ?? ''}:${node.port ?? 0}`;
-  return `ss://${b64std(ssStr)}#${queryEscape(node.name ?? '')}`;
-}
-
-function encodeTrojan(node: NodeRow, user: UserCreds): string {
-  const addr = node.address ?? '';
-  return `trojan://${user.trojan_password ?? ''}@${addr}:${node.port ?? 0}?security=tls&sni=${addr}#${queryEscape(node.name ?? '')}`;
 }

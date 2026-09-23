@@ -24,9 +24,9 @@ vi.mock('vue-router', () => ({
 }))
 
 const samplePlans = [
-  { id: 'plan_1', name: 'Pro VPN', price: 1999, traffic_bytes: 107374182400, duration_days: 30, speed_limit_bps: 100000000, description: 'High-speed VPN' },
-  { id: 'plan_2', name: 'Starter VPN', price: 999, traffic_bytes: 53687091200, duration_days: 30, speed_limit_bps: 50000000 },
-  { id: 'plan_3', name: 'Unlimited', price: 4999, traffic_bytes: 0, duration_days: 365, speed_limit_bps: 0, description: 'No limits' },
+  { id: 'plan_1', name: 'Pro VPN', price: 19.99, traffic_bytes: 107374182400, duration_days: 30, speed_limit_bps: 100000000, description: 'High-speed VPN' },
+  { id: 'plan_2', name: 'Starter VPN', price: 9.99, traffic_bytes: 53687091200, duration_days: 30, speed_limit_bps: 50000000 },
+  { id: 'plan_3', name: 'Unlimited', price: 120, currency: 'CNY', traffic_bytes: 0, duration_days: 365, speed_limit_bps: 0, description: 'No limits' },
 ]
 
 describe('Portal Products.vue', () => {
@@ -113,7 +113,7 @@ describe('Portal Products.vue', () => {
     expect(wrapper.text()).toContain('No plans available')
   })
 
-  it('displays plan price formatted correctly (cents to dollars)', async () => {
+  it('displays plan price in major currency units with its symbol', async () => {
     mockApi.get.mockResolvedValueOnce({ data: samplePlans })
     const Products = await import('../views/Products.vue')
     const wrapper = mount(Products.default, {
@@ -124,9 +124,9 @@ describe('Portal Products.vue', () => {
     })
     await new Promise(r => setTimeout(r, 50))
 
-    // $19.99 for Pro VPN (1999 cents)
     expect(wrapper.text()).toContain('$19.99')
     expect(wrapper.text()).toContain('$9.99')
+    expect(wrapper.text()).toContain('¥120.00')
   })
 
   it('shows a Purchase button for each plan', async () => {

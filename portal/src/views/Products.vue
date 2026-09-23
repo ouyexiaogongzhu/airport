@@ -29,7 +29,7 @@
         <div v-for="p in plans" :key="p.id" class="plan-card">
           <div class="plan-header">
             <h3>{{ p.name }}</h3>
-            <p class="price">${{ formatPrice(p.price) }}<span v-if="p.duration_days"> / {{ formatDuration(p.duration_days) }}</span></p>
+            <p class="price">{{ formatPrice(p.price, p.currency) }}<span v-if="p.duration_days"> / {{ formatDuration(p.duration_days) }}</span></p>
           </div>
           <div class="plan-features">
             <div class="feature">
@@ -64,6 +64,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
+import { formatPrice } from '../utils/price'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -126,11 +127,6 @@ async function fetchPlans() {
   } finally {
     loading.value = false
   }
-}
-
-function formatPrice(cents: number): string {
-  if (cents >= 100) return (cents / 100).toFixed(2)
-  return String(cents)
 }
 
 function formatTraffic(bytes: number): string {

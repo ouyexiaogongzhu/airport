@@ -21,7 +21,9 @@ export type Env = {
   PAYPAL_CLIENT_SECRET?: string;
   PAYPAL_WEBHOOK_ID?: string;
   TURNSTILE_SECRET?: string;
+  TURNSTILE_DISABLED?: string;
   COOKIE_DOMAIN?: string;
+  PORTAL_URL?: string;
 };
 
 export function createApp() {
