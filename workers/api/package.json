@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:schema": "wrangler d1 execute rfplay --local --file=migrations/0001_schema.sql",
-    "db:schema:remote": "wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql"
+    "db:migrate": "wrangler d1 migrations apply rfplay --local",
+    "db:migrate:remote": "wrangler d1 migrations apply rfplay --remote"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

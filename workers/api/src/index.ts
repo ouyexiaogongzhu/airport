@@ -6,6 +6,7 @@ import { publicRoutes } from './routes/public';
 import { paymentRoutes } from './routes/payment';
 import { webRoutes } from './routes/web';
 import { adminRoutes, publicProductRoutes } from './routes/admin';
+import { runEntitlementMaintenance } from './lib/entitlement';
 
 export type Env = {
   MOCK_PAY_ENABLED?: string;
@@ -86,4 +87,9 @@ export function createApp() {
   return app;
 }
 
-export default { fetch: createApp().fetch };
+export default {
+  fetch: createApp().fetch,
+  scheduled: async (_event: ScheduledController, env: Env, ctx: ExecutionContext) => {
+    ctx.waitUntil(runEntitlementMaintenance(env.DB, Math.floor(Date.now() / 1000)));
+  },
+};

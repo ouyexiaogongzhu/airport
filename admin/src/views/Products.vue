@@ -19,6 +19,7 @@
             <th>Name</th>
             <th>Type</th>
             <th>Price</th>
+            <th>Plan</th>
             <th>Stock</th>
             <th>Status</th>
             <th>Actions</th>
@@ -29,7 +30,8 @@
             <td>{{ p.id }}</td>
             <td><strong>{{ p.name }}</strong></td>
             <td><span class="tag">{{ p.type }}</span></td>
-            <td>${{ p.price.toFixed(2) }}</td>
+            <td>{{ p.currency === 'CNY' ? '¥' : '$' }}{{ p.price.toFixed(2) }}</td>
+            <td>{{ planLabel(p) }}</td>
             <td>{{ p.stock }}</td>
             <td><span :class="['status', p.status]">{{ p.status }}</span></td>
             <td class="actions-cell">
@@ -54,20 +56,43 @@
             <label>Type</label>
             <select v-model="form.type" required>
               <option value="">-- Select --</option>
-              <option value="VPN">VPN</option>
-              <option value="Proxy">Proxy</option>
-              <option value="IP">IP</option>
+              <option v-for="t in PRODUCT_TYPES" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
           <div class="field-row">
             <div class="field">
-              <label>Price ($)</label>
+              <label>Price</label>
               <input v-model.number="form.price" type="number" step="0.01" min="0" placeholder="0.00" required />
+            </div>
+            <div class="field">
+              <label>Currency</label>
+              <select v-model="form.currency">
+                <option value="USD">USD</option>
+                <option value="CNY">CNY</option>
+              </select>
             </div>
             <div class="field">
               <label>Stock</label>
               <input v-model.number="form.stock" type="number" min="0" placeholder="0" />
             </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Duration (days)</label>
+              <input v-model.number="form.duration_days" type="number" min="1" required />
+            </div>
+            <div class="field">
+              <label>Traffic / 30d (GB, 0 = unlimited)</label>
+              <input v-model.number="form.traffic_gb" type="number" min="0" step="1" />
+            </div>
+            <div class="field">
+              <label>Speed (Mbps, 0 = unlimited)</label>
+              <input v-model.number="form.speed_mbps" type="number" min="0" step="1" />
+            </div>
+          </div>
+          <div class="field">
+            <label>Description</label>
+            <input v-model="form.description" type="text" placeholder="Shown on the plans page" />
           </div>
           <p v-if="formError" class="error">{{ formError }}</p>
           <div class="modal-actions">
@@ -93,8 +118,23 @@ interface Product {
   price: number
   stock: number
   status: string
+  currency?: string | null
+  duration_days?: number
+  traffic_bytes?: number
+  speed_limit_bps?: number
+  description?: string | null
   created_at?: string
   updated_at?: string
+}
+
+const PRODUCT_TYPES = ['subscription', 'monthly', 'quarterly', 'half-yearly', 'yearly', 'one-time', 'trial']
+const GB = 1024 ** 3
+const MBPS = 1_000_000
+
+function planLabel(p: Product): string {
+  const traffic = p.traffic_bytes ? `${Math.round(p.traffic_bytes / GB)} GB/30d` : 'unlimited'
+  const speed = p.speed_limit_bps ? ` · ${Math.round(p.speed_limit_bps / MBPS)} Mbps` : ''
+  return `${p.duration_days ?? 30}d · ${traffic}${speed}`
 }
 
 const products = ref<Product[]>([])
@@ -105,10 +145,14 @@ const saving = ref(false)
 const formError = ref('')
 const editingProduct = ref<Product | null>(null)
 
-const form = ref({ name: '', type: '', price: 0, stock: 0 })
+const emptyForm = () => ({
+  name: '', type: 'subscription', price: 0, stock: 0, currency: 'USD',
+  duration_days: 30, traffic_gb: 0, speed_mbps: 0, description: '',
+})
+const form = ref(emptyForm())
 
 function resetForm() {
-  form.value = { name: '', type: '', price: 0, stock: 0 }
+  form.value = emptyForm()
   formError.value = ''
 }
 
@@ -119,7 +163,13 @@ function openAddModal() {
 }
 
 function openEditModal(p: Product) {
-  form.value = { name: p.name, type: p.type, price: p.price, stock: p.stock }
+  form.value = {
+    name: p.name, type: p.type, price: p.price, stock: p.stock, currency: p.currency || 'USD',
+    duration_days: p.duration_days ?? 30,
+    traffic_gb: Math.round((p.traffic_bytes ?? 0) / GB),
+    speed_mbps: Math.round((p.speed_limit_bps ?? 0) / MBPS),
+    description: p.description ?? '',
+  }
   editingProduct.value = p
   showModal.value = true
 }
@@ -158,6 +208,11 @@ async function saveProduct() {
       type: form.value.type,
       price: form.value.price,
       stock: form.value.stock || 0,
+      currency: form.value.currency,
+      duration_days: Math.trunc(form.value.duration_days) || 30,
+      traffic_bytes: Math.trunc((form.value.traffic_gb || 0) * GB),
+      speed_limit_bps: Math.trunc((form.value.speed_mbps || 0) * MBPS),
+      description: form.value.description,
     }
     if (editingProduct.value) {
       const res = await api.put(`/admin/products/${editingProduct.value.id}`, payload)
@@ -231,7 +286,7 @@ onMounted(loadProducts)
   border-radius: 12px;
   padding: 2rem;
   width: 100%;
-  max-width: 480px;
+  max-width: 640px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.4);
 }
 .modal-content h3 { margin: 0 0 1.5rem; color: #fff; font-size: 1.15rem; }

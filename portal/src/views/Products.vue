@@ -34,7 +34,7 @@
           <div class="plan-features">
             <div class="feature">
               <span class="feature-label">Traffic</span>
-              <span class="feature-value">{{ formatTraffic(p.traffic_bytes) }}</span>
+              <span class="feature-value">{{ formatTraffic(p.traffic_bytes) }}<template v-if="p.traffic_bytes > 0"> / 30 days</template></span>
             </div>
             <div class="feature">
               <span class="feature-label">Duration</span>

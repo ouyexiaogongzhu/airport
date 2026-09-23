@@ -3,11 +3,13 @@
 import { Hono } from 'hono';
 import type { Env } from '../index';
 import { verifyJwt, type Claims } from '../lib/jwt';
+import { serviceBlock } from '../lib/entitlement';
 import { buildFormat, goJSON, type FormatKind } from '../lib/subformats';
 import { encodeNodeToURI, type NodeRow, type UserCreds } from '../lib/xrayuri';
 
 type UserRow = {
   id: number;
+  status: string | null;
   subscription_status: string | null;
   subscription_tier: string | null;
   traffic_limit_bytes: number | null;
@@ -119,12 +121,9 @@ export function clientRoutes() {
       return c.json({ error: 'user not found' }, 404);
     }
 
-    const status = user.subscription_status ?? '';
-    if (status !== 'active') {
-      if (status === 'pending') {
-        return c.json({ error: 'SUBSCRIPTION_PENDING' }, 403);
-      }
-      return c.json({ error: 'SUBSCRIPTION_EXPIRED' }, 403);
+    const blocked = serviceBlock(user, Math.floor(Date.now() / 1000));
+    if (blocked) {
+      return c.json({ error: blocked }, 403);
     }
 
     const nodes = await getActiveNodes(c.env);
@@ -181,12 +180,9 @@ async function handleLinks(c: { env: Env; req: { param: (k: string) => string };
     return Response.json({ error: 'INVALID_TOKEN' }, { status: 401 });
   }
 
-  const status = user.subscription_status ?? '';
-  if (status === 'expired') {
-    return Response.json({ error: 'SUBSCRIPTION_EXPIRED' }, { status: 403 });
-  }
-  if (status === 'pending') {
-    return Response.json({ error: 'SUBSCRIPTION_PENDING' }, { status: 403 });
+  const blocked = serviceBlock(user, Math.floor(Date.now() / 1000));
+  if (blocked) {
+    return Response.json({ error: blocked }, { status: 403 });
   }
 
   const headers = subsHeaders(user);

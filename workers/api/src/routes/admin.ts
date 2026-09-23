@@ -8,6 +8,7 @@ import { getCookie } from 'hono/cookie';
 import { verifyJwt } from '../lib/jwt';
 import { constantTimeEqual, randomHex } from '../lib/csrf';
 import { usesVision } from '../lib/xrayuri';
+import { SERVICEABLE_SQL, activationStatement, type ProductPlan } from '../lib/entitlement';
 import type { Env } from '../index';
 
 type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
@@ -126,6 +127,36 @@ function userSetVersion(userIDs: number[]): number {
   return Number(BigInt.asIntN(64, h));
 }
 
+function isNonNegInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+const PRODUCT_COLS =
+  'id, name, type, price, stock, status, currency, duration_days, traffic_bytes, speed_limit_bps, description, created_at, updated_at';
+
+// 商品權益欄位：只校驗收到的鍵
+function parseProductPlan(req: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
+  const fields: Record<string, unknown> = {};
+  if (req.duration_days !== undefined) {
+    if (!isNonNegInt(req.duration_days) || req.duration_days === 0) return { error: 'duration_days must be a positive integer' };
+    fields.duration_days = req.duration_days;
+  }
+  for (const key of ['traffic_bytes', 'speed_limit_bps'] as const) {
+    if (req[key] === undefined) continue;
+    if (!isNonNegInt(req[key])) return { error: `${key} must be a non-negative integer` };
+    fields[key] = req[key];
+  }
+  if (req.currency !== undefined) {
+    if (req.currency !== 'USD' && req.currency !== 'CNY') return { error: 'currency must be one of: USD, CNY' };
+    fields.currency = req.currency;
+  }
+  if (req.description !== undefined) {
+    if (req.description !== null && typeof req.description !== 'string') return { error: 'description must be a string' };
+    fields.description = req.description || null;
+  }
+  return { fields };
+}
+
 function firstNonEmpty(a: unknown, b: string): string {
   const s = typeof a === 'string' ? a : '';
   return s !== '' ? s : b;
@@ -209,10 +240,8 @@ export function adminRoutes() {
     const user = await db.prepare('SELECT id FROM users WHERE id = ?').bind(id).first<{ id: number }>();
     if (!user) return c.json({ error: 'user not found' }, 404);
 
-    const body = await c.req
-      .json<{ client_token?: unknown; regenerate_token?: unknown; status?: unknown }>()
-      .catch(() => null);
-    if (body === null) return c.json({ error: 'invalid request body' }, 400);
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (body === null || typeof body !== 'object') return c.json({ error: 'invalid request body' }, 400);
 
     const sets: string[] = [];
     const binds: unknown[] = [];
@@ -231,6 +260,20 @@ export function adminRoutes() {
       sets.push('status = ?');
       binds.push(body.status);
     }
+    if (body.subscription_status !== undefined) {
+      if (!['active', 'pending', 'expired'].includes(body.subscription_status as string)) {
+        return c.json({ error: "invalid subscription_status, must be 'active', 'pending', or 'expired'" }, 400);
+      }
+      sets.push('subscription_status = ?');
+      binds.push(body.subscription_status);
+    }
+    for (const key of ['expire_time', 'traffic_limit_bytes', 'traffic_used_bytes', 'rate_limit_bps'] as const) {
+      const v = body[key];
+      if (v === undefined) continue;
+      if (!isNonNegInt(v)) return c.json({ error: `${key} must be a non-negative integer` }, 400);
+      sets.push(`${key} = ?`);
+      binds.push(v);
+    }
     if (sets.length === 0) return c.json({ error: 'no valid fields to update' }, 400);
     sets.push('updated_at = ?');
     binds.push(new Date().toISOString(), id);
@@ -243,6 +286,25 @@ export function adminRoutes() {
     const fresh = await db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).bind(id).first<Record<string, unknown>>();
     if (!fresh) return c.json({ error: 'user not found' }, 404);
     return c.json(adminUserJson(fresh));
+  });
+
+  // 手動開通：按商品配置開通/續費（不建訂單，不動庫存）
+  app.post('/admin/users/:id/grant', ...guard, adminCsrf, async (c) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid user id' }, 400);
+    const body = await c.req.json<{ product_id?: unknown }>().catch(() => null);
+    const productId = Number(body?.product_id);
+    if (!Number.isInteger(productId) || productId <= 0) return c.json({ error: 'product_id is required' }, 400);
+    const db = c.env.DB;
+    const plan = await db
+      .prepare('SELECT name, duration_days, traffic_bytes, speed_limit_bps FROM products WHERE id = ?')
+      .bind(productId)
+      .first<ProductPlan>();
+    if (!plan) return c.json({ error: 'product not found' }, 404);
+    const r = await activationStatement(db, id, plan, Math.floor(Date.now() / 1000)).run();
+    if ((r.meta.changes ?? 0) === 0) return c.json({ error: 'user not found' }, 404);
+    const fresh = await db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).bind(id).first<Record<string, unknown>>();
+    return c.json(adminUserJson(fresh!));
   });
 
   // ── Orders（payment.go AdminListOrders/AdminGetOrder/AdminRefundOrder）─────
@@ -712,15 +774,18 @@ export function adminRoutes() {
     if (status && !validStatuses.includes(status)) {
       return c.json({ error: 'status must be one of: active, inactive, archived' }, 400);
     }
+    const plan = parseProductPlan(req);
+    if ('error' in plan) return c.json({ error: plan.error }, 400);
     const now = new Date().toISOString();
     const stock = typeof req.stock === 'number' ? Math.trunc(req.stock) : 0;
-    const currency = typeof req.currency === 'string' ? req.currency : null;
+    const extra = Object.entries(plan.fields);
+    const cols = ['name', 'type', 'price', 'stock', 'status', 'created_at', 'updated_at', ...extra.map(([k]) => k)];
     const rs = await c.env.DB.prepare(
-      'INSERT INTO products (name, type, price, stock, status, currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      `INSERT INTO products (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
     )
-      .bind(name, type, price, stock, status || 'active', currency, now, now)
+      .bind(name, type, price, stock, status || 'active', now, now, ...extra.map(([, v]) => v))
       .run();
-    const product = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(rs.meta.last_row_id).first();
+    const product = await c.env.DB.prepare(`SELECT ${PRODUCT_COLS} FROM products WHERE id = ?`).bind(rs.meta.last_row_id).first();
     return c.json({ product }, 201);
   });
 
@@ -738,11 +803,14 @@ export function adminRoutes() {
     if (req.price !== undefined) { updates.push('price = ?'); binds.push(req.price); }
     if (req.stock !== undefined) { updates.push('stock = ?'); binds.push(Math.trunc(Number(req.stock))); }
     if (req.status !== undefined) { updates.push('status = ?'); binds.push(req.status); }
+    const plan = parseProductPlan(req);
+    if ('error' in plan) return c.json({ error: plan.error }, 400);
+    for (const [k, v] of Object.entries(plan.fields)) { updates.push(`${k} = ?`); binds.push(v); }
     if (updates.length === 0) return c.json({ product });
     updates.push('updated_at = ?');
     binds.push(new Date().toISOString(), id);
     await c.env.DB.prepare(`UPDATE products SET ${updates.join(', ')} WHERE id = ?`).bind(...binds).run();
-    const updated = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+    const updated = await c.env.DB.prepare(`SELECT ${PRODUCT_COLS} FROM products WHERE id = ?`).bind(id).first();
     return c.json({ product: updated });
   });
 
@@ -765,7 +833,7 @@ export function adminRoutes() {
 async function buildNodeXrayConfig(db: D1Database, node: Record<string, unknown>): Promise<Record<string, unknown>> {
   const nowUnix = Math.floor(Date.now() / 1000);
   const users = await db
-    .prepare("SELECT id, vless_uuid FROM users WHERE subscription_status = 'active' AND (expire_time = 0 OR expire_time > ?) ORDER BY id")
+    .prepare(`SELECT id, vless_uuid FROM users WHERE ${SERVICEABLE_SQL} ORDER BY id`)
     .bind(nowUnix)
     .all<{ id: number; vless_uuid: string | null }>();
 

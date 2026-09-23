@@ -1,6 +1,7 @@
 // 支付接口 — 签名由主线定义（实现体；三函数签名不变；routes/web.ts 依赖）
 // 对齐 Go manager/internal/handler/payment.go + payment_provider.go（Payoneer/Stripe 已删除决策，不迁移）
 
+import { activationStatement, type ProductPlan } from './entitlement';
 import { md5Hex } from './md5';
 
 export type PaymentOrderInput = {
@@ -25,9 +26,6 @@ type CallbackResult = {
   status: 'paid' | 'failed' | 'pending';
   transactionId: string;
 };
-
-const GB_BYTES = 1073741824;
-const SUBSCRIPTION_DURATION_SECONDS = 30 * 86400; // Go subscriptionDurationSeconds：时长与产品无关，固定 30 天
 
 // ── BEpusdt ─────────────────────────────────────────────────────────────────
 
@@ -294,50 +292,33 @@ export async function verifyAndParseCallback(
   }
 }
 
-// 订单激活事务（幂等）：orders.status pending→paid + 用户激活/顺延 expire_time
-// 语义对齐 activateSubscriptionTx：expire_time = max(now, 旧值) + 产品时长
+// 订单激活事务（幂等）：orders.status pending→paid + 按商品配置开通/顺延
 export async function activateSubscription(
   db: D1Database,
   orderId: number,
   userId: number,
   productId: number,
 ): Promise<void> {
-  const row = await db
+  const plan = await db
     .prepare(
-      'SELECT o.amount AS amount, p.name AS name FROM orders o JOIN products p ON p.id = o.product_id' +
-        ' WHERE o.id = ? AND o.user_id = ? AND p.id = ?',
+      'SELECT p.name, p.duration_days, p.traffic_bytes, p.speed_limit_bps FROM orders o' +
+        ' JOIN products p ON p.id = o.product_id WHERE o.id = ? AND o.user_id = ? AND p.id = ?',
     )
     .bind(orderId, userId, productId)
-    .first<{ amount: number; name: string }>();
-  if (!row) throw new Error('order or product not found');
+    .first<ProductPlan>();
+  if (!plan) throw new Error('order or product not found');
 
   const now = Math.floor(Date.now() / 1000);
-  // 冪等閘門：用戶更新以「訂單仍為 pending」為前提（EXISTS），且放在訂單翻轉【之前】。
-  // D1 batch 是單一事務，併發重複回調（BEpusdt/PayPal 重試同時到達）時，後到的事務
-  // 看到已翻轉的 status，兩條語句全部空轉；若訂單先翻、用戶無條件更新（舊順序），
-  // 併發回調會對同一筆訂單雙重順延 30 天。
-  // traffic_limit = int64(amount * 1GiB)，rate/used 清零，period_start = now；
-  // SQL MAX() 落「顺延」語義（活躍續費 max(now, 舊值)+30d）
+  // 冪等閘門：用戶更新以「訂單仍為 pending」為前提，且必須排在訂單翻轉之前。
+  // D1 batch 是單一事務，併發重複回調時後到者兩條語句都空轉，不會雙重順延。
   await db.batch([
-    db
-      .prepare(
-        "UPDATE users SET subscription_status='active', subscription_tier=?," +
-          ' traffic_limit_bytes=?, rate_limit_bps=0, traffic_used_bytes=0, traffic_period_start=?,' +
-          ' expire_time = MAX(?, COALESCE(expire_time, 0)) + ? WHERE id = ? AND EXISTS' +
-          " (SELECT 1 FROM orders WHERE id = ? AND status = 'pending')",
-      )
-      .bind(
-        row.name,
-        Math.trunc(row.amount * GB_BYTES),
-        now,
-        now,
-        SUBSCRIPTION_DURATION_SECONDS,
-        userId,
-        orderId,
-      ),
+    activationStatement(db, userId, plan, now, {
+      sql: "EXISTS (SELECT 1 FROM orders WHERE id = ? AND status = 'pending')",
+      binds: [orderId],
+    }),
     db
       .prepare("UPDATE orders SET status='paid', updated_at=? WHERE id=? AND status='pending'")
-      .bind(new Date().toISOString(), orderId),
+      .bind(new Date(now * 1000).toISOString(), orderId),
   ]);
 }
 

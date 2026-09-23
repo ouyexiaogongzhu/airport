@@ -33,6 +33,7 @@
     "TURNSTILE_DISABLED": "1",
     "PORTAL_URL": "https://www.rfplay.uk"
   },
+  "triggers": { "crons": ["0 * * * *"] },
   // 正式域名：custom_domain=true 時 wrangler 自動建 DNS + 證書（首次上線，直接全量）
   "routes": [
     { "pattern": "api.rfplay.uk", "custom_domain": true }

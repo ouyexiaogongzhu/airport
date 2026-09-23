@@ -1,133 +1,61 @@
-// activateSubscription 冪等契約測試 — 用最小 D1 fake 釘住兩個性質：
-//   1. pending 訂單回調 → 激活（paid + 順延 30d）；重複回調零副作用
-//   2. 用戶更新必須以「訂單仍為 pending」為閘門（併發重複回調不得雙重順延）——
-//      fake 按語句求值順序評估閘門，若有人把訂單翻轉挪回用戶更新之前，第一次調用即失敗
-// 運行：workers/api 下 `npx vitest run src/lib/payments.test.ts`
+// activateSubscription 冪等契約 — 在真實 SQLite（跑完 migrations）上驗證：
+//   1. pending 訂單回調 → 按商品配置開通；重複回調零副作用
+//   2. 用戶更新以「訂單仍為 pending」為閘門，且排在訂單翻轉之前（順序顛倒則第一次調用就不會開通）
 
 import { describe, it, expect } from 'vitest';
+import { createTestD1 } from '../testing/d1';
 import { activateSubscription } from './payments';
 
-const GB_BYTES = 1073741824;
-const DUR = 30 * 86400;
+const DAY = 86400;
 
-type UserRow = {
-  id: number;
-  subscription_status: string;
-  subscription_tier: string | null;
-  traffic_limit_bytes: number;
-  traffic_used_bytes: number;
-  expire_time: number;
-  traffic_period_start: number;
-};
-type OrderRow = { id: number; user_id: number; product_id: number; amount: number; status: string };
-type Stmt = { sql: string; args: unknown[] };
-
-function makeFakeDb(users: Map<number, UserRow>, orders: Map<number, OrderRow>): D1Database {
-  const products = new Map([[1, { name: 'Pro 30d' }]]);
-
-  const evalUpdate = (s: Stmt): number => {
-    if (s.sql.startsWith('UPDATE users')) {
-      const [tier, limit, periodStart, now, dur, userId] = s.args as [string, number, number, number, number, number];
-      // 閘門：EXISTS(orders WHERE id=? AND status='pending')，按語句求值當下判斷（args 末位是 orderId）
-      const gateOrderId = s.args[s.args.length - 1] as number;
-      const gate = orders.get(gateOrderId);
-      if (gate?.status !== 'pending') return 0;
-      const u = users.get(userId);
-      if (!u) return 0;
-      u.subscription_status = 'active';
-      u.subscription_tier = tier;
-      u.traffic_limit_bytes = limit;
-      u.traffic_used_bytes = 0;
-      u.traffic_period_start = periodStart;
-      u.expire_time = Math.max(now, u.expire_time) + dur;
-      return 1;
-    }
-    if (s.sql.startsWith('UPDATE orders')) {
-      const [, orderId] = s.args as [unknown, number];
-      const o = orders.get(orderId);
-      if (!o || o.status !== 'pending') return 0;
-      o.status = 'paid';
-      return 1;
-    }
-    throw new Error('unexpected sql in fake: ' + s.sql);
-  };
-
-  const prepare = (sql: string) => ({
-    bind: (...args: unknown[]) => ({
-      sql,
-      args,
-      // activateSubscription 的 SELECT（orders JOIN products）走這裡
-      first: async <T,>(): Promise<T | null> => {
-        if (!sql.startsWith('SELECT o.amount')) return null;
-        const [orderId, userId, productId] = args as [number, number, number];
-        const o = orders.get(orderId);
-        const p = products.get(productId);
-        if (!o || o.user_id !== userId || !p) return null;
-        return { amount: o.amount, name: p.name } as T;
-      },
-      run: async () => ({ meta: { changes: evalUpdate({ sql, args }) } }),
-    }),
-  });
-
-  // db.batch 收到的是 prepare(...).bind(...) 產物（含 sql/args），按序求值 = 單一事務語義
-  return {
-    prepare,
-    batch: async (stmts: Stmt[]) => stmts.map((s) => ({ meta: { changes: evalUpdate(s) } })),
-  } as unknown as D1Database;
-}
-
-function seed(): { users: Map<number, UserRow>; orders: Map<number, OrderRow> } {
-  const users = new Map([
-    [
-      7,
-      {
-        id: 7,
-        subscription_status: 'pending',
-        subscription_tier: null,
-        traffic_limit_bytes: 0,
-        traffic_used_bytes: 0,
-        expire_time: 0,
-        traffic_period_start: 0,
-      } as UserRow,
-    ],
-  ]);
-  const orders = new Map([[100, { id: 100, user_id: 7, product_id: 1, amount: 10, status: 'pending' } as OrderRow]]);
-  return { users, orders };
+function seed() {
+  const { db, raw } = createTestD1();
+  raw.exec(
+    "INSERT INTO users (id, username, password_hash, subscription_status, vless_uuid) VALUES (7, 'alice', 'x', 'pending', 'uuid-7');" +
+      "INSERT INTO products (id, name, type, price, duration_days, traffic_bytes, speed_limit_bps) VALUES (1, 'Pro 90d', 'subscription', 10, 90, 5000, 800);" +
+      "INSERT INTO orders (id, user_id, product_id, amount, status) VALUES (100, 7, 1, 10, 'pending');",
+  );
+  const user = () => raw.prepare('SELECT * FROM users WHERE id = 7').get()!;
+  const orderStatus = () => raw.prepare('SELECT status FROM orders WHERE id = 100').get()!.status;
+  return { db, raw, user, orderStatus };
 }
 
 describe('activateSubscription', () => {
-  it('activates pending order: paid + expire=now+30d + tier/limit set', async () => {
-    const { users, orders } = seed();
-    await activateSubscription(makeFakeDb(users, orders), 100, 7, 1);
-    expect(orders.get(100)!.status).toBe('paid');
-    const u = users.get(7)!;
-    expect(u.subscription_status).toBe('active');
-    expect(u.subscription_tier).toBe('Pro 30d');
-    expect(u.traffic_limit_bytes).toBe(Math.trunc(10 * GB_BYTES));
-    expect(u.expire_time).toBeGreaterThanOrEqual(Math.floor(Date.now() / 1000) + DUR - 5);
-  });
-
-  it('duplicate callback is a no-op (expire unchanged)', async () => {
-    const { users, orders } = seed();
-    const db = makeFakeDb(users, orders);
+  it('按商品配置開通：paid + 到期 = now + duration_days，流量/限速取商品值', async () => {
+    const { db, user, orderStatus } = seed();
+    const now = Math.floor(Date.now() / 1000);
     await activateSubscription(db, 100, 7, 1);
-    const before = users.get(7)!.expire_time;
+    expect(orderStatus()).toBe('paid');
+    const u = user();
+    expect(u).toMatchObject({
+      subscription_status: 'active',
+      subscription_tier: 'Pro 90d',
+      traffic_limit_bytes: 5000,
+      rate_limit_bps: 800,
+      traffic_used_bytes: 0,
+    });
+    expect(u.expire_time as number).toBeGreaterThanOrEqual(now + 90 * DAY);
+    expect(u.expire_time as number).toBeLessThanOrEqual(now + 90 * DAY + 5);
+  });
+
+  it('重複回調零副作用', async () => {
+    const { db, user } = seed();
     await activateSubscription(db, 100, 7, 1);
-    expect(users.get(7)!.expire_time).toBe(before);
+    const before = user().expire_time;
+    await activateSubscription(db, 100, 7, 1);
+    expect(user().expire_time).toBe(before);
   });
 
-  it('renewal extends from existing expire_time (顺延), not from now', async () => {
-    const { users, orders } = seed();
-    const u = users.get(7)!;
-    u.expire_time = 2000000000; // 遠在未來
-    await activateSubscription(makeFakeDb(users, orders), 100, 7, 1);
-    expect(u.expire_time).toBe(2000000000 + DUR);
+  it('續費從未到期的舊到期時間順延', async () => {
+    const { db, raw, user } = seed();
+    raw.exec("UPDATE users SET subscription_status = 'active', expire_time = 2000000000 WHERE id = 7");
+    await activateSubscription(db, 100, 7, 1);
+    expect(user().expire_time).toBe(2000000000 + 90 * DAY);
   });
 
-  it('throws when order/user/product do not line up', async () => {
-    const { users, orders } = seed();
-    await expect(activateSubscription(makeFakeDb(users, orders), 999, 7, 1)).rejects.toThrow(
-      'order or product not found',
-    );
+  it('訂單/用戶/商品不匹配時拋錯', async () => {
+    const { db } = seed();
+    await expect(activateSubscription(db, 999, 7, 1)).rejects.toThrow('order or product not found');
+    await expect(activateSubscription(db, 100, 8, 1)).rejects.toThrow('order or product not found');
   });
 });

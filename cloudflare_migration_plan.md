@@ -698,20 +698,29 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 
 ### 16.2 A0 小修 + A1 服务资格与后台开通
 
-**A0（彼此独立，可直接上线）**
+**A0（✅ 已完成 2026-09-23）**
 
-- #12：管理员改用户状态时，只有请求显式要求才重新生成 `client_token`
-- #21：结算页价格不再除以 100，按币种显示 `$`/`¥`
+- #12：管理员改用户状态不再重生 `client_token`；只有显式传 `client_token` 或 `regenerate_token: true` 才变更
+- #21：portal 价格按主币单位显示并带币种符号（`portal/src/utils/price.ts`），Products 与 Checkout 共用
 - #26：清除 csrf cookie 时带上 `Secure`
-- #27：生产环境未配 `TURNSTILE_SECRET` 时拒绝登录/注册（本地开发用 `.dev.vars` 显式关闭）
-- #28：用户名校验空值与重名；`sanitizedUser` 不返回完整 `client_token`
-- #39：wrangler vars 配置 `PORTAL_URL`
-- #8：后台协议白名单与节点编辑页去掉 `shadowsocks`、`trojan`；订阅生成跳过这两种协议；已有的此类节点改为 `inactive`
+- #27：未配 `TURNSTILE_SECRET` 时 fail closed，只有 `TURNSTILE_DISABLED="1"` 才跳过。⚠️ `wrangler.jsonc` 目前显式设了 `TURNSTILE_DISABLED="1"`，配好 secret（§14.3 #1）后必须删掉
+- #28：修改用户名校验 1–64 字符与重名（409）。审查里"`sanitizedUser` 返回完整 `client_token`"不是 bug：portal 靠它给用户本人拼订阅链接
+- #39：wrangler vars 配置 `PORTAL_URL=https://www.rfplay.uk`
+- #8：协议白名单改为 `vmess`、`vless`（新建与更新都校验）；节点编辑页去掉两个选项；订阅与 Clash 不再输出这两种协议（Clash 的 proxy-groups 同步过滤）。已有此类节点在 A1 的 `0002` 迁移里改为 `inactive`
 
-**A1**
+**A1（✅ 已完成 2026-09-23）**
+
+- 迁移改为 `wrangler d1 migrations apply`（CI 与 `npm run db:migrate[:remote]`）。生产库首次执行时会重跑 `0001`（全部 `IF NOT EXISTS`，安全），然后执行 `0002`
+- `lib/entitlement.ts`：`serviceBlock()` 与等价 SQL `SERVICEABLE_SQL`（测试逐组合比对两者结论一致），订阅链接、`/client/subscription`、节点配置用户列表三处共用；拒绝原因为 `ACCOUNT_DISABLED` / `SUBSCRIPTION_PENDING` / `SUBSCRIPTION_EXPIRED` / `TRAFFIC_EXCEEDED`
+- `activationStatement()` 即计划中的 `activateProduct`：按商品 `duration_days`、`traffic_bytes`、`speed_limit_bps` 开通或顺延；支付回调改用它（旧逻辑把价格当 GB 数、时长固定 30 天）
+- 流量语义：`traffic_bytes` 为**每 30 天**额度，0 = 不限；Cron（每小时 `0 * * * *`）标记过期用户，并按 `traffic_period_start` 对齐 30 天周期重置已用流量
+- 后台：`POST /admin/users/:id/grant {product_id}`；`PUT /admin/users/:id` 新增 `subscription_status`、`expire_time`、`traffic_limit_bytes`、`traffic_used_bytes`、`rate_limit_bps`；商品增改支持新字段与币种（USD/CNY）。Users 页新增 Manage 弹窗，Products 页新增字段，并修复类型下拉与后端白名单不一致导致无法建商品的问题
+- 测试改为在 `node:sqlite` 上跑真实迁移与 SQL（`src/testing/d1.ts`），因此发现并修复了 JS 数字按浮点绑定导致周期对齐错误的问题
+
+原计划条目：
 
 1. **迁移机制**：改用 `wrangler d1 migrations apply`（`deploy-worker.yml` 目前只执行 `0001_schema.sql`，新迁移不会上线）
-2. **迁移 `0002`**：products 加 `duration_days`、`traffic_bytes`、`speed_limit_bps`、`description`；users 加 `token_version`（A3 使用）；缺 `vless_uuid` 的用户一次性补齐（修 §15 审查中"节点端与订阅端 UUID 不一致"的问题）
+2. **迁移 `0002`**：products 加 `duration_days`、`traffic_bytes`、`speed_limit_bps`、`description`；users 加 `token_version`（A3 使用）；缺 `vless_uuid` 的用户一次性补齐（修 §15 审查中"节点端与订阅端 UUID 不一致"的问题）；`protocol IN ('shadowsocks','trojan')` 的节点置为 `inactive`
 3. **统一判定 `isServiceable(user, now)`**：`status='active'` 且 `subscription_status='active'` 且 `expire_time > now` 且未超流量。订阅链接、`/client/subscription`、节点配置用户列表三处共用（#9、#10、#11）
 4. **Workers Cron（每小时）**：把已过期用户标记为 `expired`；按 `traffic_period_start` 每月重置流量（#13 的重置部分）
 5. **激活函数 `activateProduct(user, product)`**：按商品的时长、流量、限速开通或顺延。后台和日后的支付回调共用这一个函数
@@ -779,7 +788,7 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 里程碑 A 验收通过后再排期。首发只接 BEpusdt，PayPal 放在最后。
 
 - 迁移：orders 加 `transaction_id`、`paid_at`
-- 回调统一调用 A1 的 `activateProduct`（#18）
+- 回调统一调用 A1 的 `activationStatement`（#18，已接入 `activateSubscription`）
 - #17、#22：核对金额与币种；failed 之后到达的 paid 回调仍然激活；记录交易号与付款时间
 - #16：BEpusdt 付款后跳回 portal 的 `PayResult` 页
 - #19：pending 订单 30 分钟未付由 Cron 释放库存；失败、取消、建单失败都回补；默认 provider 不再是 `mock`
