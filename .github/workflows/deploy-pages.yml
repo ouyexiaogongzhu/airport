@@ -13,6 +13,9 @@ permissions:
   contents: read
   deployments: write
 
+# Requires GitHub secret CLOUDFLARE_API_TOKEN with Account → Cloudflare Pages → Edit
+# (Workers-only tokens will fail this workflow with 403 / Authentication error).
+
 jobs:
   deploy:
     name: Deploy ${{ matrix.app }}
@@ -25,6 +28,9 @@ jobs:
             project: rfplay-portal
           - app: admin
             project: rfplay-admin
+    defaults:
+      run:
+        working-directory: ${{ matrix.app }}
     steps:
       - uses: actions/checkout@v5
 
@@ -34,11 +40,9 @@ jobs:
           package-manager-cache: false
 
       - name: Install deps
-        working-directory: ${{ matrix.app }}
         run: npm install --no-audit --no-fund
 
       - name: Build
-        working-directory: ${{ matrix.app }}
         env:
           VITE_API_BASE_URL: https://api.rfplay.uk
           VITE_SUBSCRIPTION_BASE_URL: https://api.rfplay.uk
@@ -49,5 +53,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: d3376ef411a0e5f321acb1ee848d2ec1
+          workingDirectory: ${{ matrix.app }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
-          command: pages deploy ${{ matrix.app }}/dist --project-name=${{ matrix.project }} --branch=main --commit-dirty=true
+          command: pages deploy dist --project-name=${{ matrix.project }} --branch=main --commit-dirty=true

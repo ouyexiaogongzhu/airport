@@ -56,7 +56,7 @@
 ### 3.1 CI/CD
 
 - **Worker**：push main → `.github/workflows/deploy-worker.yml` 执行 `wrangler d1 migrations apply rfplay --remote`，再 `wrangler deploy`。⚠️ 推到 main 即上线生产
-- **Pages**：portal / admin 由 CF Pages Git 集成自动构建，PR 自动 preview
+- **Pages**：portal / admin 由 GitHub Actions `deploy-pages.yml` 构建后 `wrangler pages deploy` Direct Upload（不依赖 Pages Git 集成）
 - **本地**：`npm run db:migrate`（本地 D1）、`wrangler dev`；测试 `npx vitest run`（D1 相关测试用 `node:sqlite` 跑真实迁移，见 `src/testing/d1.ts`）
 - **回滚**：重新部署上一版 Worker；D1 可用 Time Travel 回到 30 天内任意时间点
 
