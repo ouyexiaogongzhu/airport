@@ -1,6 +1,6 @@
 # XHTTP over Cloudflare Tunnel — 架构设计
 
-> **状态**：已实现（2026-09-24）。按节点 `nodes.network = ws|xhttp` 灰度；默认新建仍为 `ws`；订阅 XHTTP 固定 `packet-up` + `alpn=h2`。  
+> **状态**：已实现（2026-09-24）。按节点 `nodes.network = ws|xhttp` 灰度；默认新建仍为 `ws`；订阅 XHTTP 固定 `packet-up`（`mode` + `xhttpMode`）+ `alpn=h2`。  
 > **基线**：生产节点形态见 [cloudflare_migration_plan.md](../cloudflare_migration_plan.md) §1–3、§5.3：VLESS/VMess + **WS 或 XHTTP**，`cloudflared` Tunnel 回源，Xray 仅听 `127.0.0.1`，TLS 在 CF 边缘终结。  
 > **目标读者**：实现 Worker / daemon / 部署 / 订阅格式的工程师与产品负责人。
 
@@ -180,10 +180,12 @@ outbound freedom → 互联网（出口 IP = VPS）
 XHTTP 示例：
 
 ```
-vless://<uuid>@w1.rfplay.uk:443?alpn=h2&encryption=none&fp=chrome&host=w1.rfplay.uk&mode=packet-up&path=%2Fvcheck%2F&security=tls&sni=w1.rfplay.uk&type=xhttp#w1
+vless://<uuid>@w1.rfplay.uk:443?alpn=h2&encryption=none&fp=chrome&host=w1.rfplay.uk&mode=packet-up&path=%2Fvcheck%2F&security=tls&sni=w1.rfplay.uk&type=xhttp&xhttpMode=packet-up#w1
 ```
 
-相对 WS 的变更：`type=xhttp`；增加 `mode`（及可选 `alpn`）；其余键序规则仍按 `xrayuri.ts` 字母序。
+相对 WS 的变更：`type=xhttp`；增加 `mode` + `xhttpMode`（及可选 `alpn`）；其余键序规则仍按 `xrayuri.ts` 字母序。
+
+> **v2rayA 注意**：≥2.2.7.5 读 URI 的 `xhttpMode`（不是标准 `mode`）；2.2.7.3 为 minimal xhttp（只写 `path`）。HTTP 延迟探测硬超时 **8s**（测 `https://gstatic.com/generate_204`），经 CF 的 XHTTP 冷启动常 5–10s+，列表易显示 **TIMEOUT** 但节点仍可用——请直接连接，或换 Clash Verge / 升级到最新 v2rayA + **xray-core**（勿用 v2ray-core）。
 
 ### 5.3 VMess 分享 JSON（`encodeVmess`）
 
@@ -271,6 +273,7 @@ xhttp-opts:
 | **Xray 版本** | XHTTP 需足够新的 core；过旧二进制 `-test`/运行失败 | 部署脚本继续 pin ≥ `v26.3.27`；切换 transport 前检查 `xray version` |
 | **WS deprecation（Xray 26）** | 继续用 WS 有未来移除风险 | 本设计的动机之一；过渡期保留 WS 代码路径至退役日 |
 | **客户端碎片** | 部分旧 v2rayN / 非 mihomo Clash 不认 xhttp | 订阅过滤或双节点；portal 文案提示内核版本 |
+| **v2rayA TIMEOUT 假阳** | 延迟测试固定 8s；XHTTP+CF 冷启动常超时；2.2.7.3 忽略 `mode=`，读 `xhttpMode` 始自 2.2.7.5 | URI 双发 `mode`+`xhttpMode`；portal 提示用 xray-core、忽略假 TIMEOUT / 用 Clash；保留 w1(ws) |
 | **VMess + XHTTP** | 协议仍可用，但生态与安全偏好偏向 VLESS | 实现两者；新品默认 VLESS（现已支持双协议） |
 | **配置 drift** | 服务端 auto、客户端 packet-up 不一致通常仍可连；若服务端强制 stream-up 则会挂 | admin 校验：禁止「仅 stream-up」除非文档实验开关打开 |
 | **版本号遗漏** | 只改 DB `network` 未进 `configVersion` → daemon 不重载 | 测例强制：改 network 后 version 变化（对齐现 `node.routes.test.ts`） |

@@ -66,9 +66,9 @@ describe('encodeNodeToURI', () => {
     );
   });
 
-  it('vless xhttp：type=xhttp + mode=packet-up + alpn=h2', () => {
+  it('vless xhttp：type=xhttp + mode/xhttpMode=packet-up + alpn=h2', () => {
     expect(encodeNodeToURI(vlessXhttp, user)).toBe(
-      'vless://11111111-2222-3333-4444-555555555555@w2.example.com:443?alpn=h2&encryption=none&fp=chrome&host=w2.example.com&mode=packet-up&path=%2Frfhttp%2F&security=tls&sni=w2.example.com&type=xhttp#w2',
+      'vless://11111111-2222-3333-4444-555555555555@w2.example.com:443?alpn=h2&encryption=none&fp=chrome&host=w2.example.com&mode=packet-up&path=%2Frfhttp%2F&security=tls&sni=w2.example.com&type=xhttp&xhttpMode=packet-up#w2',
     );
   });
 

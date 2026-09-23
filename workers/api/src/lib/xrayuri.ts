@@ -97,6 +97,8 @@ function encodeVless(node: NodeRow, user: UserCreds): string {
   const t = nodeTransport(node);
   const q = queryEscape;
   const params: [string, string][] =
+    // mode = Xray / v2rayNG / Clash 標準鍵；xhttpMode = v2rayA ≥2.2.7.5 讀取的鍵
+    // （2.2.7.3「minimal xhttp」兩者都不解析，靠 Xray TLS 下 auto→packet-up）
     t.network === 'xhttp'
       ? [
           ['alpn', 'h2'],
@@ -108,6 +110,7 @@ function encodeVless(node: NodeRow, user: UserCreds): string {
           ['security', 'tls'],
           ['sni', t.host],
           ['type', 'xhttp'],
+          ['xhttpMode', XHTTP_CLIENT_MODE],
         ]
       : [
           ['encryption', 'none'],

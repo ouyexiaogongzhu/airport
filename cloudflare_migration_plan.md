@@ -197,7 +197,7 @@
 - Worker：`routes/node.ts`（`GET /node/:token/config`、`POST /node/:token/traffic/report`）+ `lib/nodehmac.ts`（与 daemon `signRequest` 同算法，时间戳容差 ±300s，签名覆盖 body）。上报经 `json_each` 展开，一个 batch 固定 2–3 条语句，与用户数无关（D1 单次调用有查询数上限）；同一用户多条合并，不存在的用户不记录，节点计数与心跳一并更新。节点非 active 时下发空用户列表（daemon 应用后断开所有连接），而不是 403（403 会让 daemon 保留旧配置继续服务）
 - `lib/nodeconfig.ts`：`buildNodeXrayConfig` 从 `admin.ts` 移出，后台预览与节点接口共用；用户列表用 `SERVICEABLE_SQL`，缺 `vless_uuid` 的用户跳过（不再内存补随机 UUID）。StatsService 走 `127.0.0.1:10085`（与节点端口冲突时 10086，写入 `_meta.api_port`）。路由屏蔽私网/回环目标，否则用户可经代理连本机 StatsService 重置流量计数；为此去掉了 `inboundTag → direct` 规则，让域名目标经 `IPIfNonMatch` 解析后再匹配 IP 规则。版本号 = FNV-1a（配置结构版本、协议、端口、path、api 端口、每个用户 `id:uuid`）截成 53 位，JSON 往返不丢精度
 - #13 已知限制：Xray 没有按用户限速（policy 只有超时与统计开关），`speed_limit_bps` / `rate_limit_bps` 不下发到节点，推迟处理
-- 订阅：`xrayuri.ts`、`subformats.ts` 按 `nodes.network`（`ws`|`xhttp`）下发 + tls + 443、host/sni = 节点域名；XHTTP 订阅固定 `mode=packet-up`、`alpn=h2`。`nodes.port` 只作本机端口。后台收 `ws_path` + `network`（默认 `ws`，security 仍写死 `none`）；节点页含 Transport 下拉与「Token」按钮。`/admin/nodes/:id/config` 预览不再记心跳
+- 订阅：`xrayuri.ts`、`subformats.ts` 按 `nodes.network`（`ws`|`xhttp`）下发 + tls + 443、host/sni = 节点域名；XHTTP 订阅固定 `mode=packet-up` + `xhttpMode=packet-up`（v2rayA）、`alpn=h2`。`nodes.port` 只作本机端口。后台收 `ws_path` + `network`（默认 `ws`，security 仍写死 `none`）；节点页含 Transport 下拉与「Token」按钮。`/admin/nodes/:id/config` 预览不再记心跳
 - daemon：`xray api statsquery -reset` 读流量，读出的增量进 `pending`，上报 200 后才扣除；拉配置失败也上报；应用新配置前先 `xray run -test`，失败保留旧进程；重启前先收一次流量；重启失败不记为已应用（下轮重试）；崩溃后指数退避自动拉起；`Stop()` 与退出时结束 Xray（`main.go` 不再 `log.Fatalf` 跳过清理）；`node_id` 取自配置响应（配置里可省略）；默认 token/地址、非回环 `listen_addr` 拒绝启动
 - 部署脚本：安装 cloudflared 并 `cloudflared service install <tunnel token>`；给 `--cf-api-token` 时经 API 写 Tunnel ingress（`hostname → http://127.0.0.1:<port>`）与橙云 CNAME，否则打印手动步骤；Xray 改由 daemon 独占管理（停用 `xray.service` 与旧 `rfplay-xray.service`，避免两个 Xray 抢端口）；结尾检查节点端口、9090、10085/10086 只监听回环地址，否则报错退出。原固定的 Xray `v25.3.8` 不存在（404），改为已验证的 `v26.3.27`（Xray 26 已把 WS 与 VMess 标为 deprecated，升级前需确认）
 - 已删除 `deploy/node-reality/`
@@ -209,7 +209,7 @@
 | 项 | 取值 |
 | :--- | :--- |
 | Xray inbound | `listen: 127.0.0.1`，端口 = `port`，`network` = `nodes.network`（`ws`\|`xhttp`），`security=none`，path = `ws_path` |
-| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名；XHTTP 另带 `mode=packet-up`、`alpn=h2` |
+| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名；XHTTP 另带 `mode=packet-up`、`xhttpMode=packet-up`、`alpn=h2` |
 | 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>`（WS 与 XHTTP 相同） |
 | DNS | Tunnel 自动创建的 CNAME（橙云），源站 IP 不出现在任何 DNS 记录里 |
 | VPS 防火墙 | 入站只留 SSH（建议 SSH 也限制来源或改用 Cloudflare Access） |
