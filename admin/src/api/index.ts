@@ -28,7 +28,9 @@ export function setOnUnauthorized(handler: (() => void) | null) {
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
-  timeout: 10000,
+  // TLS to api.rfplay.uk can take several seconds from some edges; leave headroom
+  // so CORS preflight + request do not hit axios cancel before the Worker answers.
+  timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
   withCredentials: true,
 })

@@ -44,7 +44,9 @@ jobs:
 
       - name: Build
         env:
-          VITE_API_BASE_URL: https://api.rfplay.uk
+          # axios baseURL must include /api/v1 — routes are /api/v1/public/login etc.
+          VITE_API_BASE_URL: https://api.rfplay.uk/api/v1
+          # subscription helper appends /api/v1 if missing; host-only is correct here
           VITE_SUBSCRIPTION_BASE_URL: https://api.rfplay.uk
         run: npm run build
 

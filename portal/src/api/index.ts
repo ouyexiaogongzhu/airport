@@ -33,7 +33,9 @@ export function readCookie(name: string): string {
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
-  timeout: 10000,
+  // TLS to api.rfplay.uk can take several seconds from some edges; leave headroom
+  // so CORS preflight + request do not hit axios cancel before the Worker answers.
+  timeout: 30000,
   // Browser sessions are held in httpOnly cookies; send them with every request.
   withCredentials: true,
   headers: { 'Content-Type': 'application/json' },

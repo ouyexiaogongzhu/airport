@@ -31,7 +31,8 @@
   "vars": {
     "MOCK_PAY_ENABLED": "0",
     "TURNSTILE_DISABLED": "1",
-    "PORTAL_URL": "https://www.rfplay.uk"
+    "PORTAL_URL": "https://www.rfplay.uk",
+    "COOKIE_DOMAIN": "rfplay.uk"
   },
   "triggers": { "crons": ["0 * * * *"] },
   // 正式域名：custom_domain=true 時 wrangler 自動建 DNS + 證書（首次上線，直接全量）
