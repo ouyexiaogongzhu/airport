@@ -40,6 +40,8 @@ export function createApp() {
     'https://admin.rfplay.uk',
     'https://rfplay-portal.pages.dev',
     'https://rfplay-admin.pages.dev',
+    'https://xv.rfplay.uk',
+    'https://xva.rfplay.uk',
   ];
   app.use(
     '*',
