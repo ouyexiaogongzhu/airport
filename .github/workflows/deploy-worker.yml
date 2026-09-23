@@ -12,11 +12,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
+          package-manager-cache: false
 
       - name: Install deps
         working-directory: workers/api
@@ -30,7 +31,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: d3376ef411a0e5f321acb1ee848d2ec1
 
       - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: d3376ef411a0e5f321acb1ee848d2ec1

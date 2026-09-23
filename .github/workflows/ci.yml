@@ -14,10 +14,11 @@ jobs:
       run:
         working-directory: workers/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
+          package-manager-cache: false
       - run: npm install --no-audit --no-fund
       - run: npx tsc --noEmit
       - run: npx vitest run
@@ -29,10 +30,11 @@ jobs:
       matrix:
         project: [portal, admin]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
+          package-manager-cache: false
       - working-directory: ${{ matrix.project }}
         run: npm install --no-audit --no-fund
       - working-directory: ${{ matrix.project }}
