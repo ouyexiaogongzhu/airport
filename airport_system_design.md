@@ -1,5 +1,17 @@
 # Airport Proxy System Architecture Design Plan
 
+> **现状说明（2026-09-23）：本文是早期设计，与当前实现有较大出入，以 [cloudflare_migration_plan.md](cloudflare_migration_plan.md) 和代码为准。**
+>
+> | 本文内容 | 当前状态 |
+> | :--- | :--- |
+> | Go Fiber Manager + SQLite | 已删除，改为 Cloudflare Workers（`workers/api`，TS + Hono）+ D1 |
+> | Flutter 客户端（§3，含 Token 导入、设备管理、续费提醒） | 已删除，改为通用客户端导入订阅 URL |
+> | 魔改 Xray-core：每次连接在线 `verify-token`（§4.1.1） | 未实现；节点改为 daemon 拉取用户 UUID 列表 |
+> | Nginx 伪装站 + Docker Compose 部署 | 已删除（`deploy/docker`、`deploy/nginx`） |
+> | Payoneer / Stripe 支付 | 当前为 BEpusdt + PayPal |
+> | 双模式节点（§1.2）、订阅格式、数据库表结构（§3A）、API 路径 | 大体仍有效，细节以代码为准 |
+> | 附录 B 环境变量（`manager.env.example`） | 已失效；Worker Secrets 模板见根目录 `.env.example` |
+
 This document outlines the detailed system architecture, database schema, API contracts, and integration flows for a modern, secure, and multi-platform proxy service ("Airport") featuring:
 * A Go **Fiber** **API backend** (Manager); **User Portal** and **Admin Dashboard** deployed as separate **Cloudflare Pages** sites.
 * Dynamic **Cloudflare API** DNS (proxy-enabled) and analytics integration.

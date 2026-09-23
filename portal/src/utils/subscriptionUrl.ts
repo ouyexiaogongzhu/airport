@@ -3,7 +3,7 @@ import api from '../api'
 const API_V1_PREFIX = '/api/v1'
 
 // Builds a fully-qualified subscription URL for import into external proxy
-// apps (V2rayNG, Shadowrocket, Clash, sing-box, the RFPlay app, etc.).
+// apps (V2rayNG, Shadowrocket, Clash Verge, Stash, etc.).
 //
 // Base resolution order:
 //   1. VITE_SUBSCRIPTION_BASE_URL (explicit override, e.g. https://api.rfplay.uk)

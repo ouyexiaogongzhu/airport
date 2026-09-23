@@ -1,79 +1,100 @@
 # RFPlay Airport System
 
-Proxy service platform for **rfplay.uk**.
+**rfplay.uk** 代理订阅平台：控制面全部运行在 Cloudflare，节点为自有 VPS（Xray + daemon），用户使用通用客户端导入订阅。
 
-| Service | URL | Deploy |
+| 服务 | 地址 | 部署 |
 | :--- | :--- | :--- |
-| User Portal (官网) | https://www.rfplay.uk | Cloudflare Pages |
-| Admin Dashboard | https://admin.rfplay.uk | Cloudflare Pages |
-| Manager API | https://api.rfplay.uk | **Cloudflare Workers**（TS，`workers/api`） |
-| 客户端 | 用户自备通用 Clash（Meta/mihomo 系） | 无自研 App，订阅 URL 导入 |
+| 官网 Portal | https://www.rfplay.uk | Cloudflare Pages（`portal/`） |
+| 后台 Admin | https://admin.rfplay.uk | Cloudflare Pages（`admin/`） |
+| Manager API | https://api.rfplay.uk | Cloudflare Workers（`workers/api/`，D1 + KV + R2） |
+| 节点 | `node-*.rfplay.uk` | VPS：Xray-core + `daemon/` |
+| 客户端 | — | 无自研 App，用户自备通用客户端，导入订阅 URL |
 
-## Key Decisions (Summary)
+## 关键决策
 
-> Full spec: [airport_system_design.md §24](airport_system_design.md#24-additional-recommendations-suggested-not-yet-decided)
-
-| Area | Decision |
+| 领域 | 决策 |
 | :--- | :--- |
-| **官网/Admin 登录** | httpOnly cookie + CSRF；**禁止** localStorage JWT |
-| **客户端** | 无自研客户端；portal 复制订阅 URL（`/clash`）→ 通用 Clash 导入 |
-| **节点认证** | 连接时 `POST /api/node/verify-token`；sync **无** user_list |
-| **支付** | BEpusdt(USDT) + PayPal；webhook → Worker |
+| 登录会话 | HS256 JWT 放 httpOnly cookie + CSRF double-submit；Bearer 头仅作跨站兜底 |
+| 客户端 | 无自研客户端；portal 复制订阅 URL → 通用客户端导入 |
+| 节点 | daemon 定时拉取 Xray 配置（含有效用户 UUID 列表）并上报每用户流量，请求 HMAC 签名 |
+| 支付 | BEpusdt（USDT）+ PayPal；回调打到 Worker，验签后激活/顺延订阅 |
 
-Full spec: [airport_system_design.md](airport_system_design.md)
+## 代理协议与订阅格式
 
-## Repository Layout (Monorepo)
+节点类型（后台可配置 `network` / `security` / `ws_path` / `server_name` / Reality 公钥与 shortId）：
+
+| 模式 | 传输 | 说明 |
+| :--- | :--- | :--- |
+| CF-WS | VLESS 或 VMess over WebSocket + TLS，经 Cloudflare 代理 | 隐藏真实 IP，抗封锁，延迟较高；端口须为 CF 支持的 HTTPS 端口（443/2053/2083/2087/2096/8443） |
+| Reality | VLESS + Reality + Vision 直连 | 延迟最低，IP 可被探知 |
+
+订阅端点 `GET /api/v1/client/links/:token`：
+
+| 路径 | 格式 | 适用客户端 |
+| :--- | :--- | :--- |
+| `/links/:token` | 多行分享链接整体 Base64（vmess/vless/ss/trojan） | V2rayNG、Shadowrocket、v2rayA、OpenWrt |
+| `/links/:token/clash` | Clash YAML | Clash Verge（mihomo 内核）、Stash |
+| `/links/:token/singbox` | sing-box JSON | **未完成**（目前仅占位输出） |
+
+响应头 `Subscription-Userinfo` 携带已用流量 / 总流量 / 到期时间。当前端到端可用的协议只有 VLESS 与 VMess，未完成项见 [cloudflare_migration_plan.md §15](cloudflare_migration_plan.md#15-未完成功能与已知-bug)。
+
+## 目录结构
 
 ```
-airport-system/
-├── workers/api/         # Manager API（TS/Hono on Workers）→ api.rfplay.uk
+airport/
+├── workers/api/         # Manager API（TypeScript + Hono on Workers）→ api.rfplay.uk
+│   ├── src/routes/      # public / auth / client（订阅）/ web（用户）/ payment / admin
+│   ├── src/lib/         # jwt、cookie、csrf、支付、订阅格式、分享链接生成
+│   └── migrations/      # D1 schema
 ├── portal/              # Vue 3 官网 → CF Pages
 ├── admin/               # Vue 3 后台 → CF Pages
-├── daemon/              # 节点代理（Go：拉配置 + 流量上報）→ 部署於節點 VPS
-├── xray-core/           # Fork of XTLS/Xray-core（節點內核）
-├── deploy/              # 部署/運維腳本（含 cloudflare/ 自動化）
-├── admin.env.example / portal.env.example
-└── cloudflare_migration_plan.md  # 遷移與上線文檔（§12 上線手冊）
+├── daemon/              # 节点 daemon（Go：拉配置 + 流量上报）
+├── deploy/
+│   ├── cloudflare/      # push-secrets.sh（Worker Secrets）、dump-to-seed.sh（旧数据迁移）
+│   ├── node-cf-ws/      # CF-WS 节点部署脚本
+│   ├── node-reality/    # Reality 节点部署脚本
+│   └── docs/lessons.md  # 开发经验总结（含已退役的 Go/Flutter 时期内容）
+└── .github/workflows/   # ci.yml（类型检查 + 测试 + 构建）、deploy-worker.yml
 ```
 
-### Cloudflare Pages
+## 部署
 
-| CF Pages Project | Root | Domain | Build |
+### Worker
+
+```bash
+cd workers/api
+npm install
+npx wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql
+npx wrangler deploy
+../../deploy/cloudflare/push-secrets.sh ../../.env   # 模板见根目录 .env.example
+```
+
+`main` 分支上 `workers/**` 有变更时，`deploy-worker.yml` 会自动应用 schema 并部署。
+
+### Pages
+
+| CF Pages 项目 | 根目录 | 域名 | 构建 |
 | :--- | :--- | :--- | :--- |
 | `rfplay-portal` | `portal` | `www.rfplay.uk` | `npm ci && npm run build` |
 | `rfplay-admin` | `admin` | `admin.rfplay.uk` | `npm ci && npm run build` |
 
-Env (both): `VITE_API_BASE_URL=https://api.rfplay.uk`  
-Portal/Admin: `axios.withCredentials = true` + CSRF header
+环境变量模板：`portal.env.example`、`admin.env.example`。两者都需要 `VITE_API_BASE_URL=https://api.rfplay.uk`；portal 可用 `VITE_SUBSCRIPTION_BASE_URL` 覆盖订阅链接的基址。
 
-> Portal only: subscription links are built from `VITE_API_BASE_URL` with the
-> `/api/v1` prefix appended automatically, or from the optional
-> `VITE_SUBSCRIPTION_BASE_URL` override (see `portal.env.example`).
+### 节点
 
-## Docs
+后台建节点 → 生成节点 token（`nd_...`）→ 在 VPS 上执行 `deploy/node-cf-ws/deploy-node-cf-ws.sh` 或 `deploy/node-reality/deploy-node.sh`。daemon 配置示例见 `daemon/daemon.example.json`。
 
-* **[PLAN.md](PLAN.md)** — 当前交付计划（Phase 0-5，MVP 优先） ← **必读**
-* **[appstore_plan_a.md](appstore_plan_a.md)** — （已归档）App Store 上架方案 A；客户端方向已改为通用 Clash，见迁移方案
-* **[cloudflare_migration_plan.md](cloudflare_migration_plan.md)** — 退役 Go，Manager 全量 TS 重写上 Workers（Workers/D1/KV/R2）
-* [Architecture & API](airport_system_design.md) — 系统架构设计
-* [Implementation plan](implementation_plan.md) — （归档）旧 Sprint 计划
-* [Task checklist](task.md) — （归档）旧任务清单
+## DNS（rfplay.uk）
 
-## Environment Variables
-
-Template files (copy to `.env` and fill in real values):
-
-* `manager.env.example` — Manager API server
-* `portal.env.example` — Portal (Vite)
-* `admin.env.example` — Admin Dashboard (Vite)
-
-See [Appendix B](airport_system_design.md#appendix-b-environment-variables) for the full variable reference.
-
-## DNS (rfplay.uk)
-
-| Record | Type | Target |
+| 记录 | 类型 | 目标 |
 | :--- | :--- | :--- |
-| `www` | CNAME | CF Pages (portal) |
-| `admin` | CNAME | CF Pages (admin) |
-| `api` | A / CNAME | Manager IP (proxied) |
-| `node-*` | A | Node IPs (proxied, CF-WS) |
+| `www` | CNAME | CF Pages（portal） |
+| `admin` | CNAME | CF Pages（admin） |
+| `api` | Worker Custom Domain | `rfplay-api`（wrangler 自动创建） |
+| `node-*` | A（橙云代理） | CF-WS 节点 IP |
+| Reality 节点 | A（灰云，不代理） | Reality 节点 IP |
+
+## 文档
+
+* **[cloudflare_migration_plan.md](cloudflare_migration_plan.md)**：当前架构、上线手册、上线状态、未完成功能与已知 bug ← **必读**
+* [airport_system_design.md](airport_system_design.md)：早期完整设计（Go Manager + Flutter 时期），仅部分章节仍有效，见文首说明

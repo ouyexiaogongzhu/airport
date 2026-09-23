@@ -117,48 +117,6 @@
         </div>
       </div>
 
-      <!-- Sing-box -->
-      <div v-if="activeTab === 'singbox'" class="guide-section">
-        <div class="guide-header">
-          <span class="platform-badge desktop">Desktop</span>
-          <h3>Sing-box</h3>
-        </div>
-        <div class="install-methods">
-          <a href="https://github.com/SagerNet/sing-box/releases" target="_blank" class="method-btn">GitHub Releases</a>
-        </div>
-        <ol class="steps">
-          <li>Download and install Sing-box</li>
-          <li>Open the config directory</li>
-          <li>In the app, go to <strong>Remote File</strong> or <strong>Subscription</strong></li>
-          <li>Paste your Sing-box subscription URL (<code>/singbox</code>)</li>
-          <li>Save and apply the configuration</li>
-          <li>Enable the proxy</li>
-        </ol>
-        <div class="screenshot-placeholder">
-          <span>🖥️ Sing-box Screenshot</span>
-        </div>
-      </div>
-
-      <!-- Flutter App -->
-      <div v-if="activeTab === 'flutter'" class="guide-section">
-        <div class="guide-header">
-          <span class="platform-badge mobile">Mobile</span>
-          <h3>RFPlay App (Flutter)</h3>
-        </div>
-        <div class="install-methods">
-          <span class="method-btn disabled">Coming Soon</span>
-        </div>
-        <ol class="steps">
-          <li>Open the RFPlay app</li>
-          <li>Tap <strong>Token Import</strong> (or skip to Account tab)</li>
-          <li>Paste your <strong>Client Token</strong> from the Account page</li>
-          <li>Tap <strong>Connect</strong></li>
-          <li>All set — no subscription URL needed!</li>
-        </ol>
-        <div class="screenshot-placeholder">
-          <span>📱 RFPlay App Screenshot</span>
-        </div>
-      </div>
     </main>
   </div>
 </template>
@@ -177,8 +135,6 @@ const tabs = [
   { key: 'v2rayng', label: 'V2rayNG' },
   { key: 'shadowrocket', label: 'Shadowrocket' },
   { key: 'clash-verge', label: 'Clash Verge' },
-  { key: 'singbox', label: 'Sing-box' },
-  { key: 'flutter', label: 'Flutter App' },
 ]
 
 // Subscription links for the copy buttons at the top of the guide. Hidden
@@ -272,7 +228,6 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .platform-badge.android { background: #4caf50; color: white; }
 .platform-badge.ios { background: #2196f3; color: white; }
 .platform-badge.desktop { background: #ff9800; color: white; }
-.platform-badge.mobile { background: #9c27b0; color: white; }
 .install-methods { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
 .method-btn {
   display: inline-block;
@@ -285,7 +240,6 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
   transition: background 0.2s;
 }
 .method-btn:hover { background: #1a5276; }
-.method-btn.disabled { opacity: 0.5; cursor: not-allowed; }
 .steps { padding-left: 1.5rem; margin: 0 0 1.25rem; }
 .steps li { margin-bottom: 0.6rem; line-height: 1.5; color: #c0c0d0; font-size: 0.9rem; }
 .steps li strong { color: #e94560; }

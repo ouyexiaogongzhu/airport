@@ -1,8 +1,14 @@
+# Legacy local leftovers of the deleted Go manager / Flutter client
+manager/
+client/
+
 # Go
-manager/data/
-manager/server
 *.exe
 *.test
+
+# Daemon runtime (real config carries the node token)
+daemon/daemon.json
+daemon/data/
 
 # Node / Vue
 node_modules/
@@ -20,20 +26,6 @@ xray-core/
 !*.env.example
 *.pem
 *.key
-manager/data/*.db
-manager/data/*.db-*
-
-# Flutter
-client/build/
-client/.dart_tool/
-client/.packages
-client/.pub/
-client/pubspec.lock
-client/ios/Pods/
-client/ios/.symlinks
-client/android/.gradle/
-client/android/local.properties
-client/android/key.properties
 
 # IDE
 .idea/
@@ -53,21 +45,12 @@ Thumbs.db
 *.log
 *.tmp
 
-# SSL dev certificates
-deploy/certs/
-
-# SSL private keys (NEVER commit)
-deploy/ssl/*.pem
-deploy/ssl/*.key
-
-# Backups
+# Backups & local certificates
 deploy/backups/
+deploy/certs/
+deploy/ssl/
 
-# Production env overrides
-.env.production
-
-# Unity skills cache (from old project)
-.com-unity-codely.json
+# Tooling caches
 .agent/
 .cursor/
 screenshots/

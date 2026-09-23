@@ -1,5 +1,5 @@
 // HS256 JWT — 對齊 Go golang-jwt/v5（claims: user_id/username/role/exp/iat）
-// 用途：httpOnly cookie 會話 + Flutter Bearer，同一 JWT_SECRET 下可互相驗證。
+// 用途：httpOnly cookie 會話 + Bearer 兜底，同一 JWT_SECRET 下可互相驗證。
 
 const enc = new TextEncoder();
 

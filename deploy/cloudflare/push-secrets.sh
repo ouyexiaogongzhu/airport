@@ -3,7 +3,7 @@
 #
 # 用法：
 #   cd workers/api
-#   ../deploy/cloudflare/push-secrets.sh /path/to/.env
+#   ../../deploy/cloudflare/push-secrets.sh /path/to/.env
 #
 # .env 需含（缺省的鍵自動跳過）：
 #   JWT_SECRET  BEPUSDT_API_URL  BEPUSDT_TOKEN  BEPUSDT_SECRET
