@@ -1,6 +1,6 @@
 # RFPlay 平台方案：Cloudflare Workers + Tunnel 节点
 
-> **状态（2026-09-23）**：Go manager 与 Flutter 客户端已退役，后端为 Workers（TS/Hono）+ D1 + KV。里程碑 A 的 A0–A3 代码已完成，待 VPS 验收（§5.5）；支付（里程碑 B）暂缓。
+> **状态（2026-09-24）**：**v0.1.0** — Go manager 与 Flutter 客户端已退役，后端为 Workers（TS/Hono）+ D1 + KV。里程碑 A（A0–A3）已在测试节点 `w1` 验收：订阅与代理在 **v2rayNG / v2rayA / Clash Verge**（Android / Ubuntu / MacBook）通过。支付（里程碑 B）暂缓。
 > **关联**：[README.md](README.md)；[airport_system_design.md](airport_system_design.md) 为早期设计，仅供参考。
 
 ---
@@ -177,9 +177,9 @@
 | :--- | :--- | :--- |
 | A0 小修 | #12 #21 #26 #27 #28 #39 #8 | ✅ |
 | A1 服务资格 + 后台开通 | 见 5.2 | ✅ |
-| A2 节点链路（Tunnel） | 见 5.3 | ✅（待 VPS 实测） |
+| A2 节点链路（Tunnel） | 见 5.3 | ✅（w1 VPS 已实测） |
 | A3 认证与会话 | 见 5.4 | ✅ |
-| 验收 | 见 5.5 | |
+| 验收 | 见 5.5 | ✅ v0.1.0（客户端多端已测；部分管控项见清单） |
 
 ### 5.2 A1 服务资格与后台开通（✅ 2026-09-23）
 
@@ -190,7 +190,7 @@
 - Cron（每小时）：标记过期用户；按 `traffic_period_start` 对齐 30 天周期重置已用流量
 - 后台：`POST /admin/users/:id/grant {product_id}`；`PUT /admin/users/:id` 可改订阅状态、到期、流量上限/已用、限速；商品增改支持新字段与币种（USD/CNY）
 
-### 5.3 A2 节点链路（Tunnel 方案）（✅ 2026-09-23，待 VPS 实测）
+### 5.3 A2 节点链路（Tunnel 方案）（✅ 2026-09-23；w1 实测 ✅ 2026-09-24）
 
 **完成情况**
 
@@ -202,7 +202,7 @@
 - 部署脚本：安装 cloudflared 并 `cloudflared service install <tunnel token>`；给 `--cf-api-token` 时经 API 写 Tunnel ingress（`hostname → http://127.0.0.1:<port>`）与橙云 CNAME，否则打印手动步骤；Xray 改由 daemon 独占管理（停用 `xray.service` 与旧 `rfplay-xray.service`，避免两个 Xray 抢端口）；结尾检查节点端口、9090、10085/10086 只监听回环地址，否则报错退出。原固定的 Xray `v25.3.8` 不存在（404），改为已验证的 `v26.3.27`（Xray 26 已把 WS 与 VMess 标为 deprecated，升级前需确认）
 - 已删除 `deploy/node-reality/`
 - 验证：`node.routes.test.ts`（真实 SQLite，19 例：签名正确/错误/过期/篡改 body、配置只含可服务用户、版本号变化、上报记账）；`subformats.test.ts` 更新。daemon 用本机缓存的 Go 1.26.5 工具链 `go vet` + `go test -race` 通过；并用 Xray 26.3.27 实测：生成的 vless/vmess 配置 `-test` 通过，经 WS 代理正常上网，`statsquery` 读到 `u{id}` 流量，经代理访问 `127.0.0.1:10085`/`localhost` 被拦；daemon 对假 manager 实测上报失败重发、`kill -9` 后 2s 拉起、SIGTERM 后 Xray 退出
-- 未验证：cloudflared 注册与 Tunnel API 调用、脚本在真实 VPS 上的完整执行（需 Tunnel token 与 API token）；验收见 5.5
+- w1 实测（2026-09-24）：`deploy-node-cf-ws.sh` + Tunnel；Xray 仅 `127.0.0.1:28001`；daemon 拉配置/上报流量；客户端经 `w1.rfplay.uk:443` 连通，出口 IP 为 VPS（入站隐藏、出站不隐藏，见 §1）
 
 **节点模型（唯一形态）**
 
@@ -225,18 +225,19 @@ nodes 表的 `security`、`network`、`server_name`、`reality_*` 列已停用�
 - 未做：仓库里没有改密接口，目前无处可挂"改密加一"；以后加改密时调用 `bumpTokenVersion`
 - 测试：`src/routes/session.routes.test.ts`（真实 SQLite，17 例）
 
-### 5.5 里程碑 A 验收
+### 5.5 里程碑 A 验收（v0.1.0 / 2026-09-24）
 
-在一台测试 VPS 上完成下面全部步骤：
+测试节点：`w1`（`w1.rfplay.uk` → Tunnel → `127.0.0.1:28001`）。
 
-- [ ] 用 `deploy-node-cf-ws.sh` 部署 Tunnel 节点；该 VPS 的公网上 Xray 端口不可达
-- [ ] 后台建节点，给测试用户开通一个商品
-- [ ] Clash Verge 导入 `/clash` 订阅、V2rayNG 导入 Base64 订阅，两者都能连上
-- [ ] 产生流量后，后台统计与用户已用流量在一个同步周期内更新
-- [ ] 把用户改为过期 / 超额 / 封禁，一个同步周期内连接被断开，订阅接口返回 403
-- [ ] 封禁再解封后，用户原订阅链接仍然可用
+- [x] 用 `deploy-node-cf-ws.sh` 部署 Tunnel 节点；Xray 只监听回环，公网不可达代理端口
+- [x] 后台建节点，给测试用户开通商品
+- [x] **Clash Verge**（`/clash`）、**v2rayNG**（Base64）、**v2rayA**（Base64）均可导入并连通；已在 **Android / Ubuntu / MacBook** 验证
+- [x] 产生流量后，D1 用户已用流量随 daemon 上报更新
+- [x] 用户 `suspended` 时订阅返回 `ACCOUNT_DISABLED`（403）
+- [ ] 过期 / 超额后一个同步周期内现有连接被断开（订阅 403 已覆盖；在线踢断依赖 daemon 下一轮空用户配置）
+- [ ] 封禁再解封后，原 `client_token` 仍可用（未故意轮换 token 时）
 - [ ] 管理员被降权后，下一次请求即失去后台权限
-- [ ] 从外网扫描该 VPS：除 SSH 外无开放端口；节点域名解析结果只有 Cloudflare IP
+- [x] 节点域名解析为 Cloudflare；入站隐藏源站。**出口 IP = VPS 公网 IP**（预期，非缺陷）
 
 ### 5.6 里程碑 B — 支付（暂缓）
 

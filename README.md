@@ -21,19 +21,21 @@
 
 ## 代理协议与订阅格式
 
-**所有节点都经 Cloudflare 隐藏源站 IP**：VLESS 或 VMess over WebSocket，用户侧由 Cloudflare 边缘提供 TLS（443），回源走 cloudflared Tunnel 到节点本机的 `127.0.0.1`。节点 VPS 不开任何代理端口，DNS 里也没有源站 IP。Reality 直连方案已删除（见迁移方案 §1、§10）。
+**入站经 Cloudflare 隐藏源站**：VLESS / VMess over WebSocket；用户连 Cloudflare 边缘 TLS（443），Tunnel 回源到节点本机 `127.0.0.1`。VPS 不对外开放代理端口，DNS 无源站 A 记录。Reality 已删除（见迁移方案 §1）。
 
-> 代价：Cloudflare 被限速或干扰时没有直连备用线路；缓解方式见迁移方案 §10。当前代码仍保留 Reality 和源站 TLS 分支，按修复计划 §16.3 移除。
+> **出口 IP 不隐藏**：代理上网时目标站看到的是 VPS 公网 IP。隐藏的是「谁扫得到你的入站」，不是「你从哪出去」。
+
+**v0.1.0（2026-09-24）** 已在 Android / Ubuntu / MacBook 验证：v2rayNG、v2rayA（Base64）、Clash Verge（`/clash`）。
 
 订阅端点 `GET /api/v1/client/links/:token`：
 
 | 路径 | 格式 | 适用客户端 |
 | :--- | :--- | :--- |
-| `/links/:token` | 多行分享链接整体 Base64（vmess/vless/ss/trojan） | V2rayNG、Shadowrocket、v2rayA、OpenWrt |
-| `/links/:token/clash` | Clash YAML | Clash Verge（mihomo 内核）、Stash |
-| `/links/:token/singbox` | sing-box JSON | **未完成**（目前仅占位输出） |
+| `/links/:token` | 多行分享链接整体 Base64（vless/vmess） | v2rayNG、v2rayA、Shadowrocket、OpenWrt |
+| `/links/:token/clash` | Clash YAML | Clash Verge（mihomo）、Stash |
+| `/links/:token/singbox` | sing-box JSON | **未完成**（占位） |
 
-响应头 `Subscription-Userinfo` 携带已用流量 / 总流量 / 到期时间。当前端到端可用的协议只有 VLESS 与 VMess，未完成项见 [cloudflare_migration_plan.md §4](cloudflare_migration_plan.md#4-未完成功能与已知-bug)。
+响应头 `Subscription-Userinfo` 携带已用流量 / 总流量 / 到期时间。进度见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)。
 
 ## 目录结构
 
@@ -49,10 +51,15 @@ airport/
 ├── deploy/
 │   ├── cloudflare/      # push-secrets.sh（Worker Secrets）、dump-to-seed.sh（旧数据迁移）
 │   ├── node-cf-ws/      # 节点部署脚本（Xray + daemon + cloudflared Tunnel）
-│   ├── node-reality/    # 已废弃，按 §16.3 删除
 │   └── docs/lessons.md  # 开发经验总结（含已退役的 Go/Flutter 时期内容）
 └── .github/workflows/   # ci.yml（类型检查 + 测试 + 构建）、deploy-worker.yml
 ```
+
+## 版本
+
+| 版本 | 说明 |
+| :--- | :--- |
+| **v0.1.0** | 里程碑 A：Workers + Tunnel 节点；订阅在 v2rayNG / v2rayA / Clash Verge（Android / Ubuntu / MacBook）验证通过 |
 
 ## 部署
 
