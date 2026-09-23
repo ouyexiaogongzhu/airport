@@ -1,7 +1,7 @@
 # XHTTP over Cloudflare Tunnel — 架构设计
 
-> **状态**：设计草案（2026-09-24），**未实现**。  
-> **基线**：当前生产节点形态见 [cloudflare_migration_plan.md](../cloudflare_migration_plan.md) §1–3、§5.3：VLESS/VMess + **WS**，`cloudflared` Tunnel 回源，Xray 仅听 `127.0.0.1`，TLS 在 CF 边缘终结。  
+> **状态**：已实现（2026-09-24）。按节点 `nodes.network = ws|xhttp` 灰度；默认新建仍为 `ws`；订阅 XHTTP 固定 `packet-up` + `alpn=h2`。  
+> **基线**：生产节点形态见 [cloudflare_migration_plan.md](../cloudflare_migration_plan.md) §1–3、§5.3：VLESS/VMess + **WS 或 XHTTP**，`cloudflared` Tunnel 回源，Xray 仅听 `127.0.0.1`，TLS 在 CF 边缘终结。  
 > **目标读者**：实现 Worker / daemon / 部署 / 订阅格式的工程师与产品负责人。
 
 ---

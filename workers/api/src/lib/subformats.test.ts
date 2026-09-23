@@ -1,4 +1,4 @@
-// 純函數契約測試 — 節點固定為 Cloudflare Tunnel 形態：ws + tls + 443，host/sni = 節點域名
+// 純函數契約測試 — 節點為 Cloudflare Tunnel 形態：ws|xhttp + tls + 443，host/sni = 節點域名
 import { describe, expect, it } from 'vitest';
 import { buildClash, buildSingbox, buildV2ray, goJSON } from './subformats';
 import { encodeNodeToURI, queryEscape } from './xrayuri';
@@ -21,6 +21,14 @@ const vlessNode: NodeRow = {
   address: 'sg.example.com',
   protocol: 'vless',
   ws_path: '/vcheck/',
+};
+
+const vlessXhttp: NodeRow = {
+  name: 'w2',
+  address: 'w2.example.com',
+  protocol: 'vless',
+  ws_path: '/rfhttp/',
+  network: 'xhttp',
 };
 
 const ssNode: NodeRow = {
@@ -56,6 +64,17 @@ describe('encodeNodeToURI', () => {
     expect(encodeNodeToURI(vlessNode, user)).toBe(
       'vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&fp=chrome&host=sg.example.com&path=%2Fvcheck%2F&security=tls&sni=sg.example.com&type=ws#SG-CF',
     );
+  });
+
+  it('vless xhttp：type=xhttp + mode=packet-up + alpn=h2', () => {
+    expect(encodeNodeToURI(vlessXhttp, user)).toBe(
+      'vless://11111111-2222-3333-4444-555555555555@w2.example.com:443?alpn=h2&encryption=none&fp=chrome&host=w2.example.com&mode=packet-up&path=%2Frfhttp%2F&security=tls&sni=w2.example.com&type=xhttp#w2',
+    );
+  });
+
+  it('vmess xhttp：net=xhttp', () => {
+    const uri = encodeNodeToURI({ ...vmessNode, network: 'xhttp' }, user);
+    expect(atob(uri.slice('vmess://'.length))).toContain('"net":"xhttp"');
   });
 
   it('ws_path 為空時默認 /', () => {
@@ -107,6 +126,14 @@ describe('buildClash', () => {
     );
     expect(out.body).not.toContain('flow');
     expect(out.body).not.toContain('reality');
+  });
+
+  it('vless xhttp：xhttp-opts + alpn h2 + packet-up', () => {
+    const out = buildClash(user, [vlessXhttp]);
+    expect(out.body).toContain(
+      '  - name: "w2"\n    type: vless\n    server: w2.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    tls: true\n    servername: w2.example.com\n    network: xhttp\n    alpn:\n      - h2\n    client-fingerprint: chrome\n    xhttp-opts:\n      path: "/rfhttp/"\n      host: w2.example.com\n      mode: packet-up\n\n',
+    );
+    expect(out.body).not.toContain('ws-opts');
   });
 });
 

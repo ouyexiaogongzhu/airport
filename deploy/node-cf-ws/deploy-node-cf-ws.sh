@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# RFPlay — 節點部署（唯一形態：VLESS/VMess over WS，cloudflared Tunnel 回源）
+# RFPlay — 節點部署（VLESS/VMess over WS 或 XHTTP，cloudflared Tunnel 回源）
 #
 #   客戶端 ──TLS 443──> Cloudflare 邊緣 ──Tunnel──> cloudflared ──> Xray 127.0.0.1:<local-port>
 #
-# Xray 只監聽 127.0.0.1，由 rfplay-daemon 拉配置後拉起並守護；節點不開任何代理端口、不需要證書。
-# 後台先建節點（域名 = --hostname，本地端口 = --local-port），再點 Token 生成 nd_... token。
+# 傳輸（ws / xhttp）由後台 nodes.network 決定；本腳本不寫死 streamSettings，daemon 拉取配置後啟動 Xray。
+# Xray 只監聽 127.0.0.1；節點不開任何代理端口、不需要證書。TLS 在 CF 邊緣終結。
+# 後台先建節點（域名 = --hostname，本地端口 = --local-port，Transport = ws|xhttp），再點 Token 生成 nd_... token。
 #
 # Tunnel：在 Cloudflare Zero Trust → Networks → Tunnels 建一個 cloudflared Tunnel，複製其 token。
 #   - 給了 --cf-api-token（權限：Account > Cloudflare Tunnel: Edit，Zone > DNS: Edit）時，
 #     腳本自動寫入 Tunnel ingress（hostname → http://127.0.0.1:<local-port>）並建橙雲 CNAME；
 #   - 否則需在 Tunnel 的 Public Hostname 頁手動添加同樣的映射（會自動建 CNAME）。
+#   - XHTTP 與 WS 的 Tunnel ingress 形態相同（HTTP 明文回源）；無需為 xhttp 改 service URL。
+#
+# 依賴：Debian/Ubuntu（apt）。AlmaLinux/RHEL 請手動安裝 Xray + Go daemon + cloudflared（rpm），
+# 配置與單元文件可參照本腳本後續步驟。
 #
 # Usage:
 #   sudo ./deploy-node-cf-ws.sh --manager-url https://api.rfplay.uk \
@@ -23,7 +28,7 @@ TUNNEL_TOKEN=""
 HOSTNAME_FQDN=""
 LOCAL_PORT=""
 CF_API_TOKEN=""
-# 已驗證版本；Xray 26 已將 WS 標為 deprecated，升級前先確認 WS 仍可用
+# 已驗證版本（含 XHTTP）；Xray 26 已將 WS 標為 deprecated，升級前先確認 WS 仍可用
 XRAY_VERSION="v26.3.27"
 
 usage() {

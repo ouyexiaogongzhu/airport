@@ -81,7 +81,7 @@ describe('GET /node/:token/config', () => {
     const cfg = body.config;
     const inbound = cfg.inbounds.find((i) => i.tag === 'in-vless')!;
     expect(inbound).toMatchObject({ listen: '127.0.0.1', port: 20001, protocol: 'vless' });
-    // 舊列 network=tcp / security=reality 被忽略
+    // 舊列 network=tcp / security=reality：非 xhttp 一律當 ws
     expect(inbound.streamSettings).toEqual({ network: 'ws', security: 'none', wsSettings: { path: '/ws' } });
     expect(JSON.stringify(cfg)).not.toMatch(/reality|flow|tlsSettings|certificate/);
 
@@ -113,9 +113,23 @@ describe('GET /node/:token/config', () => {
     const v2 = await version();
     expect(v2).not.toBe(v1);
 
+    raw.exec("UPDATE nodes SET network = 'xhttp' WHERE id = 9");
+    const v2b = await version();
+    expect(v2b).not.toBe(v2);
+    const cfgX = ((await (await getConfig()).json()) as { config: XrayConfig }).config;
+    expect(cfgX.inbounds.find((i) => i.tag === 'in-vless')!.streamSettings).toEqual({
+      network: 'xhttp',
+      security: 'none',
+      xhttpSettings: { path: '/other' },
+    });
+
+    raw.exec("UPDATE nodes SET network = 'ws' WHERE id = 9");
+    const v2c = await version();
+    expect(v2c).not.toBe(v2b);
+
     raw.exec('UPDATE nodes SET port = 20002 WHERE id = 9');
     const v3 = await version();
-    expect(v3).not.toBe(v2);
+    expect(v3).not.toBe(v2c);
 
     raw.exec("UPDATE users SET status = 'banned' WHERE id = 2");
     const v4 = await version();
@@ -246,7 +260,7 @@ describe('POST /node/:token/traffic/report', () => {
 });
 
 describe('admin 節點編輯（Tunnel 形態）', () => {
-  it('只接受 ws_path；network/security/reality 欄位被忽略且不輸出', async () => {
+  it('接受 ws_path 與 network=ws|xhttp；拒絕非法 network；security/reality 不輸出', async () => {
     const { app, env, raw } = setup();
     const token = await signJwt({ user_id: 1, username: 'admin', role: 'admin' }, SECRET, 3600);
     const req = (method: string, path: string, body: unknown) =>
@@ -257,16 +271,22 @@ describe('admin 節點編輯（Tunnel 形態）', () => {
       );
     const created = await req('POST', '/admin/nodes', {
       name: 'sg', type: 'xray', address: 'node-sg.example.com', port: 20010, protocol: 'vmess',
-      ws_path: '/sg', security: 'reality', network: 'tcp', reality_public_key: 'PBK',
+      ws_path: '/sg', security: 'reality', reality_public_key: 'PBK',
     });
     expect(created.status).toBe(201);
     const node = (await created.json()) as Record<string, unknown>;
-    expect(node).toMatchObject({ ws_path: '/sg', port: 20010 });
+    expect(node).toMatchObject({ ws_path: '/sg', port: 20010, network: 'ws' });
     expect(node).not.toHaveProperty('security');
     expect(node).not.toHaveProperty('reality_public_key');
     expect(raw.prepare('SELECT network, security, reality_public_key r FROM nodes WHERE id = ?').get(node.id as number)).toEqual({
       network: 'ws', security: 'none', r: null,
     });
     expect((await req('PUT', `/admin/nodes/${node.id}`, { ws_path: 'no-slash' })).status).toBe(400);
+    expect((await req('PUT', `/admin/nodes/${node.id}`, { network: 'tcp' })).status).toBe(400);
+
+    const xhttp = await req('PUT', `/admin/nodes/${node.id}`, { network: 'xhttp', ws_path: '/xh' });
+    expect(xhttp.status).toBe(200);
+    expect(await xhttp.json()).toMatchObject({ network: 'xhttp', ws_path: '/xh' });
+    expect(raw.prepare('SELECT network n FROM nodes WHERE id = ?').get(node.id as number)).toEqual({ n: 'xhttp' });
   });
 });

@@ -63,7 +63,7 @@ const USER_COLS =
   'max_devices, vless_uuid, created_at, updated_at';
 
 // nodeJson — token 不輸出。節點固定為 Tunnel 形態：address = 節點域名，port = 本機 Xray 端口；
-// network/security/server_name/reality_* 列已停用，不再輸出
+// network = ws|xhttp；security/server_name/reality_* 列已停用，不再輸出
 function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
   return {
     id: n.id,
@@ -76,6 +76,7 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
     traffic_up: n.traffic_up,
     traffic_down: n.traffic_down,
     user_id: n.user_id,
+    network: n.network === 'xhttp' ? 'xhttp' : 'ws',
     ws_path: n.ws_path,
     last_heartbeat: n.last_heartbeat,
     created_at: n.created_at,
@@ -85,8 +86,10 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
 
 const VALID_PROTOCOLS = new Set(['vmess', 'vless']);
 const PROTOCOL_ERROR = 'protocol must be one of: vmess, vless';
+const VALID_NETWORKS = new Set(['ws', 'xhttp']);
+const NETWORK_ERROR = 'network must be one of: ws, xhttp';
 
-// 傳輸層只剩 ws_path 可配；只收到時返回，'' 存為 NULL（即 "/"）
+// 傳輸層：ws_path + network（ws|xhttp）；只收到時返回，'' path 存為 NULL（即 "/"）
 function parseTransport(body: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
   const fields: Record<string, unknown> = {};
   const v = body.ws_path;
@@ -96,11 +99,17 @@ function parseTransport(body: Record<string, unknown>): { fields: Record<string,
     if (s !== '' && !s.startsWith('/')) return { error: 'ws_path must start with /' };
     fields.ws_path = s === '' ? null : s;
   }
+  if (body.network !== undefined) {
+    if (typeof body.network !== 'string' || !VALID_NETWORKS.has(body.network)) {
+      return { error: NETWORK_ERROR };
+    }
+    fields.network = body.network;
+  }
   return { fields };
 }
 
 const NODE_COLS =
-  'id, name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, ws_path, ' +
+  'id, name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, network, ws_path, ' +
   'last_heartbeat, created_at, updated_at';
 
 function isNonNegInt(v: unknown): v is number {
@@ -484,15 +493,15 @@ export function adminRoutes() {
       return c.json({ error: 'type must be one of: v2ray, xray' }, 400);
     }
 
-    const t = { ws_path: null, ...transport.fields };
+    const t = { ws_path: null, network: 'ws', ...transport.fields };
     const now = new Date().toISOString();
     const token = 'nd_' + randomHex(32);
     const ins = await c.env.DB.prepare(
       "INSERT INTO nodes (name, type, address, port, protocol, status, traffic_up, traffic_down, user_id, " +
         'network, security, ws_path, token, created_at, updated_at) ' +
-        "VALUES (?, ?, ?, ?, ?, 'inactive', 0, 0, ?, 'ws', 'none', ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, 'inactive', 0, 0, ?, ?, 'none', ?, ?, ?, ?)",
     )
-      .bind(name, type, address, port, protocol, Number(body.user_id ?? 0), t.ws_path, token, now, now)
+      .bind(name, type, address, port, protocol, Number(body.user_id ?? 0), t.network, t.ws_path, token, now, now)
       .run();
     if ((ins.meta.changes ?? 0) === 0) return c.json({ error: 'failed to create node' }, 500);
 
@@ -611,7 +620,7 @@ export function adminRoutes() {
   app.get('/admin/nodes/:id/config', ...guard, async (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid node id' }, 400);
-    const node = await c.env.DB.prepare('SELECT id, port, protocol, ws_path, status FROM nodes WHERE id = ?')
+    const node = await c.env.DB.prepare('SELECT id, port, protocol, ws_path, network, status FROM nodes WHERE id = ?')
       .bind(id)
       .first<NodeConfigRow>();
     if (!node) return c.json({ error: 'node not found' }, 404);

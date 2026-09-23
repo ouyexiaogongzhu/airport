@@ -15,7 +15,7 @@ const MAX_ENTRIES = 5000;
 async function authNode(c: Context<{ Bindings: Env }>, body: string): Promise<NodeRow | null> {
   const token = c.req.param('token') ?? '';
   if (token === '') return null;
-  const node = await c.env.DB.prepare('SELECT id, name, port, protocol, ws_path, status FROM nodes WHERE token = ?')
+  const node = await c.env.DB.prepare('SELECT id, name, port, protocol, ws_path, network, status FROM nodes WHERE token = ?')
     .bind(token)
     .first<NodeRow>();
   if (!node) return null;

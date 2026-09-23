@@ -1,26 +1,33 @@
 // vless / vmess 分享鏈接生成（shadowsocks、trojan 已下線，見遷移方案 §16）
-// 節點唯一形態：客戶端連 Cloudflare 邊緣，address = 節點域名，443 + tls + ws，host/sni = 域名；
-// 無 Vision flow（WS 上不可用）。nodes.port 是節點本機 Xray 端口，不出現在鏈接裡。
+// 節點形態：客戶端連 Cloudflare 邊緣，address = 節點域名，443 + tls + ws|xhttp，host/sni = 域名；
+// 無 Vision flow（WS/XHTTP 上不可用）。nodes.port 是節點本機 Xray 端口，不出現在鏈接裡。
+import { nodeNetwork, type NodeNetwork } from './nodeconfig';
 
 export type NodeRow = {
   name: string | null;
   address: string | null;
   protocol: string | null;
   ws_path?: string | null;
+  network?: string | null;
 };
 
 export const CLIENT_PORT = 443;
 
+/** 訂閱客戶端 XHTTP mode（服務端 inbound 為 auto） */
+export const XHTTP_CLIENT_MODE = 'packet-up';
+
 export type Transport = {
   host: string;
   path: string;
+  network: NodeNetwork;
 };
 
-// 與 nodeconfig 的 ws path 默認值一致
+// 與 nodeconfig 的 path / network 默認值一致
 export function nodeTransport(node: NodeRow): Transport {
   return {
     host: node.address ?? '',
     path: node.ws_path || '/',
+    network: nodeNetwork(node),
   };
 }
 
@@ -73,7 +80,7 @@ function encodeVmess(node: NodeRow, user: UserCreds): string {
     aid: 0,
     host: t.host,
     id: user.vless_uuid ?? '',
-    net: 'ws',
+    net: t.network,
     path: t.path,
     port: CLIENT_PORT,
     ps: node.name ?? '',
@@ -89,15 +96,28 @@ function encodeVmess(node: NodeRow, user: UserCreds): string {
 function encodeVless(node: NodeRow, user: UserCreds): string {
   const t = nodeTransport(node);
   const q = queryEscape;
-  const params: [string, string][] = [
-    ['encryption', 'none'],
-    ['fp', 'chrome'],
-    ['host', t.host],
-    ['path', t.path],
-    ['security', 'tls'],
-    ['sni', t.host],
-    ['type', 'ws'],
-  ];
+  const params: [string, string][] =
+    t.network === 'xhttp'
+      ? [
+          ['alpn', 'h2'],
+          ['encryption', 'none'],
+          ['fp', 'chrome'],
+          ['host', t.host],
+          ['mode', XHTTP_CLIENT_MODE],
+          ['path', t.path],
+          ['security', 'tls'],
+          ['sni', t.host],
+          ['type', 'xhttp'],
+        ]
+      : [
+          ['encryption', 'none'],
+          ['fp', 'chrome'],
+          ['host', t.host],
+          ['path', t.path],
+          ['security', 'tls'],
+          ['sni', t.host],
+          ['type', 'ws'],
+        ];
   const qs = params.map(([k, v]) => `${k}=${q(v)}`).join('&');
   return `vless://${user.vless_uuid ?? ''}@${node.address ?? ''}:${CLIENT_PORT}?${qs}#${q(node.name ?? '')}`;
 }

@@ -22,6 +22,7 @@
               <th>Domain</th>
               <th>Local Port</th>
               <th>Protocol</th>
+              <th>Transport</th>
               <th>Status</th>
               <th>Traffic</th>
               <th>Actions</th>
@@ -35,6 +36,7 @@
               <td><code class="addr-text">{{ n.address }}</code></td>
               <td>{{ n.port }}</td>
               <td><span class="tag">{{ n.protocol }}</span></td>
+              <td><span class="tag">{{ n.network || 'ws' }}</span></td>
               <td><span :class="['status', n.status]">{{ n.status }}</span></td>
               <td class="traffic-cell">
                 <span class="traffic-up">▲ {{ formatBytes(n.traffic_up) }}</span>
@@ -95,9 +97,18 @@
               <input v-model.number="form.user_id" type="number" min="0" placeholder="1" required />
             </div>
           </div>
-          <div class="field">
-            <label>WS Path</label>
-            <input v-model="form.ws_path" type="text" placeholder="/ (default)" />
+          <div class="field-row">
+            <div class="field">
+              <label>Transport</label>
+              <select v-model="form.network" required>
+                <option value="ws">ws</option>
+                <option value="xhttp">xhttp</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Path (WS / XHTTP)</label>
+              <input v-model="form.ws_path" type="text" placeholder="/ (default)" />
+            </div>
           </div>
           <div v-if="editingNode" class="field">
             <label>Status</label>
@@ -135,6 +146,7 @@ interface Node {
   traffic_up: number
   traffic_down: number
   user_id: number
+  network?: string | null
   ws_path?: string | null
   last_heartbeat?: string | null
   created_at?: string
@@ -151,7 +163,7 @@ const editingNode = ref<Node | null>(null)
 
 function emptyForm() {
   return {
-    name: '', type: 'xray', address: '', port: 20001, protocol: '', user_id: 1, status: 'inactive', ws_path: '',
+    name: '', type: 'xray', address: '', port: 20001, protocol: '', user_id: 1, status: 'inactive', network: 'ws', ws_path: '',
   }
 }
 
@@ -177,6 +189,7 @@ function openEditModal(n: Node) {
     protocol: n.protocol,
     user_id: n.user_id,
     status: n.status,
+    network: n.network === 'xhttp' ? 'xhttp' : 'ws',
     ws_path: n.ws_path ?? '',
   }
   editingNode.value = n
@@ -231,6 +244,7 @@ async function saveNode() {
         port: form.value.port,
         protocol: form.value.protocol,
         status: form.value.status,
+        network: form.value.network,
         ws_path: form.value.ws_path,
       }
       const res = await api.put(`/admin/nodes/${editingNode.value.id}`, payload)
@@ -245,6 +259,7 @@ async function saveNode() {
         port: form.value.port,
         protocol: form.value.protocol,
         user_id: form.value.user_id,
+        network: form.value.network,
         ws_path: form.value.ws_path,
       }
       const res = await api.post('/admin/nodes', payload)

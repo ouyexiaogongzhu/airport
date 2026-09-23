@@ -1,6 +1,6 @@
 // 對齊 manager/internal/handler/subscription.go — 三種訂閱格式（逐字節契約）
 // Go json.Marshal 對 map 按鍵排序且 HTML 轉義 <>&；物件以插入序模擬，字串後處理轉義。
-import { CLIENT_PORT, b64std, encodeNodeToURI, nodeTransport, type NodeRow, type UserCreds } from './xrayuri';
+import { CLIENT_PORT, XHTTP_CLIENT_MODE, b64std, encodeNodeToURI, nodeTransport, type NodeRow, type UserCreds } from './xrayuri';
 
 export type FormatKind = 'v2ray' | 'clash' | 'singbox';
 
@@ -40,7 +40,6 @@ export function buildClash(user: UserCreds, allNodes: NodeRow[]): FormatOutput {
   for (const node of nodes) {
     const name = node.name ?? '';
     const address = node.address ?? '';
-    // 固定 ws + tls + 443（見 xrayuri.ts）
     const t = nodeTransport(node);
     sb.push(`  - name: "${name}"\n`);
     sb.push(`    type: ${node.protocol}\n`);
@@ -53,8 +52,15 @@ export function buildClash(user: UserCreds, allNodes: NodeRow[]): FormatOutput {
     }
     sb.push('    tls: true\n');
     sb.push(`    servername: ${t.host}\n`);
-    sb.push('    network: ws\n');
-    sb.push(`    ws-opts:\n      path: "${t.path}"\n      headers:\n        Host: ${t.host}\n`);
+    if (t.network === 'xhttp') {
+      sb.push('    network: xhttp\n');
+      sb.push('    alpn:\n      - h2\n');
+      sb.push('    client-fingerprint: chrome\n');
+      sb.push(`    xhttp-opts:\n      path: "${t.path}"\n      host: ${t.host}\n      mode: ${XHTTP_CLIENT_MODE}\n`);
+    } else {
+      sb.push('    network: ws\n');
+      sb.push(`    ws-opts:\n      path: "${t.path}"\n      headers:\n        Host: ${t.host}\n`);
+    }
     sb.push('\n');
   }
 

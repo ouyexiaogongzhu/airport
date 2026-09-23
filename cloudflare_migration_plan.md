@@ -11,7 +11,7 @@
 | :--- | :--- |
 | 后端 | 单个 Worker `rfplay-api`（Hono 按 public/client/web/admin/node 分路由），共享 D1；不拆微服务 |
 | 客户端 | 不自研 App。用户用通用客户端导入订阅 URL：Clash 系（mihomo 内核，`/clash`）为主，V2rayNG 等用 Base64（`/links/:token`） |
-| 节点形态 | **所有节点走 Cloudflare：VLESS/VMess + WS，cloudflared Tunnel 回源**。Xray 只监听 `127.0.0.1`，VPS 零公网端口、无需证书。Reality 已删除 |
+| 节点形态 | **所有节点走 Cloudflare：VLESS/VMess + WS 或 XHTTP，cloudflared Tunnel 回源**（`nodes.network`）。Xray 只监听 `127.0.0.1`，VPS 零公网端口、无需证书。Reality 已删除 |
 | 协议 | 只保留 `vless`、`vmess`；Shadowsocks / Trojan 已下线 |
 | 商品 | 每个商品单独配置时长、流量（每 30 天额度）、限速 |
 | 支付 | 暂不做（里程碑 B）。先由管理员在后台手动开通 |
@@ -162,7 +162,7 @@
 | 35 | D1 → R2 备份 | 未实现 |
 | 36 | ✅ 后台改用户到期/流量/订阅状态、商品币种（A1） | |
 | 37 | 设备管理页 | `AccountDevices.vue` 为占位 |
-| 38 | Hysteria2 / gRPC / XHTTP | 不支持；XHTTP+Tunnel 设计草案见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) |
+| 38 | Hysteria2 / gRPC | 不支持；XHTTP+Tunnel 已实现（`nodes.network=xhttp`），见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) |
 | 39 | 杂项 | `PORTAL_URL` ✅；`online_nodes` 把 active 算在线；营收按下单时间；`Pay.vue` 超时提示不显示；Dashboard 空状态不显示 |
 
 ---
@@ -197,7 +197,7 @@
 - Worker：`routes/node.ts`（`GET /node/:token/config`、`POST /node/:token/traffic/report`）+ `lib/nodehmac.ts`（与 daemon `signRequest` 同算法，时间戳容差 ±300s，签名覆盖 body）。上报经 `json_each` 展开，一个 batch 固定 2–3 条语句，与用户数无关（D1 单次调用有查询数上限）；同一用户多条合并，不存在的用户不记录，节点计数与心跳一并更新。节点非 active 时下发空用户列表（daemon 应用后断开所有连接），而不是 403（403 会让 daemon 保留旧配置继续服务）
 - `lib/nodeconfig.ts`：`buildNodeXrayConfig` 从 `admin.ts` 移出，后台预览与节点接口共用；用户列表用 `SERVICEABLE_SQL`，缺 `vless_uuid` 的用户跳过（不再内存补随机 UUID）。StatsService 走 `127.0.0.1:10085`（与节点端口冲突时 10086，写入 `_meta.api_port`）。路由屏蔽私网/回环目标，否则用户可经代理连本机 StatsService 重置流量计数；为此去掉了 `inboundTag → direct` 规则，让域名目标经 `IPIfNonMatch` 解析后再匹配 IP 规则。版本号 = FNV-1a（配置结构版本、协议、端口、path、api 端口、每个用户 `id:uuid`）截成 53 位，JSON 往返不丢精度
 - #13 已知限制：Xray 没有按用户限速（policy 只有超时与统计开关），`speed_limit_bps` / `rate_limit_bps` 不下发到节点，推迟处理
-- 订阅：`xrayuri.ts`、`subformats.ts` 固定 ws + tls + 443、host/sni = 节点域名，`server_name`/Reality 不再参与；`nodes.port` 只作本机端口。后台节点接口只收 `ws_path`（新建时 network/security 写死 `ws`/`none`），输出不再含停用列；节点页只留 名称/类型/协议/域名/本地端口/WS Path/状态，并新增「Token」按钮（此前后台拿不到 `nd_...` token）。`/admin/nodes/:id/config` 预览不再记心跳
+- 订阅：`xrayuri.ts`、`subformats.ts` 按 `nodes.network`（`ws`|`xhttp`）下发 + tls + 443、host/sni = 节点域名；XHTTP 订阅固定 `mode=packet-up`、`alpn=h2`。`nodes.port` 只作本机端口。后台收 `ws_path` + `network`（默认 `ws`，security 仍写死 `none`）；节点页含 Transport 下拉与「Token」按钮。`/admin/nodes/:id/config` 预览不再记心跳
 - daemon：`xray api statsquery -reset` 读流量，读出的增量进 `pending`，上报 200 后才扣除；拉配置失败也上报；应用新配置前先 `xray run -test`，失败保留旧进程；重启前先收一次流量；重启失败不记为已应用（下轮重试）；崩溃后指数退避自动拉起；`Stop()` 与退出时结束 Xray（`main.go` 不再 `log.Fatalf` 跳过清理）；`node_id` 取自配置响应（配置里可省略）；默认 token/地址、非回环 `listen_addr` 拒绝启动
 - 部署脚本：安装 cloudflared 并 `cloudflared service install <tunnel token>`；给 `--cf-api-token` 时经 API 写 Tunnel ingress（`hostname → http://127.0.0.1:<port>`）与橙云 CNAME，否则打印手动步骤；Xray 改由 daemon 独占管理（停用 `xray.service` 与旧 `rfplay-xray.service`，避免两个 Xray 抢端口）；结尾检查节点端口、9090、10085/10086 只监听回环地址，否则报错退出。原固定的 Xray `v25.3.8` 不存在（404），改为已验证的 `v26.3.27`（Xray 26 已把 WS 与 VMess 标为 deprecated，升级前需确认）
 - 已删除 `deploy/node-reality/`
@@ -208,13 +208,13 @@
 
 | 项 | 取值 |
 | :--- | :--- |
-| Xray inbound | `listen: 127.0.0.1`，端口 = 节点记录的 `port`，`network=ws`，`security=none`，path = `ws_path` |
-| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名 |
-| 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>` |
+| Xray inbound | `listen: 127.0.0.1`，端口 = `port`，`network` = `nodes.network`（`ws`\|`xhttp`），`security=none`，path = `ws_path` |
+| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名；XHTTP 另带 `mode=packet-up`、`alpn=h2` |
+| 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>`（WS 与 XHTTP 相同） |
 | DNS | Tunnel 自动创建的 CNAME（橙云），源站 IP 不出现在任何 DNS 记录里 |
 | VPS 防火墙 | 入站只留 SSH（建议 SSH 也限制来源或改用 Cloudflare Access） |
 
-nodes 表的 `security`、`network`、`server_name`、`reality_*` 列已停用（D1 删列需重建表，暂不删）。
+`nodes.network` 已启用（`ws` 默认 / `xhttp`）。`security`、`server_name`、`reality_*` 列仍停用（D1 删列需重建表，暂不删）。
 
 ### 5.4 A3 认证与会话（✅ 2026-09-23）
 
@@ -256,5 +256,5 @@ nodes 表的 `security`、`network`、`server_name`、`reality_*` 列已停用�
 - #35：备份。先依靠 D1 Time Travel，再加每周 CI 任务执行 `wrangler d1 export` 上传 R2
 - #37、#39：设备管理页；统计口径；`Pay.vue` 超时提示；Dashboard 空状态
 - #8：如有需要，再补齐 Shadowsocks / Trojan 的服务端配置与真实密码
-- #38：Hysteria2 等新协议；XHTTP（CF 隐藏入站）设计草案：[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)（未实现）
+- #38：Hysteria2 等新协议；XHTTP（CF 隐藏入站）已实现，设计见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)
 - 运维增强：节点拨测失败自动置 inactive + 告警；额度 >80% 告警；Telegram bot（查流量、续费、到期提醒）

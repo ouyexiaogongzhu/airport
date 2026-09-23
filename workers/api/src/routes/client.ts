@@ -58,8 +58,7 @@ function creds(user: UserRow): UserCreds {
 
 async function getActiveNodes(env: Env): Promise<NodeRow[]> {
   const { results } = await env.DB.prepare(
-    "SELECT name, address, protocol, ws_path FROM nodes WHERE status = 'active' ORDER BY id",
-  ).all<NodeRow>();
+    "SELECT name, address, protocol, ws_path, network FROM nodes WHERE status = 'active' ORDER BY id",  ).all<NodeRow>();
   return results ?? [];
 }
 

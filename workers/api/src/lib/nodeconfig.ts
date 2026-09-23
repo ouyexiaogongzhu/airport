@@ -1,14 +1,17 @@
 // 節點 Xray 服務端配置（唯一形態：cloudflared Tunnel 回源）
-// inbound 只監聽 127.0.0.1，ws + security none；TLS 由 Cloudflare 邊緣終結，不需要證書。
+// inbound 只監聽 127.0.0.1，ws 或 xhttp + security none；TLS 由 Cloudflare 邊緣終結，不需要證書。
 // 每用戶 client 帶 email "u{id}"，daemon 經 StatsService 讀 user>>>u{id}>>>traffic>>>uplink/downlink。
 // 已知限制：Xray 不支持按用戶限速（policy 只有超時與統計開關），speed_limit_bps / rate_limit_bps 暫不下發。
 import { SERVICEABLE_SQL } from './entitlement';
+
+export type NodeNetwork = 'ws' | 'xhttp';
 
 export type NodeConfigRow = {
   id: number;
   port: number;
   protocol: string;
   ws_path: string | null;
+  network?: string | null;
   status?: string | null;
 };
 
@@ -21,8 +24,8 @@ const PRIVATE_CIDRS = [
   '::1/128', 'fc00::/7', 'fe80::/10',
 ];
 
-// 配置結構變化時遞增，強制所有節點重新應用
-const SCHEMA = 'a2-1';
+// 配置結構變化時遞增，強制所有節點重新應用（a3：按 nodes.network 分支 ws|xhttp）
+const SCHEMA = 'a3-xhttp-1';
 
 export function nodeApiPort(nodePort: number): number {
   return nodePort === API_PORT ? API_PORT + 1 : API_PORT;
@@ -30,6 +33,19 @@ export function nodeApiPort(nodePort: number): number {
 
 export function nodeWsPath(node: Pick<NodeConfigRow, 'ws_path'>): string {
   return node.ws_path || '/';
+}
+
+/** 訂閱與 inbound 共用；未知/空值回退 ws（存量節點） */
+export function nodeNetwork(node: Pick<NodeConfigRow, 'network'>): NodeNetwork {
+  return node.network === 'xhttp' ? 'xhttp' : 'ws';
+}
+
+function streamSettings(network: NodeNetwork, path: string): Record<string, unknown> {
+  if (network === 'xhttp') {
+    // mode 省略 = auto（同時收 packet-up / stream-up）；客戶端訂閱固定 packet-up
+    return { network: 'xhttp', security: 'none', xhttpSettings: { path } };
+  }
+  return { network: 'ws', security: 'none', wsSettings: { path } };
 }
 
 // FNV-1a 64 截成 53 位：JSON 往返（daemon 以 float64 解析）不丟精度
@@ -56,12 +72,13 @@ export async function buildNodeXrayConfig(db: D1Database, node: NodeConfigRow, n
 
   const protocol = node.protocol;
   const path = nodeWsPath(node);
+  const network = nodeNetwork(node);
   const apiPort = nodeApiPort(node.port);
   const inTag = `in-${protocol}`;
 
   const clients: Record<string, unknown>[] = [];
   const userIDs: number[] = [];
-  const parts: string[] = [SCHEMA, protocol, String(node.port), path, String(apiPort)];
+  const parts: string[] = [SCHEMA, protocol, String(node.port), path, network, String(apiPort)];
   for (const u of users) {
     // 無 UUID 的用戶訂閱端也無法生成鏈接，跳過
     if (!u.vless_uuid) continue;
@@ -89,7 +106,7 @@ export async function buildNodeXrayConfig(db: D1Database, node: NodeConfigRow, n
         port: node.port,
         protocol,
         settings,
-        streamSettings: { network: 'ws', security: 'none', wsSettings: { path } },
+        streamSettings: streamSettings(network, path),
       },
       { tag: 'api', listen: '127.0.0.1', port: apiPort, protocol: 'dokodemo-door', settings: { address: '127.0.0.1' } },
     ],
