@@ -9,7 +9,8 @@
 > | 魔改 Xray-core：每次连接在线 `verify-token`（§4.1.1） | 未实现；节点改为 daemon 拉取用户 UUID 列表 |
 > | Nginx 伪装站 + Docker Compose 部署 | 已删除（`deploy/docker`、`deploy/nginx`） |
 > | Payoneer / Stripe 支付 | 当前为 BEpusdt + PayPal |
-> | 双模式节点（§1.2）、订阅格式、数据库表结构（§3A）、API 路径 | 大体仍有效，细节以代码为准 |
+> | 双模式节点（§1.2：CF-WS + REALITY 直连） | 已改为单一形态：所有节点 CF-WS + cloudflared Tunnel 回源，REALITY 已删除 |
+> | 订阅格式、数据库表结构（§3A）、API 路径 | 大体仍有效，细节以代码为准 |
 > | 附录 B 环境变量（`manager.env.example`） | 已失效；Worker Secrets 模板见根目录 `.env.example` |
 
 This document outlines the detailed system architecture, database schema, API contracts, and integration flows for a modern, secure, and multi-platform proxy service ("Airport") featuring:

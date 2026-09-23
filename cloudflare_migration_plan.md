@@ -606,9 +606,9 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 | 1 | Worker 没有 daemon 调用的 `GET /api/v1/node/:token/config` 和 `POST /api/v1/node/:token/traffic/report`，节点拉不到配置、报不了流量 | `workers/api/src/index.ts`；daemon `sync.go:166,404` |
 | 2 | 补路由时须对齐格式：daemon 期望 `{node_id,name,protocol,config}`，现有 `/admin/nodes/:id/config` 返回裸配置；daemon 批量上报 `{node_id,traffic:[...]}`，`/admin/traffic/report` 只收单条 | `sync.go:157,398`；`admin.ts` |
 | 3 | 按用户流量统计从根上不存在：Xray 客户端条目无 `email`、无 StatsService/api 入站；daemon 读的 `traffic_stats.json` 没有任何东西写 | `admin.ts` buildNodeXrayConfig；`sync.go:430` |
-| 4 | Reality `privateKey` 固定为空，注释说由 `XRAY_REALITY_PRIVATE_KEY` 填，daemon 没实现 → Reality 节点起不来 | `admin.ts` buildNodeXrayConfig |
+| 4 | ~~Reality `privateKey` 固定为空~~ 作废：Reality 已从方案删除，Reality 相关代码在 A2 移除 | `admin.ts` buildNodeXrayConfig |
 | 5 | 配置版本号只按用户 ID 集合计算；改节点端口/传输/TLS 后版本不变，daemon 跳过不应用 | `admin.ts` userSetVersion；`sync.go:228` |
-| 6 | CF-WS 走 cloudflared Tunnel 回源时，服务端应 `security=none`、客户端链接应 `tls`；现在只有一个 `security` 字段，无法表达。当前只能用"源站证书 + security=tls"方案 | `nodes` 表；`xrayuri.ts` |
+| 6 | Tunnel 回源要求服务端 `listen 127.0.0.1` + `security=none`、客户端链接 `tls` + 443；现在服务端和客户端共用一个 `security` 字段，且 inbound 监听所有网卡。A2 改为固定的 Tunnel 形态解决 | `nodes` 表；`xrayuri.ts`；`admin.ts` |
 | 7 | 部署脚本写死 `node_id: 1` | `deploy/node-*/deploy-*.sh` |
 | 8 | Shadowsocks / Trojan 节点：服务端配置只生成 VLESS 格式的 clients，跑不起来；Clash 订阅里两者密码写死 `rf-{id}-pass` | `admin.ts`；`subformats.ts` |
 
@@ -678,7 +678,7 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 
 | 问题 | 决策 | 影响 |
 | :--- | :--- | :--- |
-| CF-WS 节点回源方式 | **cloudflared Tunnel**：Xray 只监听 `127.0.0.1`，不开公网端口，不需要证书 | 节点表新增 `ingress` 字段（见 16.3） |
+| 节点形态 | **所有节点都走 Cloudflare，CF-WS + cloudflared Tunnel 回源**（沿用 §1、§10 的定案，Reality 已从方案删除）：Xray 只监听 `127.0.0.1`，节点零公网端口，不需要证书 | 节点传输固定，后台不再提供 security/Reality 选项（见 16.3）；#4、#6 随之作废 |
 | Shadowsocks / Trojan | **先从后台协议白名单下线** | #8 不修，只做下线 |
 | 商品模型 | **每个商品单独配置**时长、流量、限速 | products 表加字段（见 16.2） |
 | 支付 | **暂不做，先跑通**。首个里程碑由管理员在后台手动开通订阅 | #14–#22 整体移到里程碑 B；原 #36（后台改用户订阅）提前到里程碑 A |
@@ -719,14 +719,22 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 
 ### 16.3 A2 节点链路（Tunnel 方案）
 
-**节点模型**：nodes 新增 `ingress`，取值 `direct` | `tunnel`（#6）
+**节点模型（唯一形态）**
 
-| | `ingress=tunnel`（CF-WS） | `ingress=direct`（Reality） |
-| :--- | :--- | :--- |
-| Xray inbound | `listen: 127.0.0.1`，`network=ws`，`security=none` | 监听公网，`security=reality` |
-| 客户端链接 | 地址 = 节点域名，端口固定 443，`security=tls`，host/sni = 节点域名 | 按节点配置 |
-| 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>` | 无 |
-| DNS | Tunnel 自动创建的 CNAME | A 记录，灰云 |
+| 项 | 取值 |
+| :--- | :--- |
+| Xray inbound | `listen: 127.0.0.1`，端口 = 节点记录的 `port`，`network=ws`，`security=none`，path = `ws_path` |
+| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名 |
+| 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>` |
+| DNS | Tunnel 自动创建的 CNAME（橙云），源站 IP 不出现在任何 DNS 记录里 |
+| VPS 防火墙 | 入站只留 SSH（建议 SSH 也限制来源或改用 Cloudflare Access） |
+
+**移除 Reality 与可选传输**
+
+- 订阅生成（`xrayuri.ts`、`subformats.ts`）固定输出 ws + tls + 443，删除 Reality 分支和 `security`/`network` 判断
+- 服务端配置生成（`buildNodeXrayConfig`）固定输出 127.0.0.1 + ws + none，删除 TLS 证书和 Reality 分支；不再下发 Vision flow
+- 节点编辑页只保留 名称、域名、本地端口、WS Path；去掉 Network/Security/SNI/Reality 字段
+- 删除 `deploy/node-reality/`；nodes 表的 `security`、`network`、`server_name`、`reality_*` 列停用（D1 删列需重建表，暂不删）
 
 **Worker**
 
@@ -734,12 +742,9 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 - #3：每个用户 client 带 `email: "u{id}"`，打开 `stats`、`api`（StatsService）入站和 policy 的按用户统计
 - #5：配置版本号 = 用户集合 + 节点传输配置的哈希
 - #13：把商品的 `speed_limit_bps` 映射成 Xray 的 level/policy。如果 Xray 本身做不到按用户限速，就记为已知限制，推迟处理
-- 节点编辑页增加 `ingress` 选项。选 `tunnel` 时隐藏 security/端口相关字段并给出默认值
-
 **daemon**
 
 - #3：流量改为通过 Xray StatsService API 读取（`statsquery`，读后重置），不再读 `traffic_stats.json`
-- #4：Reality 私钥从本机环境变量 `XRAY_REALITY_PRIVATE_KEY` 注入配置，不进数据库
 - #29：流量快照在上报成功后才更新；拉配置失败的那一轮仍上报流量
 - #30：Xray 重启失败时重试；崩溃后自动拉起；daemon 退出时结束 Xray
 - #7：`node_id` 从配置接口响应里取，部署脚本不再写死
@@ -747,8 +752,7 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 
 **部署脚本**
 
-- `deploy-node-cf-ws.sh`：安装 cloudflared，用 Tunnel token 注册成系统服务，写好 ingress；不再需要源站证书
-- `deploy-node.sh`（Reality）：生成 x25519 密钥对，私钥写入 daemon 环境变量，打印公钥和 shortId 供后台填写
+- `deploy-node-cf-ws.sh`：安装 cloudflared，用 Tunnel token 注册成系统服务，写好 ingress；不再需要源站证书；脚本最后检查 Xray 端口未监听公网网卡
 
 ### 16.4 A3 认证与会话
 
@@ -761,13 +765,13 @@ Worker route 在 dashboard **一鍵禁用** → 流量瞬時回落舊 Go 源站�
 在一台测试 VPS 上完成下面全部步骤：
 
 - [ ] 用 `deploy-node-cf-ws.sh` 部署 Tunnel 节点；该 VPS 的公网上 Xray 端口不可达
-- [ ] 后台建节点（`ingress=tunnel`），给测试用户开通一个商品
+- [ ] 后台建节点，给测试用户开通一个商品
 - [ ] Clash Verge 导入 `/clash` 订阅、V2rayNG 导入 Base64 订阅，两者都能连上
 - [ ] 产生流量后，后台统计与用户已用流量在一个同步周期内更新
 - [ ] 把用户改为过期 / 超额 / 封禁，一个同步周期内连接被断开，订阅接口返回 403
 - [ ] 封禁再解封后，用户原订阅链接仍然可用
 - [ ] 管理员被降权后，下一次请求即失去后台权限
-- [ ] Reality 节点（`ingress=direct`）同样通过前四项
+- [ ] 从外网扫描该 VPS：除 SSH 外无开放端口；节点域名解析结果只有 Cloudflare IP
 
 ### 16.6 里程碑 B — 支付（暂缓）
 

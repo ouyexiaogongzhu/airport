@@ -21,12 +21,9 @@
 
 ## 代理协议与订阅格式
 
-节点类型（后台可配置 `network` / `security` / `ws_path` / `server_name` / Reality 公钥与 shortId）：
+**所有节点都经 Cloudflare 隐藏源站 IP**：VLESS 或 VMess over WebSocket，用户侧由 Cloudflare 边缘提供 TLS（443），回源走 cloudflared Tunnel 到节点本机的 `127.0.0.1`。节点 VPS 不开任何代理端口，DNS 里也没有源站 IP。Reality 直连方案已删除（见迁移方案 §1、§10）。
 
-| 模式 | 传输 | 说明 |
-| :--- | :--- | :--- |
-| CF-WS | VLESS 或 VMess over WebSocket + TLS，经 Cloudflare 代理 | 隐藏真实 IP，抗封锁，延迟较高；端口须为 CF 支持的 HTTPS 端口（443/2053/2083/2087/2096/8443） |
-| Reality | VLESS + Reality + Vision 直连 | 延迟最低，IP 可被探知 |
+> 代价：Cloudflare 被限速或干扰时没有直连备用线路；缓解方式见迁移方案 §10。当前代码仍保留 Reality 和源站 TLS 分支，按修复计划 §16.3 移除。
 
 订阅端点 `GET /api/v1/client/links/:token`：
 
@@ -51,8 +48,8 @@ airport/
 ├── daemon/              # 节点 daemon（Go：拉配置 + 流量上报）
 ├── deploy/
 │   ├── cloudflare/      # push-secrets.sh（Worker Secrets）、dump-to-seed.sh（旧数据迁移）
-│   ├── node-cf-ws/      # CF-WS 节点部署脚本
-│   ├── node-reality/    # Reality 节点部署脚本
+│   ├── node-cf-ws/      # 节点部署脚本（Xray + daemon + cloudflared Tunnel）
+│   ├── node-reality/    # 已废弃，按 §16.3 删除
 │   └── docs/lessons.md  # 开发经验总结（含已退役的 Go/Flutter 时期内容）
 └── .github/workflows/   # ci.yml（类型检查 + 测试 + 构建）、deploy-worker.yml
 ```
@@ -82,7 +79,7 @@ npx wrangler deploy
 
 ### 节点
 
-后台建节点 → 生成节点 token（`nd_...`）→ 在 VPS 上执行 `deploy/node-cf-ws/deploy-node-cf-ws.sh` 或 `deploy/node-reality/deploy-node.sh`。daemon 配置示例见 `daemon/daemon.example.json`。
+后台建节点 → 生成节点 token（`nd_...`）→ 在 VPS 上执行 `deploy/node-cf-ws/deploy-node-cf-ws.sh` → 在 Cloudflare Tunnel 里为 `node-xx.rfplay.uk` 配置回源到 `http://127.0.0.1:<节点端口>`。daemon 配置示例见 `daemon/daemon.example.json`。
 
 ## DNS（rfplay.uk）
 
@@ -91,8 +88,7 @@ npx wrangler deploy
 | `www` | CNAME | CF Pages（portal） |
 | `admin` | CNAME | CF Pages（admin） |
 | `api` | Worker Custom Domain | `rfplay-api`（wrangler 自动创建） |
-| `node-*` | A（橙云代理） | CF-WS 节点 IP |
-| Reality 节点 | A（灰云，不代理） | Reality 节点 IP |
+| `node-*` | CNAME（橙云） | `<tunnel-id>.cfargotunnel.com`（Tunnel 自动创建，不出现源站 IP） |
 
 ## 文档
 
