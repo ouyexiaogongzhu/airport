@@ -347,7 +347,9 @@ func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 	}
 	configPath := filepath.Join(s.cfg.DataDir, "xray.json")
 	// 0600: the config embeds every active subscriber's proxy credentials.
-	tmpPath := configPath + ".tmp"
+	// Suffix must end in ".json": Xray detects format from the filename and
+	// rejects bare ".tmp" with "Failed to get format".
+	tmpPath := configPath + ".tmp.json"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
