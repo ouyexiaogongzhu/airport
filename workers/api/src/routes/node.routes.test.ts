@@ -183,6 +183,7 @@ describe('POST /node/:token/traffic/report', () => {
     const { report, raw } = setup();
     const res = await report({
       node_id: 9,
+      batch_id: 'batch-0001',
       traffic: [
         { user_id: 2, upload_bytes: 100, download_bytes: 1000 },
         { user_id: 3, upload_bytes: 5, download_bytes: 0 },
@@ -213,17 +214,43 @@ describe('POST /node/:token/traffic/report', () => {
     expect(typeof node.h).toBe('string');
   });
 
+  it('同一 batch_id 重發 → deduplicated，流量不重複累計', async () => {
+    const { report, raw } = setup();
+    const payload = {
+      node_id: 9,
+      batch_id: 'resend-batch-1',
+      traffic: [{ user_id: 2, upload_bytes: 100, download_bytes: 1000 }],
+    };
+    expect((await report(payload)).status).toBe(200);
+
+    const replay = await report(payload);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual({ ok: true, deduplicated: true });
+    // 整批原子回滾：重發不追加 traffic_records、不再累加節點/用戶計數
+    expect(raw.prepare('SELECT COUNT(*) n FROM traffic_records').get()!.n).toBe(1);
+    expect(raw.prepare('SELECT traffic_up up FROM nodes WHERE id = 9').get()!.up).toBe(100);
+    expect(raw.prepare('SELECT traffic_used_bytes t FROM users WHERE id = 2').get()!.t).toBe(10 + 1100);
+
+    // 新 batch_id 正常入賬
+    expect(
+      (await report({ node_id: 9, batch_id: 'fresh-batch-02', traffic: [{ user_id: 2, upload_bytes: 1, download_bytes: 0 }] })).status,
+    ).toBe(200);
+    expect(raw.prepare('SELECT traffic_up up FROM nodes WHERE id = 9').get()!.up).toBe(101);
+  });
+
   it('超額後下一次拉配置即移除該用戶', async () => {
     const { report, getConfig, raw } = setup();
     raw.exec('UPDATE users SET traffic_limit_bytes = 1000 WHERE id = 2');
-    expect((await report({ traffic: [{ user_id: 2, upload_bytes: 0, download_bytes: 990 }] })).status).toBe(200);
+    expect(
+      (await report({ batch_id: 'batch-limit1', traffic: [{ user_id: 2, upload_bytes: 0, download_bytes: 990 }] })).status,
+    ).toBe(200);
     const cfg = ((await (await getConfig()).json()) as { config: XrayConfig }).config;
     expect(cfg._meta.user_ids).toEqual([]);
   });
 
   it('空批次只記心跳', async () => {
     const { report, raw } = setup();
-    const res = await report({ node_id: 9, traffic: [] });
+    const res = await report({ node_id: 9, batch_id: 'empty-batch1', traffic: [] });
     expect(res.status).toBe(200);
     expect(raw.prepare('SELECT COUNT(*) n FROM traffic_records').get()!.n).toBe(0);
     expect(typeof raw.prepare('SELECT last_heartbeat h FROM nodes WHERE id = 9').get()!.h).toBe('string');
@@ -247,10 +274,13 @@ describe('POST /node/:token/traffic/report', () => {
   });
 
   it.each([
-    ['node_id 不匹配', { node_id: 8, traffic: [] }],
-    ['traffic 不是數組', { traffic: {} }],
-    ['負數流量', { traffic: [{ user_id: 2, upload_bytes: -1, download_bytes: 0 }] }],
-    ['缺 user_id', { traffic: [{ upload_bytes: 1, download_bytes: 0 }] }],
+    ['缺 batch_id', { traffic: [] }],
+    ['batch_id 太短', { batch_id: 'ab', traffic: [] }],
+    ['batch_id 非法字符', { batch_id: 'bad/id!!', traffic: [] }],
+    ['node_id 不匹配', { node_id: 8, batch_id: 'batch-ok-01', traffic: [] }],
+    ['traffic 不是數組', { batch_id: 'batch-ok-01', traffic: {} }],
+    ['負數流量', { batch_id: 'batch-ok-01', traffic: [{ user_id: 2, upload_bytes: -1, download_bytes: 0 }] }],
+    ['缺 user_id', { batch_id: 'batch-ok-01', traffic: [{ upload_bytes: 1, download_bytes: 0 }] }],
   ])('%s → 400', async (_name, payload) => {
     const { report, raw } = setup();
     expect((await report(payload)).status).toBe(400);

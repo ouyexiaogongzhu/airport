@@ -9,7 +9,7 @@ import bcrypt from 'bcryptjs';
 import { verifyTurnstile } from '../lib/turnstile';
 import { ensureUserCredentials, issuePortalSession } from '../lib/portalSession';
 import { randomHex } from '../lib/csrf';
-import { isValidEmail, sanitizedUser, type UserRow } from '../lib/user';
+import { isValidEmail, sanitizedUser, DUMMY_BCRYPT_HASH, type UserRow } from '../lib/user';
 import type { Env } from '../index';
 
 // Go bcrypt.DefaultCost == bcryptjs 預設 rounds == 10，顯式寫出以免漂移
@@ -199,6 +199,7 @@ export function publicRoutes() {
 
     const user = await findUserByIdentifier(c.env.DB, username);
     if (!user) {
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH); // 抹平時序差異，防用戶名枚舉
       return c.json({ error: 'invalid username or password' }, 401);
     }
 

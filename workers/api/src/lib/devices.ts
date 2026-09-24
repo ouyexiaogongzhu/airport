@@ -119,26 +119,32 @@ export async function touchDevice(
   }
 
   // Re-check limit inside INSERT to shrink the concurrent-insert race window.
-  const insert = await db
-    .prepare(
-      'INSERT INTO user_devices (user_id, device_fingerprint, device_name, platform, user_agent, last_seen, created_at) ' +
-        'SELECT ?, ?, ?, ?, ?, ?, ? WHERE ? = 0 OR (SELECT COUNT(*) FROM user_devices WHERE user_id = ?) < ?',
-    )
-    .bind(
-      userId,
-      identity.fingerprint,
-      identity.deviceName,
-      identity.platform,
-      identity.userAgent || null,
-      now,
-      now,
-      maxDevices,
-      userId,
-      maxDevices,
-    )
-    .run();
+  let insert: D1Result | null = null;
+  try {
+    insert = await db
+      .prepare(
+        'INSERT INTO user_devices (user_id, device_fingerprint, device_name, platform, user_agent, last_seen, created_at) ' +
+          'SELECT ?, ?, ?, ?, ?, ?, ? WHERE ? = 0 OR (SELECT COUNT(*) FROM user_devices WHERE user_id = ?) < ?',
+      )
+      .bind(
+        userId,
+        identity.fingerprint,
+        identity.deviceName,
+        identity.platform,
+        identity.userAgent || null,
+        now,
+        now,
+        maxDevices,
+        userId,
+        maxDevices,
+      )
+      .run();
+  } catch {
+    // max_devices = 0 時 WHERE 恆真：並發同指紋首拉會撞 UNIQUE(user_id, fingerprint)
+    // 拋異常而非 changes=0。視同「已存在」，走下方回查。
+  }
 
-  if ((insert.meta.changes ?? 0) === 0) {
+  if (!insert || (insert.meta.changes ?? 0) === 0) {
     // Lost race, or limit hit — confirm whether fingerprint landed anyway.
     const again = await db
       .prepare('SELECT id FROM user_devices WHERE user_id = ? AND device_fingerprint = ? LIMIT 1')

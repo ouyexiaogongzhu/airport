@@ -31,7 +31,8 @@
           Checking payment status… {{ Math.floor(pollElapsed / 1000) }}s
         </div>
         <div v-if="pollElapsed > maxPollTime" class="timeout-warning">
-          This is taking longer than usual. The page will auto-refresh. You can also check your order status in <router-link to="/account">Account</router-link>.
+          This is taking longer than usual. You can also check your order status in <router-link to="/account">Account</router-link>.
+          <button class="btn-outline check-btn" type="button" @click="restartPolling">Check again</button>
         </div>
       </div>
 
@@ -147,6 +148,12 @@ function startPolling() {
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
+}
+
+// 超时停轮询后由「Check again」手动恢复，界面不再假装还在检查
+function restartPolling() {
+  pollElapsed.value = 0
+  startPolling()
 }
 
 onMounted(async () => {

@@ -164,18 +164,19 @@ describe('Google OAuth', () => {
     expect(row.username.length).toBeGreaterThan(0);
   });
 
-  it('callback links existing email account', async () => {
+  it('callback 不自動綁定既有 email 帳號（防帳號預占），要求密碼登入', async () => {
     const { db } = setup();
     const r = await findOrCreateGoogleUser(db, {
       sub: 'google-sub-alice',
       email: 'alice@example.com',
       name: 'Alice',
     });
-    expect('user' in r).toBe(true);
-    if ('user' in r) {
-      expect(r.user.id).toBe(2);
-      expect(r.user.google_sub).toBe('google-sub-alice');
-    }
+    expect('error' in r).toBe(true);
+    if ('error' in r) expect(r.error).toBe('email registered');
+    const row = (await db.prepare('SELECT google_sub FROM users WHERE id = 2').first()) as {
+      google_sub: string | null;
+    };
+    expect(row.google_sub).toBeNull();
   });
 
   it('rejects invalid state', async () => {

@@ -37,6 +37,9 @@
           <span class="poll-dot"></span>
           Checking… {{ Math.floor(pollElapsed / 1000) }}s
         </div>
+        <button v-if="pollElapsed >= 30_000" class="btn-outline check-btn" type="button" @click="restartPolling">
+          Check again
+        </button>
       </div>
 
       <!-- Not found -->
@@ -131,6 +134,12 @@ function startPolling() {
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
+}
+
+// 超时停轮询后由「Check again」手动恢复
+function restartPolling() {
+  pollElapsed.value = 0
+  startPolling()
 }
 
 onMounted(async () => {

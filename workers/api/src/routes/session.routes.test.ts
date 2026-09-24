@@ -176,6 +176,49 @@ describe('/auth/refresh', () => {
   });
 });
 
+describe('refresh 換發（7 天 + 寬限）', () => {
+  it('portal：回新 refresh_token + 新 refresh cookie；新舊 token 都可用', async () => {
+    const { req, bearer, tokens } = setup();
+    const old = (await tokens(2)).refresh;
+    const r = await req('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: old }) });
+    expect(r.status).toBe(200);
+    const { token, refresh_token } = (await r.json()) as { token: string; refresh_token: string };
+    expect(refresh_token).not.toBe(old);
+    const cookie = setCookies(r).find((v) => v.startsWith('refresh='))!;
+    expect(cookie.split(';')[0]).toBe(`refresh=${refresh_token}`);
+    expect((await req('/auth/validate', bearer(token))).status).toBe(200);
+    // 寬限：舊 refresh 不作廢，仍可換發
+    expect((await req('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: old }) })).status).toBe(200);
+    // 新 refresh 可用（r2 200 即證明；同秒內兩次簽發 JWT 可能逐位相同，不比不等）
+    const r2 = await req('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token }) });
+    expect(r2.status).toBe(200);
+    expect(typeof ((await r2.json()) as { refresh_token: string }).refresh_token).toBe('string');
+  });
+
+  it('admin：換發回新 refresh_token 並重發 admin_refresh cookie', async () => {
+    const { req, tokens } = setup();
+    const a = await tokens(1);
+    const r = await req('/admin/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: a.refresh }) });
+    expect(r.status).toBe(200);
+    const { refresh_token } = (await r.json()) as { refresh_token: string };
+    expect(refresh_token).not.toBe(a.refresh);
+    const cookie = setCookies(r).find((v) => v.startsWith('admin_refresh='))!;
+    expect(cookie.split(';')[0]).toBe(`admin_refresh=${refresh_token}`);
+    expect((await req('/admin/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token }) })).status).toBe(200);
+  });
+
+  it('存量長壽命 refresh（8 天）被壽命校驗拒絕：部署切換點', async () => {
+    const { req } = setup();
+    const legacy = await signJwt(
+      { user_id: 2, username: 'alice', role: 'user', tv: 0, typ: 'refresh' },
+      SECRET,
+      8 * 24 * 3600,
+    );
+    const r = await req('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: legacy }) });
+    expect(r.status).toBe(401);
+  });
+});
+
 describe('退出', () => {
   it('portal 退出後 access 與 refresh 全部失效（含其他設備）', async () => {
     const { req, bearer, tokens } = setup();
@@ -202,13 +245,24 @@ describe('退出', () => {
     expect((await req('/auth/validate', bearer(fresh.bearer))).status).toBe(200);
   });
 
-  it('後台退出吊銷 admin 會話', async () => {
+  it('後台退出吊銷 admin 會話（cookie 通道需 CSRF 雙提交）', async () => {
     const { req, bearer, tokens } = setup();
     const a = await tokens(1);
-    const out = await req('/admin/auth/logout', { method: 'POST', headers: { Cookie: `admin_session=${a.session}` } });
+    const out = await req('/admin/auth/logout', {
+      method: 'POST',
+      headers: { Cookie: `admin_session=${a.session}; admin_csrf=ct`, 'X-CSRF-Token': 'ct' },
+    });
     expect(out.status).toBe(200);
     expect(setCookies(out).every((v) => v.startsWith('admin_'))).toBe(true);
     expect((await req('/admin/users', bearer(a.bearer))).status).toBe(401);
+  });
+
+  it('退出缺 CSRF（純 cookie 通道）→ 403，不吊銷', async () => {
+    const { req, tokens } = setup();
+    const a = await tokens(1);
+    const out = await req('/admin/auth/logout', { method: 'POST', headers: { Cookie: `admin_session=${a.session}` } });
+    expect(out.status).toBe(403);
+    expect((await req('/admin/auth/validate', { headers: { Cookie: `admin_session=${a.session}` } })).status).toBe(200);
   });
 });
 

@@ -78,6 +78,8 @@ const OAUTH_ERRORS: Record<string, string> = {
   userinfo_failed: 'Could not read Google profile',
   email_unverified: 'Please use a verified Google email',
   invalid_email: 'Google account email is invalid',
+  email_registered: 'This email is already registered — please sign in with your password',
+  email_linked: 'This email is already linked to another Google account',
   account_disabled: 'This account is not active',
   create_failed: 'Could not create account from Google',
   session_failed: 'Signed in but session could not be established',

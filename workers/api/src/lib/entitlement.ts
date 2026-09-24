@@ -91,6 +91,48 @@ export async function runEntitlementMaintenance(db: D1Database, now: number): Pr
           ' traffic_period_start = traffic_period_start + CAST((? - traffic_period_start) / ? AS INTEGER) * ?, updated_at = ?' +
           " WHERE subscription_status = 'active' AND traffic_period_start > 0 AND ? - traffic_period_start >= ?",
       )
-      .bind(now, TRAFFIC_PERIOD, TRAFFIC_PERIOD, ts, now, TRAFFIC_PERIOD),
+        .bind(now, TRAFFIC_PERIOD, TRAFFIC_PERIOD, ts, now, TRAFFIC_PERIOD),
   ]);
+
+  // traffic_records 保留 14 天：先聚合進 traffic_daily，同一 batch 內刪除明細（原子，防重複累加）
+  const cutoff = new Date((now - 14 * DAY) * 1000).toISOString();
+  const oldRows =
+    (
+      await db
+        .prepare('SELECT COUNT(*) AS n FROM traffic_records WHERE recorded_at < ?')
+        .bind(cutoff)
+        .first<{ n: number }>()
+    )?.n ?? 0;
+  if (oldRows > 0) {
+    const results = await db.batch([
+      db
+        .prepare(
+          'INSERT INTO traffic_daily (day, upload_bytes, download_bytes, records) ' +
+            'SELECT substr(recorded_at, 1, 10), SUM(upload_bytes), SUM(download_bytes), COUNT(*) ' +
+            'FROM traffic_records WHERE recorded_at < ? GROUP BY substr(recorded_at, 1, 10) ' +
+            'ON CONFLICT(day) DO UPDATE SET upload_bytes = upload_bytes + excluded.upload_bytes,' +
+            ' download_bytes = download_bytes + excluded.download_bytes, records = records + excluded.records',
+        )
+        .bind(cutoff),
+      db.prepare('DELETE FROM traffic_records WHERE recorded_at < ?').bind(cutoff),
+    ]);
+    console.log(
+      JSON.stringify({
+        event: 'traffic_daily_maintenance',
+        aggregated_rows: oldRows,
+        deleted_rows: results[1]?.meta?.changes ?? 0,
+        cutoff,
+      }),
+    );
+  }
+
+  // traffic_batches 去重表只留 7 天；表可能尚不存在（0008 部署順序靠後、cron 可能先跑），吞錯
+  try {
+    await db
+      .prepare('DELETE FROM traffic_batches WHERE recorded_at < ?')
+      .bind(new Date((now - 7 * DAY) * 1000).toISOString())
+      .run();
+  } catch (e) {
+    console.log(JSON.stringify({ event: 'traffic_batches_cleanup_skipped', error: String(e) }));
+  }
 }

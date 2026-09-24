@@ -84,7 +84,7 @@ describe('csrf', () => {
   });
 });
 
-describe('cookies (portal 2h / admin 30d / refresh 90d)', () => {
+describe('cookies (portal 2h / admin 30d / refresh 7d)', () => {
   it('portal session cookie: 2h, HttpOnly, Secure, SameSite=None, Path=/', () => {
     const v = sessionCookie('session', 'tok', undefined);
     expect(v).toContain('session=tok');
@@ -104,10 +104,10 @@ describe('cookies (portal 2h / admin 30d / refresh 90d)', () => {
     expect(ADMIN_SESSION_TTL).toBe(30 * 24 * 3600);
   });
 
-  it('refresh cookie: 90d', () => {
+  it('refresh cookie: 7d', () => {
     const v = refreshCookie('refresh', 'tok');
     expect(v).toContain(`Max-Age=${REFRESH_TTL}`);
-    expect(REFRESH_TTL).toBe(90 * 24 * 3600);
+    expect(REFRESH_TTL).toBe(7 * 24 * 3600);
   });
 
   it('csrf cookie: not HttpOnly; TTL follows portal vs admin cookie name', () => {

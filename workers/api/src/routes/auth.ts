@@ -11,32 +11,27 @@ import { verifyJwt } from '../lib/jwt';
 import { resolveJwtMaterial, verifySecrets } from '../lib/jwtkeys';
 import { verifyTurnstile } from '../lib/turnstile';
 import {
-  PORTAL_SESSION_TTL,
-  ADMIN_SESSION_TTL,
   sessionCookie,
   refreshCookie,
   csrfCookie,
   clearAuthCookies,
   clearHostOnlyAuthCookies,
 } from '../lib/cookies';
-import { randomHex } from '../lib/csrf';
+import { randomHex, constantTimeEqual } from '../lib/csrf';
 import {
   authenticate,
   authenticateAccessCandidates,
   bumpTokenVersion,
   signTokens,
-  signAccess,
-  BEARER_TTL,
-  PORTAL_BEARER_TTL,
   type SessionUser,
 } from '../lib/session';
-import { sanitizedUser, USER_PROFILE_COLS, type UserRow } from '../lib/user';
+import { sanitizedUser, USER_PROFILE_COLS, DUMMY_BCRYPT_HASH, type UserRow } from '../lib/user';
 import type { Env } from '../index';
 
 type AppEnv = { Bindings: Env; Variables: { userId: number; role: string } };
 type UserWithHash = UserRow & { password_hash: string; token_version: number };
 
-// setAdminAuthCookies：admin_session(30d) + admin_refresh(90d) + admin_csrf(30d 非 httpOnly)
+// setAdminAuthCookies：admin_session(30d) + admin_refresh(7d 換發) + admin_csrf(30d 非 httpOnly)
 async function issueAdminCookies(c: Context<AppEnv>, user: SessionUser | UserWithHash) {
   const material = await resolveJwtMaterial(c.env);
   if (!material) return null;
@@ -104,6 +99,18 @@ async function revokeFromRequest(c: Context<AppEnv>, names: string[]) {
   }
 }
 
+// Logout 的會話 cookie 是 SameSite=None：不做 CSRF 校驗的話，任意網站可跨站強制登出
+// 受害者（token_version+1 連 localStorage Bearer 一起吊銷）。cookie 通道要求雙提交；
+// Bearer / body refresh_token 非 cookie 通道，免疫 CSRF，照常豁免。
+async function logoutCsrfOk(c: Context<AppEnv>, csrfCookieName: string): Promise<boolean> {
+  const body = await c.req.json<{ refresh_token?: unknown }>().catch(() => null);
+  if (c.req.header('Authorization')) return true;
+  if (typeof body?.refresh_token === 'string' && body.refresh_token !== '') return true;
+  const header = c.req.header('X-CSRF-Token');
+  const cookie = getCookie(c, csrfCookieName);
+  return !!(header && cookie && constantTimeEqual(header, cookie));
+}
+
 export function authRoutes() {
   const app = new Hono<AppEnv>();
 
@@ -147,18 +154,20 @@ export function authRoutes() {
     return c.json({ user: sanitizedUser(user), role: user.role });
   });
 
-  // Refresh：只校驗 refresh token（access 過期也能續），重簽 session cookie 並回傳新 Bearer
+  // Refresh：只校驗 refresh token（access 過期也能續），重簽 session cookie 並「用時換發」refresh
+  //（新簽 7 天 refresh：cookie + JSON 同步更新供 pages.dev localStorage 兜底；舊 refresh 不作廢＝寬限，不 bump token_version）
   app.post('/auth/refresh', async (c) => {
     const user = await refreshUser(c, 'refresh');
     if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     const material = await resolveJwtMaterial(c.env);
     if (!material) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    c.header(
-      'Set-Cookie',
-      sessionCookie('session', await signAccess(user, material, PORTAL_SESSION_TTL), c.env.COOKIE_DOMAIN),
-      { append: true },
-    );
-    return c.json({ ok: true, token: await signAccess(user, material, PORTAL_BEARER_TTL) });
+    const t = await signTokens(user, material, 'portal');
+    c.header('Set-Cookie', sessionCookie('session', t.session, c.env.COOKIE_DOMAIN), { append: true });
+    c.header('Set-Cookie', refreshCookie('refresh', t.refresh, c.env.COOKIE_DOMAIN), { append: true });
+    // session 續了命，csrf cookie 也要跟著續（2h 過期後純 cookie 模式的寫請求會 403）
+    const csrfVal = getCookie(c, 'csrf');
+    c.header('Set-Cookie', csrfCookie('csrf', csrfVal || randomHex(32), c.env.COOKIE_DOMAIN), { append: true });
+    return c.json({ ok: true, token: t.bearer, refresh_token: t.refresh });
   });
 
   app.post('/admin/auth/refresh', async (c) => {
@@ -167,17 +176,18 @@ export function authRoutes() {
     if (user.role !== 'admin') return c.json({ error: 'admin access required' }, 403);
     const material = await resolveJwtMaterial(c.env);
     if (!material) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    c.header(
-      'Set-Cookie',
-      sessionCookie('admin_session', await signAccess(user, material, ADMIN_SESSION_TTL), c.env.COOKIE_DOMAIN),
-      { append: true },
-    );
-    return c.json({ ok: true, token: await signAccess(user, material, BEARER_TTL) });
+    const t = await signTokens(user, material, 'admin');
+    c.header('Set-Cookie', sessionCookie('admin_session', t.session, c.env.COOKIE_DOMAIN), { append: true });
+    c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh, c.env.COOKIE_DOMAIN), { append: true });
+    const adminCsrfVal = getCookie(c, 'admin_csrf');
+    c.header('Set-Cookie', csrfCookie('admin_csrf', adminCsrfVal || randomHex(32), c.env.COOKIE_DOMAIN), { append: true });
+    return c.json({ ok: true, token: t.bearer, refresh_token: t.refresh });
   });
 
   // Logout：吊銷該用戶全部會話（token_version+1），清全部 6 個 cookie（portal + admin）；
   // 會話已失效也照樣清 cookie
   app.post('/auth/logout', async (c) => {
+    if (!(await logoutCsrfOk(c, 'csrf'))) return c.json({ error: 'CSRF_INVALID' }, 403);
     await revokeFromRequest(c, ['session', 'refresh']);
     for (const v of clearAuthCookies(c.env.COOKIE_DOMAIN)) {
       c.header('Set-Cookie', v, { append: true });
@@ -216,6 +226,7 @@ export function authRoutes() {
 
     const user = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(u).first<UserWithHash>();
     if (!user) {
+      await bcrypt.compare(p, DUMMY_BCRYPT_HASH); // 抹平時序差異，防管理員帳號枚舉
       return c.json({ error: 'invalid username or password' }, 401);
     }
     const valid = await bcrypt.compare(p, user.password_hash);
@@ -238,6 +249,7 @@ export function authRoutes() {
 
   // AdminLogout：吊銷會話，只清 admin 三件套
   app.post('/admin/auth/logout', async (c) => {
+    if (!(await logoutCsrfOk(c, 'admin_csrf'))) return c.json({ error: 'CSRF_INVALID' }, 403);
     await revokeFromRequest(c, ['admin_session', 'admin_refresh']);
     for (const v of clearAuthCookies(c.env.COOKIE_DOMAIN)) {
       if (v.startsWith('admin_')) c.header('Set-Cookie', v, { append: true });

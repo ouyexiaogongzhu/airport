@@ -45,9 +45,14 @@ function portalBase(env: Env): string {
   return (env.PORTAL_URL || 'https://xv.rfplay.uk').replace(/\/$/, '');
 }
 
-function oauthErrorRedirect(env: Env, code: string): Response {
-  const url = `${portalBase(env)}/login?oauth_error=${encodeURIComponent(code)}`;
-  return Response.redirect(url, 302);
+function oauthErrorUrl(env: Env, code: string): string {
+  return `${portalBase(env)}/login?oauth_error=${encodeURIComponent(code)}`;
+}
+
+// 必須用 c.redirect（走 c.newResponse，合併先前 c.header 的 Set-Cookie）；
+// 裸 Response.redirect 會丟掉 clearOAuthStateCookie，state cookie 殘留到 TTL。
+function oauthErrorRedirect(c: { env: Env; redirect: (url: string, status: 302) => Response }, code: string): Response {
+  return c.redirect(oauthErrorUrl(c.env, code), 302);
 }
 
 function clearOAuthStateCookie(): string {
@@ -101,17 +106,14 @@ async function findOrCreateGoogleUser(
 
   if (byEmail) {
     if (byEmail.status !== 'active') return { error: 'account is not active', status: 403 };
-    if (byEmail.google_sub && byEmail.google_sub !== info.sub) {
-      return { error: 'email already linked to another Google account', status: 409 };
-    }
-    if (!byEmail.google_sub) {
-      await db
-        .prepare('UPDATE users SET google_sub = ?, updated_at = ? WHERE id = ?')
-        .bind(info.sub, new Date().toISOString(), byEmail.id)
-        .run();
-      byEmail.google_sub = info.sub;
-    }
-    return { user: byEmail };
+    if (byEmail.google_sub === info.sub) return { user: byEmail };
+    // 本地帳號的 email 從未驗證（註冊/改信箱僅查重）：不得自動綁定 google_sub，
+    // 否則攻擊者可註冊填受害者 Gmail → 受害者 Google 登入被導進攻擊者帳號（帳號預占接管）。
+    // 已綁其他 Google 帳號或從未綁定：一律要求密碼登入；綁定日後做帳號內手動流程。
+    return {
+      error: byEmail.google_sub ? 'email already linked to another Google account' : 'email registered',
+      status: 409,
+    };
   }
 
   // 新建 OAuth 用戶：不可登入密碼的隨機 hash
@@ -189,7 +191,7 @@ export function oauthRoutes() {
 
   app.get('/public/oauth/google/start', (c) => {
     if (!googleConfigured(c.env)) {
-      return oauthErrorRedirect(c.env, 'google_not_configured');
+      return oauthErrorRedirect(c, 'google_not_configured');
     }
     const state = randomHex(16);
     const params = new URLSearchParams({
@@ -207,13 +209,13 @@ export function oauthRoutes() {
 
   app.get('/public/oauth/google/callback', async (c) => {
     if (!googleConfigured(c.env)) {
-      return oauthErrorRedirect(c.env, 'google_not_configured');
+      return oauthErrorRedirect(c, 'google_not_configured');
     }
 
     const err = c.req.query('error');
     if (err) {
       c.header('Set-Cookie', clearOAuthStateCookie(), { append: true });
-      return oauthErrorRedirect(c.env, err === 'access_denied' ? 'access_denied' : 'google_denied');
+      return oauthErrorRedirect(c, err === 'access_denied' ? 'access_denied' : 'google_denied');
     }
 
     const code = c.req.query('code');
@@ -222,7 +224,7 @@ export function oauthRoutes() {
     c.header('Set-Cookie', clearOAuthStateCookie(), { append: true });
 
     if (!code || !state || !cookieState || state !== cookieState) {
-      return oauthErrorRedirect(c.env, 'invalid_state');
+      return oauthErrorRedirect(c, 'invalid_state');
     }
 
     const redir = redirectUri(c);
@@ -240,16 +242,16 @@ export function oauthRoutes() {
         }),
       });
     } catch {
-      return oauthErrorRedirect(c.env, 'token_exchange_failed');
+      return oauthErrorRedirect(c, 'token_exchange_failed');
     }
 
     if (!tokenRes.ok) {
-      return oauthErrorRedirect(c.env, 'token_exchange_failed');
+      return oauthErrorRedirect(c, 'token_exchange_failed');
     }
 
     const tokenJson = (await tokenRes.json()) as { access_token?: string };
     if (!tokenJson.access_token) {
-      return oauthErrorRedirect(c.env, 'token_exchange_failed');
+      return oauthErrorRedirect(c, 'token_exchange_failed');
     }
 
     let infoRes: Response;
@@ -258,10 +260,10 @@ export function oauthRoutes() {
         headers: { Authorization: `Bearer ${tokenJson.access_token}` },
       });
     } catch {
-      return oauthErrorRedirect(c.env, 'userinfo_failed');
+      return oauthErrorRedirect(c, 'userinfo_failed');
     }
     if (!infoRes.ok) {
-      return oauthErrorRedirect(c.env, 'userinfo_failed');
+      return oauthErrorRedirect(c, 'userinfo_failed');
     }
 
     const info = (await infoRes.json()) as GoogleUserInfo;
@@ -269,11 +271,11 @@ export function oauthRoutes() {
     const emailRaw = typeof info.email === 'string' ? info.email : '';
     const verified = info.email_verified === true || info.email_verified === 'true';
     if (!sub || !emailRaw || !verified) {
-      return oauthErrorRedirect(c.env, 'email_unverified');
+      return oauthErrorRedirect(c, 'email_unverified');
     }
     const email = normalizeEmail(emailRaw);
     if (!isValidEmail(email)) {
-      return oauthErrorRedirect(c.env, 'invalid_email');
+      return oauthErrorRedirect(c, 'invalid_email');
     }
 
     const result = await findOrCreateGoogleUser(c.env.DB, {
@@ -282,12 +284,20 @@ export function oauthRoutes() {
       name: typeof info.name === 'string' ? info.name : undefined,
     });
     if ('error' in result) {
-      return oauthErrorRedirect(c.env, result.error === 'account is not active' ? 'account_disabled' : 'create_failed');
+      const code =
+        result.error === 'account is not active'
+          ? 'account_disabled'
+          : result.error === 'email registered'
+            ? 'email_registered'
+            : result.error === 'email already linked to another Google account'
+              ? 'email_linked'
+              : 'create_failed';
+      return oauthErrorRedirect(c, code);
     }
 
     const tokens = await issuePortalSession(c, result.user);
     if (!tokens) {
-      return oauthErrorRedirect(c.env, 'session_failed');
+      return oauthErrorRedirect(c, 'session_failed');
     }
 
     // Domain=rfplay.uk session cookie 對 xv.rfplay.uk 可見；直接進 dashboard

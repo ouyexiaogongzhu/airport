@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ouyexiaogongzhu/airport/gateway/internal/config"
 	"github.com/ouyexiaogongzhu/airport/gateway/internal/server"
@@ -88,8 +89,10 @@ func main() {
 		exitCode = 1
 	}
 
-	_ = srv.Shutdown()
+	// Flush traffic first (bounded by Stop's internal wait), then the local
+	// HTTP API — an unbounded Shutdown here would skip the flush entirely.
 	syncer.Stop()
+	_ = srv.App().ShutdownWithTimeout(5 * time.Second)
 	os.Exit(exitCode)
 }
 

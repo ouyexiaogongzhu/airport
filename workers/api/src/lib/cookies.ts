@@ -5,8 +5,8 @@
 export const PORTAL_SESSION_TTL = 2 * 3600;
 /** Admin access session（admin_session cookie + JWT）：30 天（既有行為） */
 export const ADMIN_SESSION_TTL = 30 * 24 * 3600;
-/** Refresh token（portal refresh + admin_refresh）：90 天，不變 */
-export const REFRESH_TTL = 90 * 24 * 3600;
+/** Refresh token（portal refresh + admin_refresh）：7 天，/auth/refresh 成功時換發 */
+export const REFRESH_TTL = 7 * 24 * 3600;
 
 /** @deprecated 請改用 PORTAL_SESSION_TTL / ADMIN_SESSION_TTL；保留別名以免外部誤用 */
 export const SESSION_TTL = PORTAL_SESSION_TTL;

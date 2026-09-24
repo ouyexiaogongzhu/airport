@@ -55,3 +55,6 @@ export function sanitizedUser(u: UserRow): Record<string, unknown> {
     billing_address: u.billing_address ?? null,
   };
 }
+
+/** 佔位 bcrypt hash：用戶不存在時也跑一次 compare，抹平時序差異（防用戶名枚舉） */
+export const DUMMY_BCRYPT_HASH = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';

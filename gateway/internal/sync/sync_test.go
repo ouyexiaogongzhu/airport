@@ -404,6 +404,10 @@ func TestReportTraffic_ReportsResetCounters(t *testing.T) {
 	if nodeID := int(gotBody["node_id"].(float64)); nodeID != 7 {
 		t.Fatalf("expected node_id 7, got %d", nodeID)
 	}
+	batchID, _ := gotBody["batch_id"].(string)
+	if len(batchID) != 32 { // 16 random bytes hex
+		t.Fatalf("expected a 32-char batch_id in payload, got %q", gotBody["batch_id"])
+	}
 	traffic := gotBody["traffic"].([]interface{})
 	if len(traffic) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(traffic))
@@ -428,18 +432,21 @@ func TestReportTraffic_ReportsResetCounters(t *testing.T) {
 
 func TestReportTraffic_KeepsPendingOnFailure(t *testing.T) {
 	fail := true
-	var gotBody map[string]interface{}
+	var bodies []map[string]interface{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&b)
+		bodies = append(bodies, b)
 		if fail {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
-		json.NewDecoder(r.Body).Decode(&gotBody)
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer ts.Close()
 
 	syncer := setupTestSyncer(t, ts.URL)
+	syncer.nodeID = 7
 	syncer.queryStats = fakeStats(
 		map[uint]TrafficDelta{1: {Upload: 100, Download: 200}},
 		map[uint]TrafficDelta{1: {Upload: 1, Download: 2}, 2: {Upload: 0, Download: 5}},
@@ -451,21 +458,39 @@ func TestReportTraffic_KeepsPendingOnFailure(t *testing.T) {
 	if got := syncer.pending[1]; got.Upload != 100 || got.Download != 200 {
 		t.Fatalf("expected traffic kept pending after failure, got %+v", got)
 	}
+	if syncer.outstandingBatch == nil {
+		t.Fatal("expected an outstanding batch after failed report")
+	}
+	if _, err := os.Stat(filepath.Join(syncer.cfg.DataDir, "pending.json")); err != nil {
+		t.Fatalf("outstanding batch must be persisted as soon as it is created: %v", err)
+	}
 
 	fail = false
 	if err := syncer.reportTraffic(); err != nil {
 		t.Fatalf("reportTraffic error: %v", err)
 	}
-	byUser := map[int][2]float64{}
-	for _, e := range gotBody["traffic"].([]interface{}) {
-		m := e.(map[string]interface{})
-		byUser[int(m["user_id"].(float64))] = [2]float64{m["upload_bytes"].(float64), m["download_bytes"].(float64)}
+	if len(bodies) != 2 {
+		t.Fatalf("expected two report attempts, got %d", len(bodies))
 	}
-	if byUser[1] != [2]float64{101, 202} || byUser[2] != [2]float64{0, 5} {
-		t.Errorf("expected failed batch merged into next report, got %v", byUser)
+	// The retry must be identical (same batch_id, same entries) so the
+	// worker's dedup table hits — NOT merged with the newly collected traffic.
+	if bodies[0]["batch_id"] != bodies[1]["batch_id"] {
+		t.Fatalf("expected identical batch_id on retry, got %v then %v", bodies[0]["batch_id"], bodies[1]["batch_id"])
 	}
-	if len(syncer.pending) != 0 {
-		t.Errorf("expected pending cleared, got %v", syncer.pending)
+	firstJSON, _ := json.Marshal(bodies[0])
+	secondJSON, _ := json.Marshal(bodies[1])
+	if string(firstJSON) != string(secondJSON) {
+		t.Errorf("expected identical retry body, got %s then %s", firstJSON, secondJSON)
+	}
+	if syncer.outstandingBatch != nil {
+		t.Errorf("expected outstanding batch cleared after 200")
+	}
+	// Traffic collected while the batch was in flight stays pending.
+	if got := syncer.pending[1]; got.Upload != 1 || got.Download != 2 {
+		t.Errorf("expected newly collected traffic kept pending, got %+v", syncer.pending[1])
+	}
+	if got := syncer.pending[2]; got.Upload != 0 || got.Download != 5 {
+		t.Errorf("expected user 2 kept pending, got %+v", syncer.pending[2])
 	}
 }
 
@@ -555,4 +580,93 @@ func TestStop_Idempotent(t *testing.T) {
 	syncer := setupTestSyncer(t, "http://localhost:9999")
 	syncer.Stop()
 	syncer.Stop()
+}
+
+// TestReportTraffic_ChunksOver4000: more than 4000 pending users must not hit
+// the worker's per-report limit; the surplus stays pending for a next batch.
+func TestReportTraffic_ChunksOver4000(t *testing.T) {
+	var gotCount int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&b)
+		gotCount = len(b["traffic"].([]interface{}))
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	syncer := setupTestSyncer(t, ts.URL)
+	stats := make(map[uint]TrafficDelta, 4001)
+	for i := uint(1); i <= 4001; i++ {
+		stats[i] = TrafficDelta{Upload: 1}
+	}
+	syncer.queryStats = fakeStats(stats)
+
+	if err := syncer.reportTraffic(); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	if gotCount != 4000 {
+		t.Errorf("expected the batch capped at 4000 entries, got %d", gotCount)
+	}
+	if len(syncer.pending) != 1 {
+		t.Errorf("expected 1 user left pending for the next batch, got %d", len(syncer.pending))
+	}
+
+	// Next round: the remainder goes out in a fresh batch.
+	gotCount = 0
+	if err := syncer.reportTraffic(); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	if gotCount != 1 || len(syncer.pending) != 0 {
+		t.Errorf("expected the remainder reported and pending cleared, got %d entries, pending %v", gotCount, syncer.pending)
+	}
+}
+
+// TestLoadPending_LegacyAndOutstanding: the old bare-map pending.json still
+// loads, and a persisted in-flight batch is restored so a crash cannot turn a
+// resent batch into a double count.
+func TestLoadPending_LegacyAndOutstanding(t *testing.T) {
+	syncer := setupTestSyncer(t, "http://localhost:9999")
+
+	// Old format: bare map of deltas.
+	if err := os.WriteFile(filepath.Join(syncer.cfg.DataDir, "pending.json"),
+		[]byte(`{"1":{"Upload":100,"Download":200}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	syncer.loadPending()
+	if got := syncer.pending[1]; got.Upload != 100 || got.Download != 200 {
+		t.Fatalf("legacy pending not restored: %+v", syncer.pending)
+	}
+	if syncer.outstandingBatch != nil {
+		t.Errorf("unexpected outstanding batch from legacy file")
+	}
+
+	// New format with an in-flight batch.
+	syncer2 := setupTestSyncer(t, "http://localhost:9999")
+	var gotBody map[string]interface{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	sent := &outstandingReport{BatchID: "abcdef1234567890", Entries: []reportEntry{{UserID: 1, UploadBytes: 7, DownloadBytes: 8}}}
+	syncer2.mu.Lock()
+	syncer2.pending[1] = TrafficDelta{Upload: 7, Download: 8}
+	syncer2.outstandingBatch = sent
+	syncer2.persistPendingLocked()
+	syncer2.mu.Unlock()
+
+	// A fresh process reloads from the same dir and must resend the same batch.
+	syncer3 := setupTestSyncer(t, ts.URL)
+	syncer3.cfg.DataDir = syncer2.cfg.DataDir
+	syncer3.loadPending()
+	if err := syncer3.reportTraffic(); err != nil {
+		t.Fatalf("reportTraffic error: %v", err)
+	}
+	if gotBody["batch_id"] != sent.BatchID {
+		t.Errorf("expected restored batch %q to be resent, got %v", sent.BatchID, gotBody["batch_id"])
+	}
+	if len(syncer3.pending) != 0 || syncer3.outstandingBatch != nil {
+		t.Errorf("expected pending and outstanding cleared after 200, got %v / %v", syncer3.pending, syncer3.outstandingBatch)
+	}
 }

@@ -2,7 +2,10 @@
   <div v-if="siteKey" class="turnstile-wrap">
     <div ref="widgetEl" class="turnstile-box"></div>
     <p v-if="status === 'pending'" class="turnstile-status">自动校验中…</p>
-    <p v-else-if="status === 'error'" class="turnstile-status error">{{ statusError }}</p>
+    <p v-else-if="status === 'error'" class="turnstile-status error">
+      {{ statusError }}
+      <button class="turnstile-retry" type="button" @click="retry">重试</button>
+    </p>
   </div>
 </template>
 
@@ -39,13 +42,17 @@ function loadTurnstileScript(): Promise<void> {
     s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
     s.async = true
     s.onload = () => resolve()
-    s.onerror = () => reject(new Error('Failed to load Turnstile script'))
+    s.onerror = () => {
+      // 失败的 promise 不能缓存：否则一次加载失败会毒化之后所有重试，只能整页刷新
+      scriptPromise = null
+      reject(new Error('Failed to load Turnstile script'))
+    }
     document.head.appendChild(s)
   })
   return scriptPromise
 }
 
-onMounted(async () => {
+async function renderWidget() {
   if (!siteKey) return
   status.value = 'pending'
   await nextTick()
@@ -66,6 +73,14 @@ onMounted(async () => {
     status.value = 'error'
     return
   }
+  if (widgetId) {
+    try {
+      ts.remove(widgetId)
+    } catch {
+      /* already gone */
+    }
+    widgetId = ''
+  }
   // non-interactive widget mode (dashboard) + interaction-only UI:
   // runs automatically on render; no checkbox unless CF escalates.
   widgetId = ts.render(widgetEl.value, {
@@ -82,10 +97,17 @@ onMounted(async () => {
     'error-callback': () => {
       token.value = ''
       status.value = 'error'
-      statusError.value = '人机验证失败，请刷新重试'
+      statusError.value = '人机验证失败'
     },
   })
-})
+}
+
+async function retry() {
+  scriptPromise = null
+  await renderWidget()
+}
+
+onMounted(renderWidget)
 
 onBeforeUnmount(() => {
   if (widgetId) window.turnstile?.remove(widgetId)
@@ -99,6 +121,7 @@ defineExpose({
       window.turnstile.reset(widgetId)
     }
   },
+  retry,
   get ready() {
     return !siteKey || !!token.value
   },
@@ -113,4 +136,5 @@ defineExpose({
 .turnstile-box { min-height: 0; }
 .turnstile-status { margin: 0.35rem 0 0; font-size: 0.8rem; color: #666; }
 .turnstile-status.error { color: #d93025; }
+.turnstile-retry { margin-left: 0.4rem; font-size: 0.8rem; cursor: pointer; }
 </style>

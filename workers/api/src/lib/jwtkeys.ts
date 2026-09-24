@@ -45,9 +45,15 @@ function parseKey(raw: unknown): JwtKey | null {
   return { kid: o.kid, secret: o.secret, rotated_at: o.rotated_at };
 }
 
+/** 讀取失敗（KV 異常）會 throw；值不存在或損壞回傳 null —— 呼叫端必須區分兩者 */
 async function readKvKey(cache: KVNamespace, key: string): Promise<JwtKey | null> {
+  return parseKey(await cache.get(key, 'json'));
+}
+
+/** previous 是可選的：讀取失敗視同不存在 */
+async function readKvKeyTolerant(cache: KVNamespace, key: string): Promise<JwtKey | null> {
   try {
-    return parseKey(await cache.get(key, 'json'));
+    return await readKvKey(cache, key);
   } catch {
     return null;
   }
@@ -66,9 +72,17 @@ function bootstrapKey(secret: string, now: number): JwtKey {
  * 無 KV 且無 env secret → null。
  */
 export async function resolveJwtMaterial(env: JwtEnv, now = Math.floor(Date.now() / 1000)): Promise<JwtMaterial | null> {
-  const current = await readKvKey(env.CACHE, JWT_KV_CURRENT);
+  let current: JwtKey | null;
+  try {
+    current = await readKvKey(env.CACHE, JWT_KV_CURRENT);
+  } catch (e) {
+    // 讀取失敗時不可回落 JWT_SECRET：那會把已輪換的活密鑰覆寫回 bootstrap key，
+    // 使所有現存會話失效、且洩漏過 JWT_SECRET 的一方重新獲得簽名能力。fail closed。
+    console.error(JSON.stringify({ level: 'error', msg: 'jwt key kv read failed; refusing bootstrap fallback', error: String(e) }));
+    return null;
+  }
   if (current) {
-    const previous = await readKvKey(env.CACHE, JWT_KV_PREVIOUS);
+    const previous = await readKvKeyTolerant(env.CACHE, JWT_KV_PREVIOUS);
     return { current, previous };
   }
 
@@ -111,7 +125,13 @@ export async function rotateJwtKeys(env: JwtEnv, now = Math.floor(Date.now() / 1
 
 /** hourly cron 調用：距上次輪換 ≥ JWT_ROTATION_INTERVAL_SEC 才真正輪換 */
 export async function maybeRotateJwtKeys(env: JwtEnv, now = Math.floor(Date.now() / 1000)): Promise<'rotated' | 'skipped' | 'unavailable'> {
-  const current = await readKvKey(env.CACHE, JWT_KV_CURRENT);
+  let current: JwtKey | null;
+  try {
+    current = await readKvKey(env.CACHE, JWT_KV_CURRENT);
+  } catch (e) {
+    console.error(JSON.stringify({ level: 'error', msg: 'jwt key kv read failed; skip rotation', error: String(e) }));
+    return 'unavailable';
+  }
   if (!current) {
     const seeded = await resolveJwtMaterial(env, now);
     return seeded ? 'skipped' : 'unavailable';

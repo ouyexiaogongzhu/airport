@@ -7,6 +7,7 @@ import { oauthRoutes } from './routes/oauth';
 import { paymentRoutes } from './routes/payment';
 import { webRoutes } from './routes/web';
 import { adminRoutes, publicProductRoutes } from './routes/admin';
+import { tokenRoutes } from './routes/tokens';
 import { nodeRoutes } from './routes/node';
 import { runEntitlementMaintenance } from './lib/entitlement';
 import { maybeRotateJwtKeys } from './lib/jwtkeys';
@@ -60,7 +61,13 @@ export function createApp() {
           .split(',')
           .map((s: string) => s.trim())
           .filter(Boolean);
-        const allowed = new Set(configured.length ? configured : defaultOrigins);
+        let list = configured.length ? configured : defaultOrigins;
+        // localhost 白名單只在本機 dev（API 自身跑在 localhost）時生效，生產不放行
+        const host = new URL(c.req.url).hostname;
+        if (!configured.length && host !== 'localhost' && host !== '127.0.0.1') {
+          list = list.filter((x: string) => !x.includes('localhost'));
+        }
+        const allowed = new Set(list);
         return allowed.has(o) ? o : null;
       },
       credentials: true,
@@ -83,6 +90,7 @@ export function createApp() {
   app.route('/api/v1', paymentRoutes());
   app.route('/api/v1', webRoutes());
   app.route('/api/v1', adminRoutes());
+  app.route('/api/v1', tokenRoutes());
   app.route('/api/v1', publicProductRoutes());
 
   // 統一 JSON 錯誤處理 + 結構化日誌

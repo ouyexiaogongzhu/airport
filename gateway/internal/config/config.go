@@ -96,6 +96,11 @@ func (c *Config) Validate() error {
 	if c.SyncInterval <= 0 {
 		return fmt.Errorf("sync_interval must be positive")
 	}
+	// time.Duration unmarshals JSON numbers as NANOSECONDS: a bare 60 becomes
+	// 60ns, passes naive validation and hammers the manager in a tight loop.
+	if c.SyncInterval < time.Second {
+		return fmt.Errorf("sync_interval must be at least 1s (got %s); note the value is in nanoseconds, e.g. 60000000000 = 60s", c.SyncInterval)
+	}
 	// The local HTTP API has no authentication, so it must never be exposed.
 	host, _, err := net.SplitHostPort(c.ListenAddr)
 	if err != nil {

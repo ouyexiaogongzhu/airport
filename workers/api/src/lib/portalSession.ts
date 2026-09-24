@@ -18,7 +18,7 @@ type CookieContext = {
   header: (name: 'Set-Cookie', value: string, opts?: { append?: boolean }) => void;
 };
 
-/** session(2h)+refresh(90d)+csrf(2h)；回傳 Bearer + refresh 供跨站 localStorage 兜底 */
+/** session(2h)+refresh(7d 換發)+csrf(2h)；回傳 Bearer + refresh 供跨站 localStorage 兜底 */
 export async function issuePortalSession(
   c: CookieContext,
   user: SessionCredentials,

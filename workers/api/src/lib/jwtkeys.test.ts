@@ -33,7 +33,7 @@ function memoryKv(): KVNamespace & { store: Map<string, string> } {
       store.delete(key);
     }) as KVNamespace['delete'],
     list: (async () => ({ keys: [], list_complete: true, cacheStatus: null })) as KVNamespace['list'],
-    getWithMetadata: (async () => ({ value: null, metadata: null, cacheStatus: null })) as KVNamespace['getWithMetadata'],
+    getWithMetadata: (async () => ({ value: null, metadata: null, cacheStatus: null })) as unknown as KVNamespace["getWithMetadata"],
   };
 }
 

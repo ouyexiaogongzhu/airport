@@ -89,6 +89,21 @@ const VALID_PROTOCOLS = new Set(['vmess', 'vless']);
 const PROTOCOL_ERROR = 'protocol must be one of: vmess, vless';
 const VALID_NETWORKS = new Set(['xhttp']);
 const NETWORK_ERROR = 'network must be xhttp (ws is no longer supported)';
+const VALID_NODE_STATUS = new Set(['active', 'inactive']);
+
+// address 會拼進 vless:// URI、name 會進 Clash YAML 雙引號 scalar：兩者都會破壞訂閱配置
+function validateNodeFields(f: { name?: unknown; address?: unknown }): { error: string } | null {
+  if (f.address !== undefined) {
+    const a = String(f.address);
+    if (!/^[A-Za-z0-9_-]{1,63}(\.[A-Za-z0-9_-]{1,63})*$/.test(a) || a.length > 253) {
+      return { error: 'address must be a hostname' };
+    }
+  }
+  if (f.name !== undefined && /[&"'\\\n\r]/.test(String(f.name))) {
+    return { error: 'name must not contain quotes or line breaks' };
+  }
+  return null;
+}
 
 // 傳輸層：ws_path + network（僅 xhttp）；只收到時返回，'' path 存為 NULL（讀取時默認 /rfhttp/）
 function parseTransport(body: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
@@ -430,14 +445,14 @@ export function adminRoutes() {
     }
     const trendRows = await db
       .prepare(
-        'SELECT substr(recorded_at, 6, 5) AS day, SUM(upload_bytes) AS upload, SUM(download_bytes) AS download ' +
-          'FROM traffic_records WHERE recorded_at >= ? GROUP BY substr(recorded_at, 6, 5)',
+        'SELECT day, upload_bytes AS upload, download_bytes AS download FROM traffic_daily ' +
+          'WHERE day >= ? ORDER BY day',
       )
-      .bind(trendStart)
+      .bind(new Date(Date.parse(trendStart) - 23 * 86400000).toISOString().slice(0, 10))
       .all<{ day: string; upload: number; download: number }>();
     const byDay = new Map(points.map((p) => [p.day, p]));
     for (const r of trendRows.results) {
-      const p = byDay.get(r.day);
+      const p = byDay.get(r.day.slice(5)); // 'YYYY-MM-DD' → 'MM-DD'
       if (p) {
         p.upload = r.upload;
         p.download = r.download;
@@ -493,6 +508,8 @@ export function adminRoutes() {
     if (!validTypes.has(type)) {
       return c.json({ error: 'type must be one of: v2ray, xray' }, 400);
     }
+    const bad = validateNodeFields({ name, address });
+    if (bad) return c.json({ error: bad.error }, 400);
 
     const t = { ws_path: null, network: 'xhttp', ...transport.fields };
     const now = new Date().toISOString();
@@ -570,10 +587,28 @@ export function adminRoutes() {
     if (body.protocol !== undefined && !VALID_PROTOCOLS.has(String(body.protocol))) {
       return c.json({ error: PROTOCOL_ERROR }, 400);
     }
-    for (const key of ['name', 'type', 'address', 'protocol', 'status'] as const) {
-      if (body[key] !== undefined) updates[key] = body[key];
+    // 全部欄位先驗後寫：非法 port 會讓 gateway 的 `xray run -test` 永遠失敗
+    //（節點卡死在舊配置），status 大小寫不符會讓節點被當成非 active、靜默斷掉所有用戶。
+    if (body.port !== undefined) {
+      const port = Number(body.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return c.json({ error: 'port must be between 1 and 65535' }, 400);
+      }
+      updates.port = port;
     }
-    if (body.port !== undefined) updates.port = Number(body.port);
+    if (body.status !== undefined && !VALID_NODE_STATUS.has(String(body.status))) {
+      return c.json({ error: 'status must be one of: active, inactive' }, 400);
+    }
+    for (const key of ['name', 'type', 'address', 'protocol', 'status'] as const) {
+      if (body[key] !== undefined) {
+        if (typeof body[key] !== 'string' || (body[key] as string).trim() === '') {
+          return c.json({ error: `${key} must be a non-empty string` }, 400);
+        }
+        updates[key] = body[key];
+      }
+    }
+    const bad = validateNodeFields({ name: updates.name, address: updates.address });
+    if (bad) return c.json({ error: bad.error }, 400);
     if (Object.keys(updates).length > 0) {
       updates.updated_at = new Date().toISOString();
       const sets = Object.keys(updates)
@@ -643,6 +678,10 @@ export function adminRoutes() {
     const up = Number(body.upload_bytes ?? 0);
     const down = Number(body.download_bytes ?? 0);
     if (nodeId === 0 || userId === 0) return c.json({ error: 'node_id and user_id are required' }, 400);
+    // 負數會把 traffic_used_bytes 打成負值，serviceBlock 的 used >= limit 恆假 = 無限流量後門
+    if (!isNonNegInt(up) || !isNonNegInt(down)) {
+      return c.json({ error: 'upload_bytes and download_bytes must be non-negative integers' }, 400);
+    }
 
     const db = c.env.DB;
     const node = await db.prepare('SELECT id FROM nodes WHERE id = ?').bind(nodeId).first<{ id: number }>();

@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -35,6 +37,10 @@ type Syncer struct {
 	client   *http.Client
 	stopCh   chan struct{}
 	stopOnce sync.Once
+	// loopDone is closed when the Start loop has returned; Stop waits for it
+	// (bounded) so an in-flight sync — whose traffic counters were already
+	// reset on read — is not killed mid-report.
+	loopDone chan struct{}
 
 	// xrayMu serialises starting/stopping the xray process.
 	xrayMu sync.Mutex
@@ -65,6 +71,11 @@ type Syncer struct {
 	// pending holds traffic read from xray (counters are reset on read) that
 	// the manager has not acknowledged yet; it is merged into the next report.
 	pending map[uint]TrafficDelta
+	// outstandingBatch is a batch that was sent but never acknowledged (non-200
+	// or network error). It is resent byte-for-byte — same batch_id, same
+	// entries — until accepted, so the worker's dedup table recognises the
+	// replay instead of double-counting.
+	outstandingBatch *outstandingReport
 	// queryStats reads and resets per-user counters; replaceable in tests.
 	queryStats func() (map[uint]TrafficDelta, error)
 }
@@ -106,8 +117,9 @@ func NewSyncer(cfg *config.Config) *Syncer {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		stopCh:  make(chan struct{}),
-		pending: make(map[uint]TrafficDelta),
+		stopCh:   make(chan struct{}),
+		loopDone: make(chan struct{}),
+		pending:  make(map[uint]TrafficDelta),
 	}
 	s.queryStats = s.queryXrayStats
 	return s
@@ -115,7 +127,16 @@ func NewSyncer(cfg *config.Config) *Syncer {
 
 // Start begins the periodic sync loop. Runs until Stop() is called.
 func (s *Syncer) Start() {
+	defer close(s.loopDone)
 	log.Printf("[sync] starting sync loop (interval=%s)", s.cfg.SyncInterval)
+	if s.cfg.XrayBinary == "" {
+		// A typo in xray_binary would otherwise look perfectly healthy while
+		// the node serves nothing.
+		log.Printf("[sync] WARNING: xray_binary not configured; config will be written but xray will not run")
+	}
+
+	// Restore traffic that was read (counters reset) but not yet acknowledged.
+	s.loadPending()
 
 	// Do an initial sync immediately
 	if err := s.Sync(); err != nil {
@@ -146,6 +167,19 @@ func (s *Syncer) Stop() {
 		s.stopping = true
 		s.mu.Unlock()
 		close(s.stopCh)
+
+		// Wait (bounded) for an in-flight sync — its counters were already
+		// reset on read, killing it here would lose that traffic.
+		select {
+		case <-s.loopDone:
+		case <-time.After(35 * time.Second):
+			log.Printf("[sync] timed out waiting for sync loop; continuing shutdown")
+		}
+		// Final flush: collect whatever xray counted since the last sync and
+		// report it before the process goes away.
+		if err := s.reportTraffic(); err != nil {
+			log.Printf("[sync] final traffic report failed (pending kept on disk): %v", err)
+		}
 
 		s.xrayMu.Lock()
 		s.stopXrayLocked()
@@ -304,28 +338,38 @@ func (s *Syncer) applyConfig(cfg map[string]interface{}) error {
 		return nil
 	}
 
-	// Write config to disk.
+	// Write config to disk atomically: temp file → `xray run -test` on the
+	// temp file → rename. A rejected config must never overwrite the last
+	// known-good xray.json on disk, or the next crash-loop relaunch would
+	// repeatedly fail on it.
 	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
 	configPath := filepath.Join(s.cfg.DataDir, "xray.json")
 	// 0600: the config embeds every active subscriber's proxy credentials.
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 
 	log.Printf("[sync] config changed, reloading xray (%d bytes)", len(data))
 
 	if s.cfg.XrayBinary != "" {
-		if out, err := exec.Command(s.cfg.XrayBinary, "run", "-test", "-c", configPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("xray rejected config (keeping current process): %v: %s", err, strings.TrimSpace(string(out)))
+		if out, err := exec.Command(s.cfg.XrayBinary, "run", "-test", "-c", tmpPath).CombinedOutput(); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("xray rejected config (keeping current process and on-disk config): %v: %s", err, strings.TrimSpace(string(out)))
 		}
 		// Restarting resets xray's counters: collect them first.
 		s.collectTraffic()
-		if err := s.restartXray(configPath); err != nil {
+		if err := s.restartXray(tmpPath, configPath); err != nil {
+			_ = os.Remove(tmpPath)
 			return fmt.Errorf("restart xray: %w", err)
 		}
 	} else {
+		if err := os.Rename(tmpPath, configPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("install config: %w", err)
+		}
 		log.Printf("[sync] no xray binary configured; config written to %s", configPath)
 	}
 
@@ -372,12 +416,15 @@ func metaAPIPort(cfg map[string]interface{}) int {
 	return defaultAPIPort
 }
 
-// restartXray stops any running xray process and starts a new one with the
-// freshly-written config.
-func (s *Syncer) restartXray(configPath string) error {
+// restartXray stops any running xray process, moves the tested temp config
+// into place and starts a new one with it.
+func (s *Syncer) restartXray(tmpPath, configPath string) error {
 	s.xrayMu.Lock()
 	defer s.xrayMu.Unlock()
 	s.stopXrayLocked()
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		return fmt.Errorf("install config: %w", err)
+	}
 	return s.startXrayLocked(configPath)
 }
 
@@ -391,6 +438,13 @@ func (s *Syncer) startXrayLocked(configPath string) error {
 		return fmt.Errorf("syncer is stopping")
 	}
 
+	if s.orphanXrayLikely() {
+		return fmt.Errorf(
+			"nothing managed but 127.0.0.1:%d already answers: an orphan xray from a previous gateway is likely still serving (possibly stale config); kill it (pkill -f 'xray run') or reboot before syncing",
+			s.statsPort(),
+		)
+	}
+
 	cmd := exec.Command(s.cfg.XrayBinary, "run", "-c", configPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -398,6 +452,16 @@ func (s *Syncer) startXrayLocked(configPath string) error {
 		return fmt.Errorf("start xray: %w", err)
 	}
 	done := make(chan struct{})
+	go s.watchXray(cmd, done, configPath)
+
+	// `xray run -test` does not bind ports: catch configs that die instantly
+	// (port already taken, bad runtime state) instead of reporting success and
+	// letting the watcher enter a crash loop.
+	select {
+	case <-done:
+		return fmt.Errorf("xray exited immediately after start (port conflict or runtime error); config kept on disk")
+	case <-time.After(1500 * time.Millisecond):
+	}
 
 	s.mu.Lock()
 	s.xrayCmd = cmd
@@ -405,8 +469,35 @@ func (s *Syncer) startXrayLocked(configPath string) error {
 	s.running = true
 	s.mu.Unlock()
 
-	go s.watchXray(cmd, done, configPath)
 	return nil
+}
+
+// orphanXrayLikely reports whether the StatsService port answers while we are
+// not managing any xray process — the signature of an orphan left behind when
+// a previous gateway was SIGKILLed (its cleanup never ran).
+func (s *Syncer) orphanXrayLikely() bool {
+	s.mu.Lock()
+	managed := s.xrayCmd != nil
+	s.mu.Unlock()
+	if managed {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(s.statsPort()), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// statsPort returns the StatsService port of the last applied config.
+func (s *Syncer) statsPort() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.apiPort == 0 {
+		return defaultAPIPort
+	}
+	return s.apiPort
 }
 
 // watchXray waits for the xray process to exit. If it was not stopped on
@@ -493,32 +584,74 @@ type reportEntry struct {
 	DownloadBytes int64 `json:"download_bytes"`
 }
 
+// maxBatchEntries caps one report batch below the worker's 5000-entry limit;
+// anything more stays pending and is sent in a following batch.
+const maxBatchEntries = 4000
+
+// outstandingReport is one report batch: an id the worker deduplicates on plus
+// the exact entries it covers.
+type outstandingReport struct {
+	BatchID string        `json:"batch_id"`
+	Entries []reportEntry `json:"entries"`
+}
+
+// reportPayload is the traffic report request body.
+type reportPayload struct {
+	NodeID  uint          `json:"node_id"`
+	BatchID string        `json:"batch_id"`
+	Traffic []reportEntry `json:"traffic"`
+}
+
+// newBatchID returns 16 random bytes hex-encoded.
+func newBatchID() string {
+	b := make([]byte, 16)
+	if _, err := crand.Read(b); err != nil {
+		// crypto/rand only fails when the OS entropy source is broken; a
+		// time-derived id still keeps the protocol working.
+		return fmt.Sprintf("t%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
 // reportTraffic reads per-user traffic from xray (reset on read), adds it to
-// the pending totals and reports them. Pending totals are only cleared after
-// the manager acknowledges the report, so a failed report is retried with
-// the next one.
+// the pending totals and reports them as a batch identified by batch_id. An
+// unacknowledged batch is resent unchanged (same batch_id, same entries) so
+// the worker's dedup table recognises the replay; pending totals are only
+// cleared after the manager acknowledges the report.
 func (s *Syncer) reportTraffic() error {
 	s.collectTraffic()
 
 	s.mu.Lock()
-	nodeID := s.nodeID
-	entries := make([]reportEntry, 0, len(s.pending))
-	for userID, d := range s.pending {
-		if d.Upload > 0 || d.Download > 0 {
-			entries = append(entries, reportEntry{UserID: userID, UploadBytes: d.Upload, DownloadBytes: d.Download})
+	var batch *outstandingReport
+	if s.outstandingBatch != nil {
+		// Previous attempt never got a 200: resend it verbatim.
+		batch = s.outstandingBatch
+	} else {
+		entries := make([]reportEntry, 0, len(s.pending))
+		for userID, d := range s.pending {
+			if d.Upload > 0 || d.Download > 0 {
+				entries = append(entries, reportEntry{UserID: userID, UploadBytes: d.Upload, DownloadBytes: d.Download})
+			}
+		}
+		if len(entries) > maxBatchEntries {
+			entries = entries[:maxBatchEntries]
+		}
+		if len(entries) > 0 {
+			batch = &outstandingReport{BatchID: newBatchID(), Entries: entries}
+			s.outstandingBatch = batch
+			// Persist now: if the request lands but the reply is lost, the
+			// batch must survive a crash to be resent for dedup.
+			s.persistPendingLocked()
 		}
 	}
+	nodeID := s.nodeID
 	s.mu.Unlock()
 
-	if len(entries) == 0 {
+	if batch == nil {
 		return nil
 	}
 
-	payload := map[string]interface{}{
-		"node_id": nodeID,
-		"traffic": entries,
-	}
-	body, _ := json.Marshal(payload)
+	body, _ := json.Marshal(reportPayload{NodeID: nodeID, BatchID: batch.BatchID, Traffic: batch.Entries})
 
 	url := fmt.Sprintf("%s/api/v1/node/%s/traffic/report", s.cfg.ManagerURL, s.cfg.ManagerToken)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
@@ -538,9 +671,10 @@ func (s *Syncer) reportTraffic() error {
 		return fmt.Errorf("manager report returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Subtract what was reported; anything collected meanwhile stays pending.
+	// Accepted: subtract this batch from pending and forget it; anything
+	// collected meanwhile stays pending for the next batch.
 	s.mu.Lock()
-	for _, e := range entries {
+	for _, e := range batch.Entries {
 		d := s.pending[e.UserID]
 		d.Upload -= e.UploadBytes
 		d.Download -= e.DownloadBytes
@@ -550,9 +684,11 @@ func (s *Syncer) reportTraffic() error {
 			s.pending[e.UserID] = d
 		}
 	}
+	s.outstandingBatch = nil
+	s.persistPendingLocked()
 	s.mu.Unlock()
 
-	log.Printf("[sync] reported traffic for %d user(s)", len(entries))
+	log.Printf("[sync] reported traffic batch %s for %d user(s)", batch.BatchID, len(batch.Entries))
 	return nil
 }
 
@@ -573,6 +709,10 @@ func (s *Syncer) collectTraffic() {
 		p.Download += d.Download
 		s.pending[userID] = p
 	}
+	// Counters were reset on read: until the manager acknowledges a report,
+	// these bytes exist only here. Persist so a SIGKILL / crash / power loss
+	// does not silently drop them.
+	s.persistPendingLocked()
 	s.mu.Unlock()
 }
 
@@ -656,14 +796,87 @@ func parseStatsQuery(out []byte) (map[uint]TrafficDelta, error) {
 	return stats, nil
 }
 
-// configHash returns a quick content hash for change detection.
+// configHash returns a content hash for change detection. Cryptographic on
+// purpose: FNV would turn a collision into a permanently and silently skipped
+// update; sha256 costs nothing here (once per changed config).
 func configHash(data []byte) string {
-	var h uint64 = 14695981039346656037
-	for _, b := range data {
-		h ^= uint64(b)
-		h *= 1099511628211
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// pendingPath is where unacknowledged traffic deltas survive a restart.
+func (s *Syncer) pendingPath() string {
+	return filepath.Join(s.cfg.DataDir, "pending.json")
+}
+
+// pendingState is the pending.json on-disk format: unacknowledged deltas plus
+// the in-flight report batch (its batch_id must survive a crash so a resend
+// deduplicates instead of double-counting).
+type pendingState struct {
+	Pending     map[uint]TrafficDelta `json:"pending"`
+	Outstanding *outstandingReport    `json:"outstanding,omitempty"`
+}
+
+// persistPendingLocked writes pending to disk (atomic temp+rename). Caller
+// holds mu. Best-effort: a failed write only means a crash may drop traffic,
+// never that accounting is corrupted.
+func (s *Syncer) persistPendingLocked() {
+	if s.cfg.DataDir == "" {
+		return
 	}
-	return fmt.Sprintf("%x", h)
+	data, err := json.Marshal(pendingState{Pending: s.pending, Outstanding: s.outstandingBatch})
+	if err != nil {
+		return
+	}
+	path := s.pendingPath()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+	}
+}
+
+// loadPending restores pending deltas persisted by a previous run. Bytes that
+// were read (reset) from xray but never acknowledged would otherwise vanish.
+func (s *Syncer) loadPending() {
+	data, err := os.ReadFile(s.pendingPath())
+	if err != nil {
+		return
+	}
+	var st pendingState
+	// Pre-batch format was a bare map of deltas (no "pending" key).
+	if err := json.Unmarshal(data, &st); err != nil || (st.Pending == nil && st.Outstanding == nil) {
+		var legacy map[uint]TrafficDelta
+		if lerr := json.Unmarshal(data, &legacy); lerr != nil {
+			log.Printf("[sync] ignoring corrupt pending file %s: %v", s.pendingPath(), lerr)
+			return
+		}
+		st = pendingState{Pending: legacy}
+	}
+	s.mu.Lock()
+	for userID, d := range st.Pending {
+		if userID == 0 || (d.Upload <= 0 && d.Download <= 0) {
+			continue
+		}
+		p := s.pending[userID]
+		p.Upload += d.Upload
+		p.Download += d.Download
+		s.pending[userID] = p
+	}
+	if st.Outstanding != nil && st.Outstanding.BatchID != "" && len(st.Outstanding.Entries) > 0 {
+		s.outstandingBatch = st.Outstanding
+	}
+	n := len(s.pending)
+	restoredBatch := s.outstandingBatch
+	s.mu.Unlock()
+	if n > 0 {
+		log.Printf("[sync] restored unreported traffic for %d user(s) from %s", n, s.pendingPath())
+	}
+	if restoredBatch != nil {
+		log.Printf("[sync] restored in-flight traffic batch %s (%d entries)", restoredBatch.BatchID, len(restoredBatch.Entries))
+	}
 }
 
 // LastSyncResult returns the last sync result from in-memory state.

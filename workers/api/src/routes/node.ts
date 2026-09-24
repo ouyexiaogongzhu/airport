@@ -50,15 +50,17 @@ export function nodeRoutes() {
     return c.json({ node_id: node.id, name: node.name, protocol: node.protocol, config });
   });
 
-  // 批量上報 {node_id?, traffic:[{user_id,upload_bytes,download_bytes}]}：
-  // 同一 batch 內寫 traffic_records、累加用戶已用流量與節點計數、記心跳。
-  // 條目經 json_each 展開，語句數與用戶數無關（D1 單次調用有查詢數上限）。
+  // 批量上報 {node_id?, batch_id, traffic:[{user_id,upload_bytes,download_bytes}]}：
+  // 同一 batch 內先寫 traffic_batches（嚴格 INSERT，主鍵衝突 = 同批重發 →
+  // deduplicated，整批原子回滾），否則寫 traffic_records、累加用戶已用流量
+  // 與節點計數、記心跳。條目經 json_each 展開，語句數與用戶數無關
+  // （D1 單次調用有查詢數上限）。
   app.post('/node/:token/traffic/report', async (c) => {
     const raw = await c.req.text();
     const node = await authNode(c, raw);
     if (!node) return c.json({ error: 'INVALID_NODE_SIGNATURE' }, 401);
 
-    let body: { node_id?: unknown; traffic?: unknown };
+    let body: { node_id?: unknown; batch_id?: unknown; traffic?: unknown };
     try {
       body = JSON.parse(raw);
     } catch {
@@ -66,6 +68,9 @@ export function nodeRoutes() {
     }
     if (body === null || typeof body !== 'object' || !Array.isArray(body.traffic)) {
       return c.json({ error: 'traffic must be an array' }, 400);
+    }
+    if (typeof body.batch_id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(body.batch_id)) {
+      return c.json({ error: 'invalid batch_id' }, 400);
     }
     if (body.node_id !== undefined && body.node_id !== 0 && body.node_id !== node.id) {
       return c.json({ error: 'node_id does not match token' }, 400);
@@ -91,7 +96,12 @@ export function nodeRoutes() {
     const recordedAt = new Date().toISOString();
     const db = c.env.DB;
 
-    const stmts: D1PreparedStatement[] = [];
+    // 嚴格 INSERT 放第一條：batch_id 已存在時整批回滾，記賬語句不再執行。
+    const stmts: D1PreparedStatement[] = [
+      db
+        .prepare('INSERT INTO traffic_batches (batch_id, node_id, recorded_at) VALUES (?, ?, ?)')
+        .bind(body.batch_id, node.id, recordedAt),
+    ];
     if (entries.length > 0) {
       stmts.push(
         db
@@ -120,8 +130,23 @@ export function nodeRoutes() {
         )
         .bind(recordedAt, json, json, node.id),
     );
-    const results = await db.batch(stmts);
-    const accepted = entries.length > 0 ? (results[0].meta.changes ?? 0) : 0;
+    let results: D1Result<unknown>[];
+    try {
+      results = await db.batch(stmts);
+    } catch (e) {
+      if (String((e as Error)?.message ?? e).includes('UNIQUE')) {
+        // 同 batch_id 重發：已入賬過，原樣確認，不再累計。
+        return c.json({ ok: true, deduplicated: true });
+      }
+      throw e;
+    }
+    const accepted = entries.length > 0 ? (results[1].meta.changes ?? 0) : 0;
+    if (Math.random() < 0.05) {
+      await db
+        .prepare('DELETE FROM traffic_batches WHERE recorded_at < ?')
+        .bind(new Date(Date.now() - 7 * 86400000).toISOString())
+        .run();
+    }
     return c.json({ ok: true, accepted });
   });
 

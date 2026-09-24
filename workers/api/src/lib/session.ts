@@ -55,6 +55,10 @@ export async function authenticate(
   const claims = await verifyJwt(token, verifyList(secrets));
   if (!claims || typeof claims.user_id !== 'number') return { error: 'invalid' };
   if ((claims.typ === 'refresh') !== (kind === 'refresh')) return { error: 'invalid' };
+  // 部署切換點：refresh TTL 90 天 → 7 天（用時換發）。exp-iat 超過新 TTL + 60s 容差的
+  // refresh 是切換前簽發的存量長壽命 token，一律拒絕，強制重新登入一次拿新 7 天 token。
+  // 只對 typ='refresh' 生效，access 不受影響。
+  if (kind === 'refresh' && claims.exp - claims.iat > REFRESH_TTL + 60) return { error: 'invalid' };
   return checkClaims(db, claims);
 }
 
