@@ -228,7 +228,8 @@ func (s *Syncer) Sync() error {
 	if syncErr != nil {
 		return syncErr
 	}
-	log.Printf("[sync] synced node config %q (node_id=%d)", cfg.Name, cfg.NodeID)
+	// Healthy ticks stay quiet so journalctl -u rfplay-gateway -p err|warning
+	// surfaces real problems; applyConfig / reportTraffic already log anomalies.
 	return nil
 }
 

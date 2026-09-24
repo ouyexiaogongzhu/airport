@@ -21,7 +21,9 @@
 | ALPN | 订阅写 **h2**（避免 H3） |
 | Xray | ≥ `v26.3.27`（部署脚本 pin） |
 
-`nodes.network`：仅 **`xhttp`**（admin 拒绝 `ws`；读配置时存量值一律 coerce）。path 列名仍为 `ws_path`。改 `ws_path` 后 version 变，gateway 下一周期重载（`SCHEMA=a4-xhttp-only-1`）。
+`nodes.network`：仅 **`xhttp`**（admin 拒绝 `ws`；读配置时存量值一律 coerce）。path 列名仍为 `ws_path`。改 `ws_path` 后 version 变，gateway 下一周期重载（`SCHEMA=a4-xhttp-only-2`）。
+
+**日志**：Xray `loglevel=error`，`error` → `/var/log/xray/error.log`，`access=none`。gateway 走 journald：`journalctl -u rfplay-gateway -p warning -f`。
 
 ## 订阅
 

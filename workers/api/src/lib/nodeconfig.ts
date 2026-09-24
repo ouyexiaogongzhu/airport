@@ -27,8 +27,8 @@ const PRIVATE_CIDRS = [
   '::1/128', 'fc00::/7', 'fe80::/10',
 ];
 
-// 配置結構變化時遞增，強制所有節點重新應用（a4：僅 xhttp，去掉 ws）
-const SCHEMA = 'a4-xhttp-only-1';
+// 配置結構變化時遞增，強制所有節點重新應用（a4：僅 xhttp；a4-2：error 級日誌、關 access）
+const SCHEMA = 'a4-xhttp-only-2';
 
 export function nodeApiPort(nodePort: number): number {
   return nodePort === API_PORT ? API_PORT + 1 : API_PORT;
@@ -90,7 +90,8 @@ export async function buildNodeXrayConfig(db: D1Database, node: NodeConfigRow, n
   const settings: Record<string, unknown> = protocol === 'vless' ? { clients, decryption: 'none' } : { clients };
 
   return {
-    log: { loglevel: 'warning', access: '/var/log/xray/access.log', error: '/var/log/xray/error.log' },
+    // access 關閉（易漲盤、對排障幫助小）；異常只寫 error.log（loglevel=error）
+    log: { loglevel: 'error', access: 'none', error: '/var/log/xray/error.log' },
     api: { tag: 'api', services: ['StatsService'] },
     stats: {},
     policy: {

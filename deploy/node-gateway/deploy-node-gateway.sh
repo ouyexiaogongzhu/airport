@@ -143,9 +143,25 @@ User=root
 LimitNOFILE=1048576
 ProtectSystem=full
 ReadWritePaths=/var/lib/rfplay /var/log/xray
+SyslogIdentifier=rfplay-gateway
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+# Xray error.log 滾動（access 已關閉）
+cat > /etc/logrotate.d/rfplay-xray << 'EOF'
+/var/log/xray/error.log {
+  weekly
+  rotate 8
+  missingok
+  notifempty
+  compress
+  delaycompress
+  copytruncate
+}
 EOF
 
 # --- 3. cloudflared（Tunnel token 註冊為系統服務）---
