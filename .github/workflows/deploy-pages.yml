@@ -46,11 +46,9 @@ jobs:
 
       - name: Build
         env:
-          # Portal only: same-origin /api via Pages Function + Service Binding.
-          # Admin keeps the public API host (no Pages /api proxy in this change).
+          # Same-origin /api via Pages Function + Service Binding (portal + admin).
           # axios baseURL must include /api/v1 — routes are /api/v1/public/login etc.
-          VITE_API_BASE_URL: ${{ matrix.app == 'portal' && '/api/v1' || 'https://api.rfplay.uk/api/v1' }}
-          # subscription helper appends /api/v1 if missing; host-only is correct here
+          VITE_API_BASE_URL: /api/v1
           # Keep absolute so Clash/v2rayNG links never resolve against xv/xva
           VITE_SUBSCRIPTION_BASE_URL: https://api.rfplay.uk
           # Shared Turnstile sitekey for portal + admin (xv / xva) — keep ON
@@ -58,8 +56,8 @@ jobs:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run build
 
-      # workingDirectory = portal|admin: for portal, wrangler picks up ./functions
-      # and wrangler.toml service binding API → rfplay-api when deploying dist.
+      # workingDirectory = portal|admin: wrangler picks up ./functions and
+      # wrangler.toml service binding API → rfplay-api when deploying dist.
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v4
         with:
