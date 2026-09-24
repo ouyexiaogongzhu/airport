@@ -1,4 +1,4 @@
-module github.com/ouyexiaogongzhu/airport/daemon
+module github.com/ouyexiaogongzhu/airport/gateway
 
 go 1.23.4
 

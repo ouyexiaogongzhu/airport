@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// Default placeholder values. Validate rejects them so a daemon started
+// Default placeholder values. Validate rejects them so a gateway started
 // without a real config file fails fast instead of polling a bogus manager.
 const (
 	DefaultManagerURL   = "http://localhost:8080"
 	DefaultManagerToken = "default-token"
 )
 
-// Config holds the daemon configuration.
+// Config holds the gateway configuration.
 type Config struct {
 	// NodeID is informational only: the authoritative node id comes from the
 	// manager's config response (the token identifies the node).

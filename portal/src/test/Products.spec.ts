@@ -19,7 +19,7 @@ vi.mock('../api/index', () => ({ default: mockApi }))
 const mockPush = vi.fn()
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: mockPush }),
-  useRoute: () => ({ path: '/products' }),
+  useRoute: () => ({ path: '/dashboard', hash: '#plans' }),
   RouterLink: { template: '<a><slot /></a>' },
 }))
 
@@ -29,7 +29,7 @@ const samplePlans = [
   { id: 'plan_3', name: 'Unlimited', price: 120, currency: 'CNY', traffic_bytes: 0, duration_days: 365, speed_limit_bps: 0, description: 'No limits' },
 ]
 
-describe('Portal Products.vue', () => {
+describe('Portal PlansSection', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockApi.get.mockReset()
@@ -38,8 +38,8 @@ describe('Portal Products.vue', () => {
 
   it('renders loading state initially', async () => {
     mockApi.get.mockImplementationOnce(() => new Promise(() => {}))
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },
@@ -51,8 +51,8 @@ describe('Portal Products.vue', () => {
 
   it('renders plan cards after loading', async () => {
     mockApi.get.mockResolvedValueOnce({ data: samplePlans })
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },
@@ -69,8 +69,8 @@ describe('Portal Products.vue', () => {
 
   it('shows the page heading', async () => {
     mockApi.get.mockResolvedValueOnce({ data: samplePlans })
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },
@@ -84,8 +84,8 @@ describe('Portal Products.vue', () => {
     mockApi.get.mockRejectedValueOnce({
       response: { status: 500, data: { error: 'Internal error' } },
     })
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },
@@ -98,10 +98,9 @@ describe('Portal Products.vue', () => {
   })
 
   it('shows empty state when no plans available', async () => {
-    // Return empty array — first API call succeeds with empty data
     mockApi.get.mockResolvedValueOnce({ data: [] })
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },
@@ -115,8 +114,8 @@ describe('Portal Products.vue', () => {
 
   it('displays plan price in major currency units with its symbol', async () => {
     mockApi.get.mockResolvedValueOnce({ data: samplePlans })
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },
@@ -131,8 +130,8 @@ describe('Portal Products.vue', () => {
 
   it('shows a Purchase button for each plan', async () => {
     mockApi.get.mockResolvedValueOnce({ data: samplePlans })
-    const Products = await import('../views/Products.vue')
-    const wrapper = mount(Products.default, {
+    const PlansSection = await import('../components/PlansSection.vue')
+    const wrapper = mount(PlansSection.default, {
       global: {
         plugins: [createPinia()],
         stubs: { 'router-link': { template: '<a><slot /></a>' } },

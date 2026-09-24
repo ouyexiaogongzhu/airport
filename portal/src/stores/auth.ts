@@ -7,6 +7,12 @@ export const useAuthStore = defineStore('auth', () => {
   // Session lives server-side in an httpOnly cookie — no token/user is kept
   // in browser storage. The user object is held in memory only.
   const user = ref<any>(null)
+  const bootstrapped = ref(false)
+
+  let resolveReady: () => void
+  const authReady = new Promise<void>((resolve) => {
+    resolveReady = resolve
+  })
 
   const isLoggedIn = computed(() => !!user.value)
   const username = computed(() => user.value?.username || '')
@@ -26,16 +32,18 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = res.data.user
     } catch {
       user.value = null
+    } finally {
+      bootstrapped.value = true
+      resolveReady()
     }
   }
 
   async function login(username: string, password: string, turnstileToken?: string) {
     try {
-      const res = await api.post('/public/login', {
-        username,
-        password,
-        ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
-      })
+      const body: Record<string, string> = { username, password }
+      // Always include the field when a token is present so siteverify can run.
+      if (turnstileToken) body['cf-turnstile-response'] = turnstileToken
+      const res = await api.post('/public/login', body)
       storeTokens(res.data)
       user.value = res.data.user
       return { success: true }
@@ -45,13 +53,12 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function register(username: string, password: string, turnstileToken?: string) {
+  async function register(username: string, password: string, turnstileToken?: string, email?: string) {
     try {
-      const res = await api.post('/public/register', {
-        username,
-        password,
-        ...(turnstileToken ? { 'cf-turnstile-response': turnstileToken } : {}),
-      })
+      const body: Record<string, string> = { username, password }
+      if (email) body.email = email
+      if (turnstileToken) body['cf-turnstile-response'] = turnstileToken
+      const res = await api.post('/public/register', body)
       // Backend always returns a token (parity with login) — store it so the
       // Bearer fallback works on cross-site frontends (pages.dev).
       storeTokens(res.data)
@@ -82,5 +89,15 @@ export const useAuthStore = defineStore('auth', () => {
     if (data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
   }
 
-  return { user, isLoggedIn, username, init, login, register, logout }
+  return {
+    user,
+    isLoggedIn,
+    username,
+    bootstrapped,
+    authReady,
+    init,
+    login,
+    register,
+    logout,
+  }
 })

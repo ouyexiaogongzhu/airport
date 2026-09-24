@@ -1,16 +1,5 @@
 <template>
-  <div class="page checkout-page">
-    <nav class="topbar">
-      <span class="brand">RFPlay</span>
-      <div class="nav-links">
-        <router-link to="/dashboard">Dashboard</router-link>
-        <router-link to="/plans">Plans</router-link>
-        <router-link to="/account">Account</router-link>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
-      </div>
-      <span class="user-badge">{{ auth.username }}</span>
-    </nav>
-
+  <AppShell>
     <main class="content">
       <div v-if="loading" class="loading">Loading plan details…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
@@ -100,17 +89,16 @@
         </div>
       </template>
     </main>
-  </div>
+  </AppShell>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
 import { formatPrice } from '../utils/price'
+import AppShell from '../components/AppShell.vue'
 
-const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -225,24 +213,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.checkout-page {
-  min-height: 100vh;
-  background: #1a1a2e;
-  color: #e0e0e0;
-}
-.topbar {
-  display: flex;
-  align-items: center;
-  padding: 0.75rem 2rem;
-  background: #16213e;
-  border-bottom: 1px solid #0f3460;
-  gap: 2rem;
-}
-.brand { font-weight: 700; color: #e94560; font-size: 1.2rem; }
-.nav-links { display: flex; gap: 1.25rem; flex: 1; }
-.nav-links a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.nav-links a:hover, .nav-links a.router-link-active { color: #e94560; }
-.user-badge { background: rgba(233,69,96,0.15); color: #e94560; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
 .content { max-width: 800px; margin: 0 auto; padding: 2rem; }
 h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .subtitle { color: #a0a0b0; margin: 0.25rem 0 2rem; font-size: 0.9rem; }

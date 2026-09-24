@@ -8,6 +8,7 @@ const mockApi = {
   post: vi.fn(),
   put: vi.fn(),
   delete: vi.fn(),
+  defaults: { baseURL: '/api/v1' },
   interceptors: {
     request: { use: vi.fn() },
     response: { use: vi.fn() },
@@ -131,6 +132,44 @@ describe('Admin Users.vue', () => {
     }
   })
 
+  it('shows Copy Base64 and Copy Clash buttons per user', async () => {
+    mockApi.get.mockResolvedValueOnce({ data: sampleUsers })
+
+    const Users = await import('../views/Users.vue')
+    const wrapper = mount(Users.default, {
+      global: { plugins: [createPinia()] },
+    })
+    await new Promise(r => setTimeout(r, 50))
+
+    const base64Btns = wrapper.findAll('button').filter(b => b.text() === 'Copy Base64')
+    const clashBtns = wrapper.findAll('button').filter(b => b.text() === 'Copy Clash')
+    expect(base64Btns.length).toBe(3)
+    expect(clashBtns.length).toBe(3)
+  })
+
+  it('copies Base64 subscription URL to clipboard', async () => {
+    mockApi.get.mockResolvedValueOnce({ data: sampleUsers })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    vi.stubGlobal('location', { origin: 'https://xva.rfplay.uk' })
+
+    const Users = await import('../views/Users.vue')
+    const wrapper = mount(Users.default, {
+      global: { plugins: [createPinia()] },
+    })
+    await new Promise(r => setTimeout(r, 50))
+
+    const base64Btn = wrapper.findAll('button').find(b => b.text() === 'Copy Base64')
+    expect(base64Btn).toBeTruthy()
+    await base64Btn!.trigger('click')
+    await new Promise(r => setTimeout(r, 20))
+
+    expect(writeText).toHaveBeenCalled()
+    const copied = writeText.mock.calls[0][0] as string
+    expect(copied).toContain('/api/v1/client/links/tok_alice_abcdef123456')
+    expect(copied).not.toContain('/clash')
+  })
+
   it('handles empty users response', async () => {
     mockApi.get.mockResolvedValueOnce({ data: [] })
 
@@ -141,7 +180,8 @@ describe('Admin Users.vue', () => {
     await new Promise(r => setTimeout(r, 50))
 
     expect(wrapper.find('tbody').exists()).toBe(true)
-    expect(wrapper.findAll('tbody tr').length).toBe(0)
+    expect(wrapper.findAll('tbody tr').length).toBe(1)
+    expect(wrapper.find('.empty-row').text()).toContain('No users found')
   })
 
   it('handles HTTP error response', async () => {

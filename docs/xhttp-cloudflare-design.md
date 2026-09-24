@@ -1,6 +1,6 @@
 # XHTTP + TLS（Cloudflare Tunnel）
 
-> **状态**：已实现。生产节点（Amsterdam / New York）均为 `network=xhttp`。  
+> **状态**：已实现。产品仅支持 **VLESS/VMess + XHTTP + TLS**（WS 已下线）。  
 > 总览见 [cloudflare_migration_plan.md](../cloudflare_migration_plan.md)。
 
 ## 模型
@@ -15,13 +15,13 @@
 | 项 | 取值 |
 | :--- | :--- |
 | 客户端 | `address`:443，`security=tls`，host/sni = 域名 |
-| 本机 | `listen=127.0.0.1`，`security=none`，path = `ws_path` |
-| Tunnel | `hostname → http://127.0.0.1:<port>`（与 WS 相同，无需改 ingress） |
+| 本机 | `listen=127.0.0.1`，`security=none`，path = `ws_path`（空则 `/rfhttp/`） |
+| Tunnel | `hostname → http://127.0.0.1:<port>` |
 | Mode | 服务端省略（auto）；订阅固定 **packet-up** |
 | ALPN | 订阅写 **h2**（避免 H3） |
 | Xray | ≥ `v26.3.27`（部署脚本 pin） |
 
-`nodes.network`：`ws` \| `xhttp`（代码仍支持 WS；path 列名仍为 `ws_path`）。改 `network`/`ws_path` 后 version 变，daemon 下一周期重载。
+`nodes.network`：仅 **`xhttp`**（admin 拒绝 `ws`；读配置时存量值一律 coerce）。path 列名仍为 `ws_path`。改 `ws_path` 后 version 变，gateway 下一周期重载（`SCHEMA=a4-xhttp-only-1`）。
 
 ## 订阅
 
@@ -42,15 +42,14 @@ xhttp-opts:
   mode: packet-up
 ```
 
-代码：`nodeconfig.ts`（`SCHEMA=a3-xhttp-1`）、`xrayuri.ts`、`subformats.ts`；admin Transport = `ws`\|`xhttp`。
+代码：`nodeconfig.ts`、`xrayuri.ts`、`subformats.ts`；admin Transport = `xhttp` only；新建节点默认 `protocol=vless`、`network=xhttp`、path 空则 `/rfhttp/`。
 
 ## 运维
 
 | 操作 | 做法 |
 | :--- | :--- |
-| 切到 XHTTP | D1/后台：`network=xhttp`，path 建议 `/rfhttp/`；同 hostname 可切，旧 WS 客户端立即失效 |
+| 新建 / 切到 XHTTP | 后台默认已是 xhttp；path 建议 `/rfhttp/` |
 | 探针 | `https://<host>/rfhttp/` → HTTP **400** + `x-padding` 即 Xray XHTTP 存活 |
-| 回退 WS | `network=ws` + 原 path；客户端刷新订阅 |
 
 ## 客户端
 
@@ -61,4 +60,4 @@ xhttp-opts:
 | v2rayA | 需 **xray-core**；≥2.2.7.5 认 `xhttpMode`。OpenWrt 官方 **2.2.7.3** 仅 minimal，经 CF 不可靠 → 用 mihomo 或换机 |
 | 测速 TIMEOUT | v2rayA HTTP 测速硬限 8s，冷启动易假阳；**直接连接**验证 |
 
-不做：本机 TLS / Reality；stream-up 作默认；出口隐藏。
+不做：本机 TLS / Reality；stream-up 作默认；出口隐藏；WS。

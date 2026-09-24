@@ -43,6 +43,19 @@ describe('jwt round-trip', () => {
     expect(await verifyJwt('not-a-jwt', SECRET)).toBeNull();
   });
 
+  it('accepts any matching secret in a list (rotation grace)', async () => {
+    const token = await signJwt({ user_id: 1, username: 'a', role: 'user' }, SECRET, 3600);
+    expect(await verifyJwt(token, ['wrong-secret-16chars', SECRET])).not.toBeNull();
+    expect(await verifyJwt(token, ['wrong-a-16-chars!!', 'wrong-b-16-chars!!'])).toBeNull();
+  });
+
+  it('embeds kid in header when provided', async () => {
+    const token = await signJwt({ user_id: 1, username: 'a', role: 'user' }, SECRET, 3600, 'kid-1');
+    const header = JSON.parse(atob(token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+    expect(header.kid).toBe('kid-1');
+    expect(await verifyJwt(token, SECRET)).not.toBeNull();
+  });
+
   it('rejects token without exp claim (never-expiring token)', async () => {
     const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     const payload = btoa(JSON.stringify({ user_id: 1, username: 'a', role: 'user', iat: 1 }))

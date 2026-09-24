@@ -1,13 +1,27 @@
 // 會話校驗與簽發：JWT 只證明身份，每次請求回庫比對 token_version 與 status，role 以庫為準。
 // 吊銷 = token_version + 1（退出、改密、封禁），該用戶所有已簽發的 access/refresh 立即失效。
+// 簽名密鑰輪換見 jwtkeys.ts：簽發用 current；校驗 current→previous，不因輪換全局登出。
 
 import { signJwt, verifyJwt, type Claims } from './jwt';
+import { verifySecrets, type JwtMaterial } from './jwtkeys';
 import { PORTAL_SESSION_TTL, ADMIN_SESSION_TTL, REFRESH_TTL } from './cookies';
 
 /** Admin / 通用 Bearer 兜底：24h（對齊既有 Go generateToken） */
 export const BEARER_TTL = 24 * 3600;
 /** Portal Bearer（跨站 localStorage 兜底）與 portal session 同壽：2h */
 export const PORTAL_BEARER_TTL = PORTAL_SESSION_TTL;
+
+/** 字串 = 單密鑰（測試）；JwtMaterial = KV 輪換材料 */
+export type JwtSecrets = string | JwtMaterial;
+
+function signingOf(secrets: JwtSecrets): { secret: string; kid?: string } {
+  if (typeof secrets === 'string') return { secret: secrets };
+  return { secret: secrets.current.secret, kid: secrets.current.kid };
+}
+
+function verifyList(secrets: JwtSecrets): string[] {
+  return typeof secrets === 'string' ? [secrets] : verifySecrets(secrets);
+}
 
 export type SessionUser = {
   id: number;
@@ -34,11 +48,11 @@ export async function checkClaims(db: D1Database, claims: Claims): Promise<Sessi
 export async function authenticate(
   db: D1Database,
   token: string | undefined,
-  secret: string,
+  secrets: JwtSecrets,
   kind: 'access' | 'refresh' = 'access',
 ): Promise<SessionResult> {
   if (!token) return { error: 'invalid' };
-  const claims = await verifyJwt(token, secret);
+  const claims = await verifyJwt(token, verifyList(secrets));
   if (!claims || typeof claims.user_id !== 'number') return { error: 'invalid' };
   if ((claims.typ === 'refresh') !== (kind === 'refresh')) return { error: 'invalid' };
   return checkClaims(db, claims);
@@ -51,16 +65,16 @@ export async function authenticate(
  */
 export async function authenticateAccessCandidates(
   db: D1Database,
-  secret: string | undefined,
+  secrets: JwtSecrets | undefined,
   candidates: Array<string | undefined | null>,
 ): Promise<SessionResult> {
-  if (!secret) return { error: 'invalid' };
+  if (!secrets) return { error: 'invalid' };
   let last: SessionResult = { error: 'invalid' };
   const seen = new Set<string>();
   for (const raw of candidates) {
     if (!raw || seen.has(raw)) continue;
     seen.add(raw);
-    last = await authenticate(db, raw, secret, 'access');
+    last = await authenticate(db, raw, secrets, 'access');
     if ('user' in last) return last;
   }
   return last;
@@ -74,19 +88,21 @@ function baseClaims(user: Signable) {
 
 export type SessionKind = 'portal' | 'admin';
 
-export async function signTokens(user: Signable, secret: string, kind: SessionKind = 'portal') {
+export async function signTokens(user: Signable, secrets: JwtSecrets, kind: SessionKind = 'portal') {
+  const { secret, kid } = signingOf(secrets);
   const base = baseClaims(user);
   const accessTtl = kind === 'admin' ? ADMIN_SESSION_TTL : PORTAL_SESSION_TTL;
   const bearerTtl = kind === 'admin' ? BEARER_TTL : PORTAL_BEARER_TTL;
   return {
-    session: await signJwt(base, secret, accessTtl),
-    refresh: await signJwt({ ...base, typ: 'refresh' }, secret, REFRESH_TTL),
-    bearer: await signJwt(base, secret, bearerTtl),
+    session: await signJwt(base, secret, accessTtl, kid),
+    refresh: await signJwt({ ...base, typ: 'refresh' }, secret, REFRESH_TTL, kid),
+    bearer: await signJwt(base, secret, bearerTtl, kid),
   };
 }
 
-export function signAccess(user: Signable, secret: string, ttl: number) {
-  return signJwt(baseClaims(user), secret, ttl);
+export function signAccess(user: Signable, secrets: JwtSecrets, ttl: number) {
+  const { secret, kid } = signingOf(secrets);
+  return signJwt(baseClaims(user), secret, ttl, kid);
 }
 
 // 僅當庫中版本仍等於 expected 時加一：舊 token 無法觸發，並發吊銷只生效一次

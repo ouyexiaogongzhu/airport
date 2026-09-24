@@ -36,7 +36,7 @@
               <td><code class="addr-text">{{ n.address }}</code></td>
               <td>{{ n.port }}</td>
               <td><span class="tag">{{ n.protocol }}</span></td>
-              <td><span class="tag">{{ n.network || 'ws' }}</span></td>
+              <td><span class="tag">{{ n.network || 'xhttp' }}</span></td>
               <td><span :class="['status', n.status]">{{ n.status }}</span></td>
               <td class="traffic-cell">
                 <span class="traffic-up">▲ {{ formatBytes(n.traffic_up) }}</span>
@@ -87,7 +87,6 @@
             <div class="field">
               <label>Protocol</label>
               <select v-model="form.protocol" required>
-                <option value="">-- Select --</option>
                 <option value="vless">vless</option>
                 <option value="vmess">vmess</option>
               </select>
@@ -101,13 +100,12 @@
             <div class="field">
               <label>Transport</label>
               <select v-model="form.network" required>
-                <option value="ws">ws</option>
                 <option value="xhttp">xhttp</option>
               </select>
             </div>
             <div class="field">
-              <label>Path (WS / XHTTP)</label>
-              <input v-model="form.ws_path" type="text" placeholder="/ (default)" />
+              <label>Path (XHTTP)</label>
+              <input v-model="form.ws_path" type="text" placeholder="/rfhttp/ (default)" />
             </div>
           </div>
           <div v-if="editingNode" class="field">
@@ -163,7 +161,7 @@ const editingNode = ref<Node | null>(null)
 
 function emptyForm() {
   return {
-    name: '', type: 'xray', address: '', port: 20001, protocol: '', user_id: 1, status: 'inactive', network: 'ws', ws_path: '',
+    name: '', type: 'xray', address: '', port: 20001, protocol: 'vless', user_id: 1, status: 'inactive', network: 'xhttp', ws_path: '',
   }
 }
 
@@ -189,7 +187,7 @@ function openEditModal(n: Node) {
     protocol: n.protocol,
     user_id: n.user_id,
     status: n.status,
-    network: n.network === 'xhttp' ? 'xhttp' : 'ws',
+    network: 'xhttp',
     ws_path: n.ws_path ?? '',
   }
   editingNode.value = n
@@ -274,12 +272,12 @@ async function saveNode() {
   }
 }
 
-// The daemon token is only returned once; rotating invalidates the running daemon
+// The gateway token is only returned once; rotating invalidates the running gateway
 async function rotateToken(n: Node) {
-  if (!confirm(`Generate a new daemon token for "${n.name}"? The current token stops working immediately.`)) return
+  if (!confirm(`Generate a new gateway token for "${n.name}"? The current token stops working immediately.`)) return
   try {
     const res = await api.post(`/admin/nodes/${n.id}/token`)
-    window.prompt('Node token (use with deploy-node-cf-ws.sh --node-token):', res.data.token)
+    window.prompt('Node token (use with deploy-node-gateway.sh --node-token):', res.data.token)
   } catch (e: any) {
     error.value = e.response?.data?.error || e.message || 'Failed to generate token'
   }

@@ -8,6 +8,7 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
 import { verifyJwt } from '../lib/jwt';
+import { resolveJwtMaterial, verifySecrets } from '../lib/jwtkeys';
 import { verifyTurnstile } from '../lib/turnstile';
 import {
   PORTAL_SESSION_TTL,
@@ -37,10 +38,10 @@ type UserWithHash = UserRow & { password_hash: string; token_version: number };
 
 // setAdminAuthCookies：admin_session(30d) + admin_refresh(90d) + admin_csrf(30d 非 httpOnly)
 async function issueAdminCookies(c: Context<AppEnv>, user: SessionUser | UserWithHash) {
-  const secret = c.env.JWT_SECRET;
-  if (!secret) return null;
+  const material = await resolveJwtMaterial(c.env);
+  if (!material) return null;
   const domain = c.env.COOKIE_DOMAIN;
-  const t = await signTokens(user, secret, 'admin');
+  const t = await signTokens(user, material, 'admin');
   // Domain cookie 不會覆蓋舊 host-only；登入前先清，避免雙份同名 session
   if (domain) {
     for (const v of clearHostOnlyAuthCookies(['admin_session', 'admin_refresh', 'admin_csrf'])) {
@@ -78,10 +79,10 @@ async function refreshCandidates(c: Context<AppEnv>, cookieName: string): Promis
 }
 
 async function refreshUser(c: Context<AppEnv>, cookieName: string): Promise<SessionUser | null> {
-  const secret = c.env.JWT_SECRET;
-  if (!secret) return null;
+  const material = await resolveJwtMaterial(c.env);
+  if (!material) return null;
   for (const t of await refreshCandidates(c, cookieName)) {
-    const r = await authenticate(c.env.DB, t, secret, 'refresh');
+    const r = await authenticate(c.env.DB, t, material, 'refresh');
     if ('user' in r) return r.user;
   }
   return null;
@@ -90,13 +91,13 @@ async function refreshUser(c: Context<AppEnv>, cookieName: string): Promise<Sess
 // 退出：任一當前版本的 token（access / refresh）即可吊銷該用戶全部會話；
 // 已吊銷的舊 token 不能再觸發加一（防止被盜舊 token 反覆踢人）
 async function revokeFromRequest(c: Context<AppEnv>, names: string[]) {
-  const secret = c.env.JWT_SECRET;
-  if (!secret) return;
+  const material = await resolveJwtMaterial(c.env);
+  if (!material) return;
   const body = await c.req.json<{ refresh_token?: unknown }>().catch(() => null);
   const tokens = [...names.map((n) => getCookie(c, n)), bearerOf(c), body?.refresh_token];
   for (const t of tokens) {
     if (typeof t !== 'string' || t === '') continue;
-    const claims = await verifyJwt(t, secret);
+    const claims = await verifyJwt(t, verifySecrets(material));
     if (!claims || typeof claims.user_id !== 'number') continue;
     const r = await bumpTokenVersion(c.env.DB, claims.user_id, claims.tv ?? 0).run();
     if ((r.meta.changes ?? 0) > 0) return;
@@ -109,9 +110,9 @@ export function authRoutes() {
   // middleware.WebAuth(cookieName)：cookie 優先，失效時再試 Bearer（同 JWT/密鑰）
   const sessionAuth = (cookieName: string) =>
     createMiddleware<AppEnv>(async (c, next) => {
-      const secret = c.env.JWT_SECRET;
-      const r = await authenticateAccessCandidates(c.env.DB, secret, [
-        secret ? getCookie(c, cookieName) : undefined,
+      const material = await resolveJwtMaterial(c.env);
+      const r = await authenticateAccessCandidates(c.env.DB, material ?? undefined, [
+        material ? getCookie(c, cookieName) : undefined,
         bearerOf(c),
       ]);
       if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
@@ -150,26 +151,28 @@ export function authRoutes() {
   app.post('/auth/refresh', async (c) => {
     const user = await refreshUser(c, 'refresh');
     if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
-    const secret = c.env.JWT_SECRET as string;
+    const material = await resolveJwtMaterial(c.env);
+    if (!material) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     c.header(
       'Set-Cookie',
-      sessionCookie('session', await signAccess(user, secret, PORTAL_SESSION_TTL), c.env.COOKIE_DOMAIN),
+      sessionCookie('session', await signAccess(user, material, PORTAL_SESSION_TTL), c.env.COOKIE_DOMAIN),
       { append: true },
     );
-    return c.json({ ok: true, token: await signAccess(user, secret, PORTAL_BEARER_TTL) });
+    return c.json({ ok: true, token: await signAccess(user, material, PORTAL_BEARER_TTL) });
   });
 
   app.post('/admin/auth/refresh', async (c) => {
     const user = await refreshUser(c, 'admin_refresh');
     if (!user) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     if (user.role !== 'admin') return c.json({ error: 'admin access required' }, 403);
-    const secret = c.env.JWT_SECRET as string;
+    const material = await resolveJwtMaterial(c.env);
+    if (!material) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     c.header(
       'Set-Cookie',
-      sessionCookie('admin_session', await signAccess(user, secret, ADMIN_SESSION_TTL), c.env.COOKIE_DOMAIN),
+      sessionCookie('admin_session', await signAccess(user, material, ADMIN_SESSION_TTL), c.env.COOKIE_DOMAIN),
       { append: true },
     );
-    return c.json({ ok: true, token: await signAccess(user, secret, BEARER_TTL) });
+    return c.json({ ok: true, token: await signAccess(user, material, BEARER_TTL) });
   });
 
   // Logout：吊銷該用戶全部會話（token_version+1），清全部 6 個 cookie（portal + admin）；

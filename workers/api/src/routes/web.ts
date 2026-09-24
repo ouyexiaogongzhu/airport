@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { authenticateAccessCandidates } from '../lib/session';
+import { resolveJwtMaterial } from '../lib/jwtkeys';
 import { constantTimeEqual } from '../lib/csrf';
 import { sanitizedUser, isValidEmail, USER_PROFILE_COLS, type UserRow } from '../lib/user';
 import { createPaymentURL } from '../lib/payments';
@@ -36,11 +37,11 @@ export function webRoutes() {
 
   // middleware.WebAuth("session")（webauth.go）：cookie 缺失/驗簽失敗 → 401 SESSION_EXPIRED
   const webAuth = createMiddleware<AppEnv>(async (c, next) => {
-    const secret = c.env.JWT_SECRET;
+    const material = await resolveJwtMaterial(c.env);
     // cookie 優先；失效時再試 Bearer（勿用 cookie||bearer：過期 Domain cookie 會擋住有效 Bearer）
     const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
-    const r = await authenticateAccessCandidates(c.env.DB, secret, [
-      secret ? getCookie(c, 'session') : undefined,
+    const r = await authenticateAccessCandidates(c.env.DB, material ?? undefined, [
+      material ? getCookie(c, 'session') : undefined,
       bearer,
     ]);
     if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);

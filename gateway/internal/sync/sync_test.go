@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/config"
 )
 
 func setupTestSyncer(t testing.TB, mockServerURL string) *Syncer {

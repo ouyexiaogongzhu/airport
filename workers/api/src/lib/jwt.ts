@@ -1,5 +1,6 @@
 // HS256 JWT — 對齊 Go golang-jwt/v5（claims: user_id/username/role/exp/iat）
-// 用途：httpOnly cookie 會話 + Bearer 兜底，同一 JWT_SECRET 下可互相驗證。
+// 用途：httpOnly cookie 會話 + Bearer 兜底。
+// 簽名密鑰由 jwtkeys（KV current/previous）提供；JWT_SECRET 僅 bootstrap。
 
 const enc = new TextEncoder();
 
@@ -40,16 +41,19 @@ export async function signJwt(
   claims: Omit<Claims, 'exp' | 'iat'>,
   secret: string,
   ttlSeconds: number,
+  kid?: string,
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const header = b64url(enc.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
+  const headerObj: Record<string, string> = { alg: 'HS256', typ: 'JWT' };
+  if (kid) headerObj.kid = kid;
+  const header = b64url(enc.encode(JSON.stringify(headerObj)));
   const payload = b64url(enc.encode(JSON.stringify({ ...claims, exp: now + ttlSeconds, iat: now })));
   const data = `${header}.${payload}`;
   const sig = await crypto.subtle.sign('HMAC', await key(secret), enc.encode(data));
   return `${data}.${b64url(sig)}`;
 }
 
-export async function verifyJwt(token: string, secret: string): Promise<Claims | null> {
+async function verifyJwtWithSecret(token: string, secret: string): Promise<Claims | null> {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [header, payload, sig] = parts;
@@ -68,4 +72,14 @@ export async function verifyJwt(token: string, secret: string): Promise<Claims |
   } catch {
     return null;
   }
+}
+
+/** 單密鑰或密鑰列表（輪換 grace：current 然後 previous） */
+export async function verifyJwt(token: string, secret: string | readonly string[]): Promise<Claims | null> {
+  const secrets = typeof secret === 'string' ? [secret] : secret;
+  for (const s of secrets) {
+    const claims = await verifyJwtWithSecret(token, s);
+    if (claims) return claims;
+  }
+  return null;
 }

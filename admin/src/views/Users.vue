@@ -11,6 +11,7 @@
 
       <div v-if="loading" class="loading">Loading users…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
+      <div v-if="successMsg" class="success-msg">{{ successMsg }}</div>
 
       <div v-if="!loading" class="table-wrap">
         <table class="data-table">
@@ -40,16 +41,36 @@
               </td>
               <td>
                 <code class="token-text">{{ maskToken(u.client_token) }}</code>
-                <button class="btn-tiny" @click="copyToken(u.client_token)">📋</button>
               </td>
               <td>{{ formatBytes(u.traffic_used_bytes) }}</td>
               <td>{{ formatExpiry(u.expire_time) }}</td>
               <td class="actions-cell">
+                <button
+                  class="btn-tiny btn-sub"
+                  :disabled="!u.client_token"
+                  title="Copy v2rayNG / Base64 subscription URL"
+                  @click="copySubUrl(u, 'base64')"
+                >Copy Base64</button>
+                <button
+                  class="btn-tiny btn-sub"
+                  :disabled="!u.client_token"
+                  title="Copy Clash subscription URL"
+                  @click="copySubUrl(u, 'clash')"
+                >Copy Clash</button>
+                <button
+                  class="btn-tiny"
+                  :disabled="regeneratingId === u.id"
+                  title="Rotate client_token (invalidates old subscription URLs)"
+                  @click="regenerateToken(u)"
+                >{{ regeneratingId === u.id ? '…' : 'Rotate token' }}</button>
                 <button class="btn-tiny" @click="toggleActive(u)" :disabled="activatingId === u.id">
-                  {{ u.status === 'active' ? '⏸ Suspend' : '✅ Activate' }}
+                  {{ u.status === 'active' ? 'Suspend' : 'Activate' }}
                 </button>
-                <button class="btn-tiny" @click="openManage(u)">⚙️ Manage</button>
+                <button class="btn-tiny" @click="openManage(u)">Manage</button>
               </td>
+            </tr>
+            <tr v-if="filteredUsers.length === 0">
+              <td colspan="9" class="empty-row">No users found — subscription links use an existing user’s client_token</td>
             </tr>
           </tbody>
         </table>
@@ -111,15 +132,21 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
-const auth = useAuthStore()
+import { buildSubscriptionUrl, type SubscriptionFormat } from '../utils/subscriptionUrl'
 
 const search = ref('')
 const users = ref<any[]>([])
 const loading = ref(false)
 const error = ref('')
+const successMsg = ref('')
 const activatingId = ref<number | null>(null)
+const regeneratingId = ref<number | null>(null)
+
+function flashSuccess(msg: string) {
+  successMsg.value = msg
+  setTimeout(() => { if (successMsg.value === msg) successMsg.value = '' }, 2500)
+}
 
 function maskToken(token?: string): string {
   if (!token || token.length < 12) return '—'
@@ -148,12 +175,33 @@ function formatExpiry(ts?: number): string {
   return d.toISOString().split('T')[0]
 }
 
-async function copyToken(token?: string) {
-  if (!token) return
+async function copySubUrl(u: { username?: string; client_token?: string }, format: SubscriptionFormat) {
+  const url = buildSubscriptionUrl(u.client_token || '', format)
+  if (!url) return
   try {
-    await navigator.clipboard.writeText(token)
+    await navigator.clipboard.writeText(url)
+    const label = format === 'clash' ? 'Clash' : 'Base64'
+    flashSuccess(`${label} subscription URL copied for ${u.username || 'user'}`)
   } catch {
-    // fallback
+    error.value = 'Failed to copy to clipboard'
+  }
+}
+
+async function regenerateToken(u: any) {
+  if (!confirm(`Rotate token for "${u.username}"? Existing subscription URLs stop working immediately.`)) return
+  regeneratingId.value = u.id
+  error.value = ''
+  try {
+    const res = await api.put(`/admin/users/${u.id}`, { regenerate_token: true })
+    const fresh = res.data
+    if (fresh?.client_token) u.client_token = fresh.client_token
+    const idx = users.value.findIndex((x: any) => x.id === u.id)
+    if (idx !== -1 && fresh) users.value[idx] = { ...users.value[idx], ...fresh }
+    flashSuccess(`Token rotated for ${u.username}`)
+  } catch (e: any) {
+    error.value = e.response?.data?.error || e.message || 'Failed to rotate token'
+  } finally {
+    regeneratingId.value = null
   }
 }
 
@@ -285,11 +333,13 @@ onMounted(loadUsers)
 .btn-sm:hover { background: #4a9eff22; }
 .loading { padding: 3rem; text-align: center; color: #888; }
 .error-msg { padding: 1rem 2rem; color: #ff6b6b; background: #2a1515; margin: 1rem 2rem; border-radius: 8px; }
-.table-wrap { padding: 1.5rem 2rem; flex: 1; }
+.success-msg { padding: 1rem 2rem; color: #4caf50; background: #1a3a1a; margin: 1rem 2rem 0; border-radius: 8px; }
+.table-wrap { padding: 1.5rem 2rem; flex: 1; overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th { text-align: left; padding: 0.75rem 0.5rem; color: #888; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2a2d35; }
 .data-table td { padding: 0.75rem 0.5rem; border-bottom: 1px solid #22252b; font-size: 0.9rem; }
 .data-table tr:hover td { background: #1a1d2322; }
+.empty-row { text-align: center; color: #555; padding: 3rem 0 !important; }
 .tag { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; background: #2a2d35; color: #aaa; font-size: 0.8rem; }
 .status { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
 .status.active { background: #1a3a1a; color: #4caf50; }
@@ -303,6 +353,9 @@ onMounted(loadUsers)
 .token-text { font-size: 0.75rem; color: #4a9eff; background: #1e2028; padding: 0.1rem 0.3rem; border-radius: 3px; }
 .btn-tiny { padding: 0.2rem 0.5rem; border: 1px solid #444; border-radius: 4px; background: transparent; color: #aaa; cursor: pointer; font-size: 0.75rem; margin: 0 0.15rem; }
 .btn-tiny:hover { border-color: #4a9eff; color: #4a9eff; }
+.btn-tiny:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sub { border-color: #3d6a9e; color: #7eb6ff; }
+.btn-sub:hover:not(:disabled) { border-color: #4a9eff; color: #4a9eff; background: #4a9eff18; }
 .actions-cell { white-space: nowrap; }
 .btn-primary { padding: 0.45rem 0.9rem; background: #4a9eff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
 .btn-primary:disabled, .btn-sm:disabled { opacity: 0.6; cursor: not-allowed; }

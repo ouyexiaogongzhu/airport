@@ -11,12 +11,8 @@ describe('Admin API module', () => {
   })
 
   it('sets baseURL with fallback to /api/v1', () => {
-    // Clear any custom env
-    const original = import.meta.env.VITE_API_BASE_URL
-
-    // The default baseURL is '/api/v1' when VITE_API_BASE_URL is not set
-    // We can verify by checking the import
-    expect(import.meta.env.VITE_API_BASE_URL).toBeUndefined()
+    // Falsy (undefined or '') means the axios client falls back to '/api/v1'
+    expect(import.meta.env.VITE_API_BASE_URL || undefined).toBeUndefined()
   })
 
   it('can make GET requests', async () => {

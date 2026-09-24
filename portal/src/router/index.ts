@@ -9,15 +9,15 @@ const router = createRouter({
     { path: '/register', name: 'register', component: () => import('../views/Register.vue') },
     { path: '/subscription', redirect: '/account' },
     { path: '/dashboard', name: 'dashboard', component: () => import('../views/Dashboard.vue'), meta: { requiresAuth: true } },
-    { path: '/products', name: 'products', component: () => import('../views/Products.vue'), meta: { requiresAuth: true } },
-    { path: '/plans', name: 'plans', component: () => import('../views/Products.vue'), meta: { requiresAuth: true } },
+    { path: '/products', redirect: { path: '/dashboard', hash: '#plans' } },
+    { path: '/plans', redirect: { path: '/dashboard', hash: '#plans' } },
     { path: '/checkout/:plan_id', name: 'checkout', component: () => import('../views/Checkout.vue'), meta: { requiresAuth: true } },
     { path: '/pay/:order_id', name: 'pay', component: () => import('../views/Pay.vue'), meta: { requiresAuth: true } },
     { path: '/pay/result', name: 'pay-result', component: () => import('../views/PayResult.vue'), meta: { requiresAuth: true } },
     { path: '/account', name: 'account', component: () => import('../views/Account.vue'), meta: { requiresAuth: true } },
-    { path: '/account/guide', redirect: { path: '/account', hash: '#setup' } },
-    { path: '/setup', redirect: { path: '/account', hash: '#setup' } },
-    { path: '/account/devices', name: 'account-devices', component: () => import('../views/AccountDevices.vue'), meta: { requiresAuth: true } },
+    { path: '/account/guide', redirect: '/account' },
+    { path: '/setup', redirect: '/account' },
+    { path: '/account/devices', redirect: { path: '/account', hash: '#devices' } },
   ],
   scrollBehavior(to) {
     if (to.hash) {
@@ -27,8 +27,11 @@ const router = createRouter({
   },
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore()
+  if (!auth.bootstrapped) {
+    await auth.authReady
+  }
   if (to.meta.requiresAuth && !auth.isLoggedIn) {
     next('/login')
   } else {

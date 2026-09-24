@@ -1,20 +1,8 @@
 <template>
-  <div class="page account-page">
-    <nav class="topbar">
-      <span class="brand">RFPlay</span>
-      <div class="nav-links">
-        <router-link to="/dashboard">Dashboard</router-link>
-        <router-link to="/plans">Plans</router-link>
-        <router-link to="/account">Account</router-link>
-        <router-link to="/account/devices">Devices</router-link>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/login')">Logout</a>
-      </div>
-      <span class="user-badge">{{ auth.username }}</span>
-    </nav>
-
+  <AppShell>
     <main class="content">
       <h2>Account</h2>
-      <p class="subtitle">Profile, subscription, client token, and setup in one place.</p>
+      <p class="subtitle">Profile, subscription, client token, and devices in one place.</p>
 
       <div v-if="loading" class="loading">Loading account info…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
@@ -54,7 +42,7 @@
       <section class="card-section" id="billing">
         <div class="section-header">
           <h3>Billing</h3>
-          <router-link to="/plans" class="btn-outline">Browse Plans</router-link>
+          <router-link to="/dashboard#plans" class="btn-outline">Browse Plans</router-link>
         </div>
         <div v-if="ordersLoading" class="loading">Loading orders…</div>
         <div v-else-if="!orders.length" class="placeholder-box">
@@ -201,96 +189,11 @@
         </div>
       </section>
 
-      <!-- Setup Guide (merged from SetupGuide.vue) -->
-      <section class="card-section" id="setup">
-        <h3>Setup Guide</h3>
-        <p class="section-hint">Follow the steps for your device to get connected.</p>
-
-        <div class="tabs">
-          <button
-            v-for="t in tabs"
-            :key="t.key"
-            :class="['tab', { active: activeTab === t.key }]"
-            @click="activeTab = t.key"
-          >
-            {{ t.label }}
-          </button>
-        </div>
-
-        <div v-if="activeTab === 'v2rayng'" class="guide-section">
-          <div class="guide-header">
-            <span class="platform-badge android">Android</span>
-            <h4>V2rayNG</h4>
-          </div>
-          <div class="install-methods">
-            <a href="https://play.google.com/store/apps/details?id=com.v2ray.ang" target="_blank" rel="noopener" class="method-btn">Google Play</a>
-            <a href="https://github.com/2dust/v2rayNG/releases" target="_blank" rel="noopener" class="method-btn">APK Download</a>
-          </div>
-          <ol class="steps">
-            <li>Open V2rayNG app</li>
-            <li>Tap <strong>+</strong> icon in the top-right corner</li>
-            <li>Select <strong>Import subscription from clipboard</strong></li>
-            <li>Paste your <strong>Base64</strong> subscription URL (copied above)</li>
-            <li>Tap <strong>✓</strong> to confirm</li>
-            <li>Select a node and tap <strong>Connect</strong></li>
-          </ol>
-        </div>
-
-        <div v-if="activeTab === 'shadowrocket'" class="guide-section">
-          <div class="guide-header">
-            <span class="platform-badge ios">iOS</span>
-            <h4>Shadowrocket</h4>
-          </div>
-          <div class="install-methods">
-            <a href="https://apps.apple.com/app/shadowrocket/id932747118" target="_blank" rel="noopener" class="method-btn">App Store</a>
-          </div>
-          <ol class="steps">
-            <li>Open Shadowrocket app</li>
-            <li>Tap the <strong>+</strong> icon in the top-right corner</li>
-            <li>Select type: <strong>Subscribe</strong></li>
-            <li>Paste your subscription URL</li>
-            <li>Tap <strong>Save</strong> (top-right)</li>
-            <li>Select a node and toggle <strong>Connect</strong></li>
-          </ol>
-        </div>
-
-        <div v-if="activeTab === 'clash-verge'" class="guide-section">
-          <div class="guide-header">
-            <span class="platform-badge desktop">Desktop</span>
-            <h4>Clash Verge</h4>
-          </div>
-          <div class="install-methods">
-            <a href="https://github.com/clash-verge-rev/clash-verge-rev/releases" target="_blank" rel="noopener" class="method-btn">GitHub Releases</a>
-          </div>
-          <ol class="steps">
-            <li>Download and install Clash Verge for your OS</li>
-            <li>Open Clash Verge → go to <strong>Profiles</strong></li>
-            <li>Click <strong>Import</strong> (or paste URL)</li>
-            <li>Paste your Clash subscription URL (<code>/clash</code>)</li>
-            <li>Click <strong>Import</strong> to confirm</li>
-            <li>Go to <strong>Proxies</strong> and select a node</li>
-            <li>Toggle <strong>System Proxy</strong> or <strong>TUN Mode</strong></li>
-          </ol>
-        </div>
-
-        <div v-if="activeTab === 'v2raya'" class="guide-section">
-          <div class="guide-header">
-            <span class="platform-badge desktop">Linux / OpenWrt</span>
-            <h4>v2rayA</h4>
-          </div>
-          <div class="install-methods">
-            <a href="https://github.com/v2rayA/v2rayA/releases" target="_blank" rel="noopener" class="method-btn">GitHub Releases</a>
-            <a href="https://v2raya.org/docs/manual/use-other-core/" target="_blank" rel="noopener" class="method-btn">Use xray-core</a>
-          </div>
-          <ol class="steps">
-            <li>推荐 <strong>v2rayA ≥ 2.2.7.5</strong> + <strong>xray-core</strong>（OpenWrt 官方 2.2.7.3 对 XHTTP 不可靠，请用 mihomo / Clash）</li>
-            <li>导入 <strong>Base64</strong> 订阅（不要带 <code>/clash</code>）</li>
-            <li>测速 TIMEOUT 多为假阳（8s 硬超时）——请<strong>直接连接</strong></li>
-          </ol>
-        </div>
+      <section class="card-section devices-wrap">
+        <DevicesSection />
       </section>
     </main>
-  </div>
+  </AppShell>
 </template>
 
 <script setup lang="ts">
@@ -298,6 +201,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
 import QrCode from '../components/QrCode.vue'
+import AppShell from '../components/AppShell.vue'
+import DevicesSection from '../components/DevicesSection.vue'
 import { buildSubscriptionUrl } from '../utils/subscriptionUrl'
 
 const auth = useAuthStore()
@@ -333,14 +238,6 @@ const showQr = ref(false)
 const copied = ref(false)
 const showLinkQr = ref(false)
 const copiedKind = ref('')
-
-const activeTab = ref('v2rayng')
-const tabs = [
-  { key: 'v2rayng', label: 'V2rayNG' },
-  { key: 'shadowrocket', label: 'Shadowrocket' },
-  { key: 'clash-verge', label: 'Clash Verge' },
-  { key: 'v2raya', label: 'v2rayA' },
-]
 
 const statusClass = computed(() => {
   const s = profile.value.subscription_status || ''
@@ -532,25 +429,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.account-page {
-  min-height: 100vh;
-  background: #1a1a2e;
-  color: #e0e0e0;
-}
-.topbar {
-  display: flex;
-  align-items: center;
-  padding: 0.75rem 2rem;
-  background: #16213e;
-  border-bottom: 1px solid #0f3460;
-  gap: 2rem;
-}
-.brand { font-weight: 700; color: #e94560; font-size: 1.2rem; }
-.nav-links { display: flex; gap: 1.25rem; flex: 1; }
-.nav-links a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.nav-links a:hover, .nav-links a.router-link-active { color: #e94560; }
-.user-badge { background: rgba(233,69,96,0.15); color: #e94560; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
 .content { max-width: 800px; margin: 0 auto; padding: 2rem; }
+.devices-wrap { padding-bottom: 0.5rem; }
 h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .subtitle { color: #a0a0b0; margin: 0.25rem 0 1.5rem; font-size: 0.9rem; }
 .loading { color: #a0a0b0; font-size: 0.9rem; padding: 1rem 0; }
@@ -735,47 +615,5 @@ h2 { margin: 0; font-size: 1.5rem; color: #f0f0f0; }
 .new-token-banner .btn-outline { margin-top: 0.75rem; border-color: #81c784; color: #81c784; }
 .new-token-banner .btn-outline:hover { border-color: #a5d6a7; color: #a5d6a7; }
 
-.tabs { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
-.tab {
-  padding: 0.45rem 0.9rem;
-  border: 1px solid #0f3460;
-  border-radius: 20px;
-  background: transparent;
-  color: #a0a0b0;
-  cursor: pointer;
-  font-size: 0.85rem;
-  transition: all 0.2s;
-}
-.tab:hover { background: rgba(233,69,96,0.1); border-color: #e94560; }
-.tab.active { background: #e94560; color: white; border-color: #e94560; }
-.guide-section { margin-top: 0.25rem; }
-.guide-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
-.guide-header h4 { margin: 0; font-size: 1.05rem; color: #f0f0f0; }
-.platform-badge {
-  display: inline-block;
-  padding: 0.2rem 0.6rem;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.platform-badge.android { background: #4caf50; color: white; }
-.platform-badge.ios { background: #2196f3; color: white; }
-.platform-badge.desktop { background: #ff9800; color: white; }
-.install-methods { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
-.method-btn {
-  display: inline-block;
-  padding: 0.4rem 0.9rem;
-  background: #0f3460;
-  border-radius: 8px;
-  color: #e0e0e0;
-  text-decoration: none;
-  font-size: 0.85rem;
-  transition: background 0.2s;
-}
-.method-btn:hover { background: #1a5276; }
-.steps { padding-left: 1.5rem; margin: 0; }
-.steps li { margin-bottom: 0.6rem; line-height: 1.5; color: #c0c0d0; font-size: 0.9rem; }
-.steps li strong { color: #e94560; }
 code { background: #0f3460; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
 </style>

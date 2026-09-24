@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Env } from '../index';
 import { verifyJwt, type Claims } from '../lib/jwt';
+import { resolveJwtMaterial, verifySecrets } from '../lib/jwtkeys';
 import { serviceBlock } from '../lib/entitlement';
 import { checkClaims } from '../lib/session';
 import { constantTimeEqual } from '../lib/csrf';
@@ -64,8 +65,8 @@ async function getActiveNodes(env: Env): Promise<NodeRow[]> {
 
 // JWTProtected 移植：401 JSON 與 Go 逐字一致
 async function requireJwt(c: { env: Env; req: { header: (k: string) => string | undefined } }): Promise<Claims | Response> {
-  const secret = c.env.JWT_SECRET;
-  if (!secret) {
+  const material = await resolveJwtMaterial(c.env);
+  if (!material) {
     return new Response(goJSON({ error: 'server configuration error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
@@ -88,7 +89,7 @@ async function requireJwt(c: { env: Env; req: { header: (k: string) => string | 
       return Response.json({ error: 'invalid authorization header format' }, { status: 401 });
     }
   }
-  const claims = await verifyJwt(tokenStr, secret);
+  const claims = await verifyJwt(tokenStr, verifySecrets(material));
   if (!claims || typeof claims.user_id !== 'number' || claims.typ === 'refresh') {
     return Response.json({ error: 'invalid or expired token' }, { status: 401 });
   }

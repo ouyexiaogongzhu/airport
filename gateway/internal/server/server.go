@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/sync"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/config"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/sync"
 )
 
 // Syncer defines the interface the server expects from the sync component.
@@ -81,7 +81,7 @@ func (s *Server) registerRoutes() {
 func (s *Server) healthHandler(c *fiber.Ctx) error {
 	return c.JSON(HealthResponse{
 		Status:    "ok",
-		Service:   "daemon-api",
+		Service:   "gateway-api",
 		Version:   "1.0.0",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})

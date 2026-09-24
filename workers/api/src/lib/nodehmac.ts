@@ -1,4 +1,4 @@
-// 節點請求簽名 — 對齊 daemon internal/sync/sync.go signRequest / nodeHMACSecret：
+// 節點請求簽名 — 對齊 gateway internal/sync/sync.go signRequest / nodeHMACSecret：
 // key = sha256("rfplay-node-hmac-v1:" + token)；msg = method \n path \n ts \n body；hex(HMAC-SHA256)
 import { constantTimeEqual } from './csrf';
 

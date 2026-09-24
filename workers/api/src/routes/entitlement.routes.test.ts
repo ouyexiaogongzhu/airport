@@ -12,7 +12,7 @@ async function setup() {
   raw.exec(
     "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', 'x', 'admin');" +
       "INSERT INTO users (id, username, password_hash, client_token, vless_uuid) VALUES (2, 'alice', 'x', 'rf_alice', '11111111-2222-4333-8444-555555555555');" +
-      "INSERT INTO nodes (name, type, address, port, protocol, status, user_id, network, security, ws_path) VALUES ('hk', 'cf', 'hk.example.com', 443, 'vless', 'active', 1, 'ws', 'tls', '/ws');",
+      "INSERT INTO nodes (name, type, address, port, protocol, status, user_id, network, security, ws_path) VALUES ('hk', 'cf', 'hk.example.com', 443, 'vless', 'active', 1, 'xhttp', 'tls', '/rfhttp/');",
   );
   const env = {
     DB: db,

@@ -1,121 +1,76 @@
-# RFPlay Airport System
+# RFPlay Airport
 
-**rfplay.uk** 代理订阅平台：控制面全部运行在 Cloudflare，节点为自有 VPS（Xray + daemon），用户使用通用客户端导入订阅。
+**rfplay.uk** 代理订阅平台：控制面在 Cloudflare，节点为自有 VPS（官方 Xray + gateway），用户用 Clash / v2rayNG / v2rayA 导入订阅。
 
-| 服务 | 地址 | 部署 |
+| 服务 | 域名 | 代码 |
 | :--- | :--- | :--- |
-| 官网 Portal | https://www.rfplay.uk | Cloudflare Pages（`portal/`） |
-| 后台 Admin | https://admin.rfplay.uk | Cloudflare Pages（`admin/`） |
-| Manager API | https://api.rfplay.uk | Cloudflare Workers（`workers/api/`，D1 + KV + R2） |
-| 节点 | `node-*.rfplay.uk` | VPS：Xray-core + `daemon/` |
-| 客户端 | — | 无自研 App，用户自备通用客户端，导入订阅 URL |
+| Portal | https://xv.rfplay.uk | `portal/` → CF Pages `rfplay-portal` |
+| Admin | https://xva.rfplay.uk | `admin/` → CF Pages `rfplay-admin` |
+| API | https://api.rfplay.uk | `workers/api/` → Worker `rfplay-api`（D1 + KV） |
+| 节点 | `w1`/`w2`…（如 `w1.rfplay.uk`） | VPS：Xray + `gateway/` + cloudflared |
 
-## 关键决策
+## 现状（要点）
 
-| 领域 | 决策 |
+| 项 | 说明 |
 | :--- | :--- |
-| 登录会话 | HS256 JWT 放 httpOnly cookie + CSRF double-submit；Bearer 头仅作跨站兜底 |
-| 客户端 | 无自研客户端；portal 复制订阅 URL → 通用客户端导入 |
-| 节点 | daemon 定时拉取 Xray 配置（含有效用户 UUID 列表）并上报每用户流量，请求 HMAC 签名 |
-| 支付 | BEpusdt（USDT）+ PayPal；回调打到 Worker，验签后激活/顺延订阅 |
+| 传输 | **VLESS + XHTTP + TLS**（经 CF Tunnel）；无 WS 产品路径；无 Reality |
+| 订阅 | Base64 → v2rayNG/v2rayA；`/clash` → Clash Verge / mihomo（主推） |
+| 登录 | 用户名或邮箱 + 密码；Turnstile **non-interactive**；可选 [Google OAuth](docs/oauth-google.md) |
+| 会话 | HS256 JWT（httpOnly cookie）+ CSRF；密钥存 KV，约每日轮换，双钥宽限 |
+| 节点代理 | `gateway/`（原 rfplay-daemon）HMAC 拉配置 / 报流量 |
+| 支付 | **暂缓**；Admin grant 开通 |
+| 出口 IP | **不隐藏**（VPS 公网 IP） |
 
-## 代理协议与订阅格式
-
-**入站经 Cloudflare 隐藏源站**：VLESS / VMess + **XHTTP**（或 WS），用户连 CF 边缘 TLS（443），Tunnel 回源本机 `127.0.0.1`。VPS 不开放代理端口。细节：[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)。
-
-> **出口 IP 不隐藏**：目标站看到的是 VPS 公网 IP。
-
-订阅 `GET /api/v1/client/links/:token`：
-
-| 路径 | 格式 | 适用客户端 |
-| :--- | :--- | :--- |
-| `/links/:token` | Base64（vless/vmess） | v2rayNG、v2rayA（需较新 xray-core） |
-| `/links/:token/clash` | Clash YAML | Clash Verge / mihomo（主推） |
-| `/links/:token/singbox` | sing-box JSON | **未完成** |
-
-响应头 `Subscription-Userinfo`：流量与到期。总进度见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)。
-
-## 目录结构
+## 目录
 
 ```
 airport/
-├── workers/api/         # Manager API（TypeScript + Hono on Workers）→ api.rfplay.uk
-│   ├── src/routes/      # public / auth / client（订阅）/ web（用户）/ payment / admin
-│   ├── src/lib/         # jwt、cookie、csrf、支付、订阅格式、分享链接生成
-│   └── migrations/      # D1 schema
-├── portal/              # Vue 3 官网 → CF Pages
-├── admin/               # Vue 3 后台 → CF Pages
-├── daemon/              # 节点 daemon（Go：拉配置 + 流量上报）
+├── workers/api/          # Hono API + D1 migrations
+├── portal/               # 用户站（xv）
+├── admin/                # 后台（xva）：用户/节点/一键复制订阅 URL
+├── gateway/              # 节点 Go 代理
 ├── deploy/
-│   ├── cloudflare/      # push-secrets.sh（Worker Secrets）、dump-to-seed.sh（旧数据迁移）
-│   ├── node-cf-ws/      # 节点部署脚本（Xray + daemon + cloudflared Tunnel）
-│   └── docs/lessons.md  # 开发经验总结（含已退役的 Go/Flutter 时期内容）
-└── .github/workflows/   # ci.yml（类型检查 + 测试 + 构建）、deploy-worker.yml
+│   ├── cloudflare/       # push-secrets.sh、dump-to-seed.sh
+│   └── node-gateway/     # 部署与 UPGRADE.md
+├── docs/                 # xhttp / devices / oauth-google
+└── .github/workflows/    # ci、deploy-worker、deploy-pages
 ```
-
-## 版本
-
-| 版本 | 说明 |
-| :--- | :--- |
-| **v0.1.0** | 里程碑 A：Workers + Tunnel；XHTTP+TLS 已上线（见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)） |
-
-设备槽位（默认 5）：[docs/devices.md](docs/devices.md)。
-
-## 部署
-
-### Worker
-
-```bash
-cd workers/api
-npm install
-npx wrangler d1 execute rfplay --remote --file=migrations/0001_schema.sql
-npx wrangler deploy
-../../deploy/cloudflare/push-secrets.sh ../../.env   # 模板见根目录 .env.example
-```
-
-`main` 分支上 `workers/**` 有变更时，`deploy-worker.yml` 会自动应用 schema 并部署。
-
-### Pages
-
-| CF Pages 项目 | 根目录 | 域名 | 构建 |
-| :--- | :--- | :--- | :--- |
-| `rfplay-portal` | `portal` | `xv.rfplay.uk`（及 `www`） | `npm ci && npm run build` → Direct Upload |
-| `rfplay-admin` | `admin` | `xva.rfplay.uk` | 同上 |
-
-**部署方式**：不依赖 Pages 的 Git 集成。`main` 上 `portal/**` 或 `admin/**` 变更时，`.github/workflows/deploy-pages.yml` 构建静态资源并用 `wrangler pages deploy` 上传。也可在 Actions 里手动 `workflow_dispatch`。
-
-> **GitHub Secrets 与 API Token 权限**（[API Tokens](https://dash.cloudflare.com/profile/api-tokens)）：
->
-> | Secret | 用途 | 必需权限（Account） |
-> |--------|------|---------------------|
-> | `CLOUDFLARE_API_TOKEN` | `deploy-worker`（D1 迁移 + Worker 部署） | **Workers Scripts → Edit**、**D1 → Edit** |
-> | `CLOUDFLARE_PAGES_API_TOKEN` | `deploy-pages`（可选；未设置时回退到上一列 secret） | **Cloudflare Pages → Edit** |
->
-> 勿用「仅 Pages」的 token **替换** `CLOUDFLARE_API_TOKEN`，否则 `deploy-worker` 会在 D1 步骤失败（Cloudflare API **7403**）。推荐：Worker 继续用 `CLOUDFLARE_API_TOKEN`；把 Pages token 存到 `CLOUDFLARE_PAGES_API_TOKEN`。或在**同一个** token 上同时勾选 Workers + D1 + Pages 三项权限。
-
-环境变量模板：`portal.env.example`、`admin.env.example`。CI 构建注入 `VITE_API_BASE_URL=https://api.rfplay.uk`（portal 另有 `VITE_SUBSCRIPTION_BASE_URL`）。
-
-本地救急：
-
-```bash
-cd portal && npm ci && VITE_API_BASE_URL=https://api.rfplay.uk npm run build
-npx wrangler pages deploy dist --project-name=rfplay-portal --branch=main
-```
-
-### 节点
-
-后台建节点 → 生成节点 token（`nd_...`）→ 在 VPS 上执行 `deploy/node-cf-ws/deploy-node-cf-ws.sh` → 在 Cloudflare Tunnel 里为 `node-xx.rfplay.uk` 配置回源到 `http://127.0.0.1:<节点端口>`。daemon 配置示例见 `daemon/daemon.example.json`。
-
-## DNS（rfplay.uk）
-
-| 记录 | 类型 | 目标 |
-| :--- | :--- | :--- |
-| `www` | CNAME | CF Pages（portal） |
-| `admin` | CNAME | CF Pages（admin） |
-| `api` | Worker Custom Domain | `rfplay-api`（wrangler 自动创建） |
-| `node-*` | CNAME（橙云） | `<tunnel-id>.cfargotunnel.com`（Tunnel 自动创建，不出现源站 IP） |
 
 ## 文档
 
-* **[cloudflare_migration_plan.md](cloudflare_migration_plan.md)**：决策、架构、部署运维、已知 bug 与修复计划 ← **必读**
-* [airport_system_design.md](airport_system_design.md)：早期完整设计（Go Manager + Flutter 时期），仅部分章节仍有效，见文首说明
+| 文档 | 用途 |
+| :--- | :--- |
+| [airport_system_design.md](airport_system_design.md) | **架构设计（现行）** |
+| [cloudflare_migration_plan.md](cloudflare_migration_plan.md) | 运维清单与 backlog |
+| [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) | XHTTP + Tunnel |
+| [docs/devices.md](docs/devices.md) | 设备槽（默认 5） |
+| [docs/oauth-google.md](docs/oauth-google.md) | Google 登录配置 |
+
+## 部署
+
+**Worker**（`main` 上 `workers/**` 自动部署）：
+
+```bash
+cd workers/api && npm ci
+npx wrangler d1 migrations apply rfplay --remote
+npx wrangler deploy
+../../deploy/cloudflare/push-secrets.sh ../../.env   # 见 .env.example
+```
+
+**Pages**（`portal/**` / `admin/**` 自动 Direct Upload）。Secrets：
+
+| Secret | 权限 |
+|--------|------|
+| `CLOUDFLARE_API_TOKEN` | Workers Scripts Edit + D1 Edit |
+| `CLOUDFLARE_PAGES_API_TOKEN` | 可选；Pages Edit（未设则回退上一列） |
+| `VITE_TURNSTILE_SITE_KEY` | Pages 构建注入 |
+| `VITE_GOOGLE_CLIENT_ID` | 可选；显示 Google 按钮 |
+
+**节点**：Admin 建节点 → token → `deploy/node-gateway/deploy-node-gateway.sh` → Tunnel 主机名 → `127.0.0.1:<port>`。旧 daemon 升级见 `deploy/node-gateway/UPGRADE.md`。
+
+## 订阅 URL
+
+```
+https://api.rfplay.uk/api/v1/client/links/<client_token>        # Base64
+https://api.rfplay.uk/api/v1/client/links/<client_token>/clash  # Clash
+```

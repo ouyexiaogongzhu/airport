@@ -1,16 +1,5 @@
 <template>
-  <div class="page dashboard">
-    <nav class="topbar">
-      <span class="brand">RFPlay</span>
-      <div class="nav-links">
-        <router-link to="/dashboard">Dashboard</router-link>
-        <router-link to="/products">Plans</router-link>
-        <router-link to="/account">Account</router-link>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
-      </div>
-      <span class="user-badge">{{ auth.username }}</span>
-    </nav>
-
+  <AppShell>
     <main class="content">
       <h2>Welcome back, {{ auth.username }}!</h2>
       <p class="greeting">Here's what's happening with your account today.</p>
@@ -41,7 +30,7 @@
 
       <div class="action-row">
         <router-link to="/account" class="btn-primary">Manage Account</router-link>
-        <router-link to="/account#setup" class="btn-secondary">Setup Guide</router-link>
+        <a href="#plans" class="btn-secondary">Browse Plans</a>
       </div>
 
       <section class="recent">
@@ -60,17 +49,21 @@
         </div>
         <div v-if="!profile.subscription_status" class="empty-state">
           <p>No subscription active. Choose a plan to get started.</p>
-          <router-link to="/products" class="btn-primary">Browse Plans</router-link>
+          <a href="#plans" class="btn-primary">Browse Plans</a>
         </div>
       </section>
+
+      <PlansSection :subscription-status="profile.subscription_status || null" />
     </main>
-  </div>
+  </AppShell>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
+import AppShell from '../components/AppShell.vue'
+import PlansSection from '../components/PlansSection.vue'
 
 const auth = useAuthStore()
 const loading = ref(true)
@@ -138,39 +131,6 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
-.dashboard {
-  min-height: 100vh;
-  background: #1a1a2e;
-}
-.topbar {
-  display: flex;
-  align-items: center;
-  padding: 0.75rem 2rem;
-  background: #16213e;
-  border-bottom: 1px solid #0f3460;
-  gap: 2rem;
-}
-.brand {
-  font-weight: 700;
-  color: #1a73e8;
-  font-size: 1.2rem;
-}
-.nav-links { display: flex; gap: 1.25rem; flex: 1; }
-.nav-links a {
-  color: #a0aec0;
-  text-decoration: none;
-  font-size: 0.9rem;
-  font-weight: 500;
-}
-.nav-links a:hover, .nav-links a.router-link-active { color: #1a73e8; }
-.user-badge {
-  background: #1a73e8;
-  color: white;
-  padding: 0.3rem 0.8rem;
-  border-radius: 20px;
-  font-size: 0.8rem;
-  font-weight: 600;
-}
 .content {
   max-width: 960px;
   margin: 0 auto;
@@ -183,6 +143,9 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
   grid-template-columns: repeat(3, 1fr);
   gap: 1.25rem;
   margin-bottom: 2rem;
+}
+@media (max-width: 700px) {
+  .cards { grid-template-columns: 1fr; }
 }
 .card {
   background: #16213e;
@@ -206,11 +169,11 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
 .num-badge.expired { background: #4a1c1c; color: #fc8181; }
 
 .mini-bar { margin-top: 0.5rem; height: 4px; background: #0f3460; border-radius: 2px; overflow: hidden; }
-.mini-fill { height: 100%; background: #1a73e8; border-radius: 2px; }
+.mini-fill { height: 100%; background: #e94560; border-radius: 2px; }
 
-.action-row { display: flex; gap: 0.75rem; margin-bottom: 2rem; }
+.action-row { display: flex; gap: 0.75rem; margin-bottom: 2rem; flex-wrap: wrap; }
 .btn-primary {
-  background: #1a73e8;
+  background: #e94560;
   border: none;
   color: white;
   padding: 0.6rem 1.2rem;
@@ -219,6 +182,7 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
+  display: inline-block;
 }
 .btn-secondary {
   background: transparent;
@@ -228,6 +192,7 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
   border-radius: 6px;
   font-size: 0.9rem;
   text-decoration: none;
+  display: inline-block;
 }
 
 .recent {
@@ -235,6 +200,7 @@ h2 { margin: 0; font-size: 1.5rem; color: #e2e8f0; }
   border: 1px solid #0f3460;
   border-radius: 10px;
   padding: 1.5rem;
+  margin-bottom: 2.5rem;
 }
 .recent h3 { margin: 0 0 1rem; font-size: 1rem; color: #e2e8f0; }
 .detail-row {

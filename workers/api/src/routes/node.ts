@@ -1,4 +1,4 @@
-// daemon 節點面 — 對齊 daemon internal/sync/sync.go fetchConfig / reportTraffic。掛載點：/api/v1。
+// gateway 節點面 — 對齊 gateway internal/sync/sync.go fetchConfig / reportTraffic。掛載點：/api/v1。
 // 按 nodes.token 定位節點，校驗 X-Node-Timestamp / X-Node-Signature（見 lib/nodehmac.ts）。
 import { Hono } from 'hono';
 import type { Context } from 'hono';

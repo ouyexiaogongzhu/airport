@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { authenticateAccessCandidates } from '../lib/session';
+import { resolveJwtMaterial } from '../lib/jwtkeys';
 import { constantTimeEqual, randomHex } from '../lib/csrf';
 import { activationStatement, type ProductPlan } from '../lib/entitlement';
 import { clearUserDevices } from '../lib/devices';
@@ -63,7 +64,7 @@ const USER_COLS =
   'max_devices, vless_uuid, created_at, updated_at';
 
 // nodeJson — token 不輸出。節點固定為 Tunnel 形態：address = 節點域名，port = 本機 Xray 端口；
-// network = ws|xhttp；security/server_name/reality_* 列已停用，不再輸出
+// network 僅 xhttp（存量 ws 等一律 coerce）；security/server_name/reality_* 列已停用，不再輸出
 function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
   return {
     id: n.id,
@@ -76,7 +77,7 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
     traffic_up: n.traffic_up,
     traffic_down: n.traffic_down,
     user_id: n.user_id,
-    network: n.network === 'xhttp' ? 'xhttp' : 'ws',
+    network: 'xhttp',
     ws_path: n.ws_path,
     last_heartbeat: n.last_heartbeat,
     created_at: n.created_at,
@@ -86,10 +87,10 @@ function nodeJson(n: Record<string, unknown>): Record<string, unknown> {
 
 const VALID_PROTOCOLS = new Set(['vmess', 'vless']);
 const PROTOCOL_ERROR = 'protocol must be one of: vmess, vless';
-const VALID_NETWORKS = new Set(['ws', 'xhttp']);
-const NETWORK_ERROR = 'network must be one of: ws, xhttp';
+const VALID_NETWORKS = new Set(['xhttp']);
+const NETWORK_ERROR = 'network must be xhttp (ws is no longer supported)';
 
-// 傳輸層：ws_path + network（ws|xhttp）；只收到時返回，'' path 存為 NULL（即 "/"）
+// 傳輸層：ws_path + network（僅 xhttp）；只收到時返回，'' path 存為 NULL（讀取時默認 /rfhttp/）
 function parseTransport(body: Record<string, unknown>): { fields: Record<string, unknown> } | { error: string } {
   const fields: Record<string, unknown> = {};
   const v = body.ws_path;
@@ -147,11 +148,11 @@ export function adminRoutes() {
 
   // middleware.WebAuth("admin_session")：對齊 webauth.go，cookie 缺失/驗簽失敗 → 401 SESSION_EXPIRED
   const adminAuth = createMiddleware<AppEnv>(async (c, next) => {
-    const secret = c.env.JWT_SECRET;
+    const material = await resolveJwtMaterial(c.env);
     // cookie 優先；失效時再試 Bearer（勿用 cookie||bearer：過期 Domain cookie 會擋住有效 Bearer）
     const bearer = c.req.header('Authorization')?.replace(/^Bearer /i, '');
-    const r = await authenticateAccessCandidates(c.env.DB, secret, [
-      secret ? getCookie(c, 'admin_session') : undefined,
+    const r = await authenticateAccessCandidates(c.env.DB, material ?? undefined, [
+      material ? getCookie(c, 'admin_session') : undefined,
       bearer,
     ]);
     if (!('user' in r)) return c.json({ error: 'SESSION_EXPIRED' }, 401);
@@ -493,7 +494,7 @@ export function adminRoutes() {
       return c.json({ error: 'type must be one of: v2ray, xray' }, 400);
     }
 
-    const t = { ws_path: null, network: 'ws', ...transport.fields };
+    const t = { ws_path: null, network: 'xhttp', ...transport.fields };
     const now = new Date().toISOString();
     const token = 'nd_' + randomHex(32);
     const ins = await c.env.DB.prepare(
@@ -599,7 +600,7 @@ export function adminRoutes() {
     return c.json({ message: 'node deleted' });
   });
 
-  // GenerateNodeToken：輪換 daemon token（nd_ + hex32）
+  // GenerateNodeToken：輪換 gateway token（nd_ + hex32）
   app.post('/admin/nodes/:id/token', ...guard, adminCsrf, async (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid node id' }, 400);
@@ -612,11 +613,11 @@ export function adminRoutes() {
       .run();
     if ((r.meta.changes ?? 0) === 0) return c.json({ error: 'failed to save token' }, 500);
     // ponytail: Go 版這裡呼叫 middleware.InvalidateNodeToken 清進程內 token 快取；
-    // Workers 無進程內節點 token 快取（daemon 走 D1 直查），無需失效。
+    // Workers 無進程內節點 token 快取（gateway 走 D1 直查），無需失效。
     return c.json({ token });
   });
 
-  // 預覽節點 Xray 配置（與 daemon 拉取的 config 相同；只讀，不記心跳）
+  // 預覽節點 Xray 配置（與 gateway 拉取的 config 相同；只讀，不記心跳）
   app.get('/admin/nodes/:id/config', ...guard, async (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid node id' }, 400);

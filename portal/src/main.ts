@@ -4,7 +4,7 @@ import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 
-async function bootstrap() {
+function bootstrap() {
   const app = createApp(App)
   const pinia = createPinia()
   app.use(pinia)
@@ -13,10 +13,10 @@ async function bootstrap() {
     console.error('Global error:', err, info)
   }
 
-  // 先恢復會話再掛 router：vue-router install() 會立即啟動首次導航，
-  // 守衛必須在會話狀態就緒後才跑（否則刷新即被彈回登入頁）。
+  // Mount immediately with a dark boot shell so refresh isn't a white blank page.
+  // Session restore still completes before route guards proceed (authReady).
   const auth = useAuthStore(pinia)
-  await auth.init()
+  void auth.init()
 
   app.use(router)
   app.mount('#app')

@@ -1,4 +1,4 @@
-// daemon 節點面：簽名、配置內容（只含可服務用戶）、流量上報記賬
+// gateway 節點面：簽名、配置內容（只含可服務用戶）、流量上報記賬
 import { describe, expect, it } from 'vitest';
 import { createApp, type Env } from '../index';
 import { signJwt } from '../lib/jwt';
@@ -63,7 +63,7 @@ function setup() {
 }
 
 describe('nodeSignature', () => {
-  it('與 daemon sync.go signRequest 算法一致（獨立計算的向量）', async () => {
+  it('與 gateway sync.go signRequest 算法一致（獨立計算的向量）', async () => {
     expect(await nodeSignature(TOKEN, 'GET', '/api/v1/node/nd_test/config', '1700000000', '')).toBe(
       'db241703223b7520909120404c8cb4609e771a7e62a4e3dcd4e6b95bcb000635',
     );
@@ -81,9 +81,9 @@ describe('GET /node/:token/config', () => {
     const cfg = body.config;
     const inbound = cfg.inbounds.find((i) => i.tag === 'in-vless')!;
     expect(inbound).toMatchObject({ listen: '127.0.0.1', port: 20001, protocol: 'vless' });
-    // 舊列 network=tcp / security=reality：非 xhttp 一律當 ws
-    expect(inbound.streamSettings).toEqual({ network: 'ws', security: 'none', wsSettings: { path: '/ws' } });
-    expect(JSON.stringify(cfg)).not.toMatch(/reality|flow|tlsSettings|certificate/);
+    // 舊列 network=tcp / security=reality：一律 coerce 為 xhttp
+    expect(inbound.streamSettings).toEqual({ network: 'xhttp', security: 'none', xhttpSettings: { path: '/ws' } });
+    expect(JSON.stringify(cfg)).not.toMatch(/reality|flow|tlsSettings|certificate|wsSettings/);
 
     // 只含可服務用戶，email = u{id}
     expect(inbound.settings.clients).toEqual([{ id: 'uuid-2', email: 'u2', level: 0 }]);
@@ -113,9 +113,9 @@ describe('GET /node/:token/config', () => {
     const v2 = await version();
     expect(v2).not.toBe(v1);
 
-    raw.exec("UPDATE nodes SET network = 'xhttp' WHERE id = 9");
-    const v2b = await version();
-    expect(v2b).not.toBe(v2);
+    // network 列改為 ws 仍 coerce 為 xhttp，version 不變
+    raw.exec("UPDATE nodes SET network = 'ws' WHERE id = 9");
+    expect(await version()).toBe(v2);
     const cfgX = ((await (await getConfig()).json()) as { config: XrayConfig }).config;
     expect(cfgX.inbounds.find((i) => i.tag === 'in-vless')!.streamSettings).toEqual({
       network: 'xhttp',
@@ -123,13 +123,12 @@ describe('GET /node/:token/config', () => {
       xhttpSettings: { path: '/other' },
     });
 
-    raw.exec("UPDATE nodes SET network = 'ws' WHERE id = 9");
-    const v2c = await version();
-    expect(v2c).not.toBe(v2b);
+    raw.exec("UPDATE nodes SET network = 'xhttp' WHERE id = 9");
+    expect(await version()).toBe(v2);
 
     raw.exec('UPDATE nodes SET port = 20002 WHERE id = 9');
     const v3 = await version();
-    expect(v3).not.toBe(v2c);
+    expect(v3).not.toBe(v2);
 
     raw.exec("UPDATE users SET status = 'banned' WHERE id = 2");
     const v4 = await version();
@@ -139,7 +138,7 @@ describe('GET /node/:token/config', () => {
     expect(await version()).not.toBe(v3);
   });
 
-  it('節點非 active：下發空用戶列表（daemon 應用後斷開所有連接）', async () => {
+  it('節點非 active：下發空用戶列表（gateway 應用後斷開所有連接）', async () => {
     const { getConfig, raw } = setup();
     raw.exec("UPDATE nodes SET status = 'inactive' WHERE id = 9");
     const res = await getConfig();
@@ -260,7 +259,7 @@ describe('POST /node/:token/traffic/report', () => {
 });
 
 describe('admin 節點編輯（Tunnel 形態）', () => {
-  it('接受 ws_path 與 network=ws|xhttp；拒絕非法 network；security/reality 不輸出', async () => {
+  it('默認 network=xhttp；接受 ws_path；拒絕 ws / 非法 network；security/reality 不輸出', async () => {
     const { app, env, raw } = setup();
     const token = await signJwt({ user_id: 1, username: 'admin', role: 'admin' }, SECRET, 3600);
     const req = (method: string, path: string, body: unknown) =>
@@ -275,14 +274,15 @@ describe('admin 節點編輯（Tunnel 形態）', () => {
     });
     expect(created.status).toBe(201);
     const node = (await created.json()) as Record<string, unknown>;
-    expect(node).toMatchObject({ ws_path: '/sg', port: 20010, network: 'ws' });
+    expect(node).toMatchObject({ ws_path: '/sg', port: 20010, network: 'xhttp' });
     expect(node).not.toHaveProperty('security');
     expect(node).not.toHaveProperty('reality_public_key');
     expect(raw.prepare('SELECT network, security, reality_public_key r FROM nodes WHERE id = ?').get(node.id as number)).toEqual({
-      network: 'ws', security: 'none', r: null,
+      network: 'xhttp', security: 'none', r: null,
     });
     expect((await req('PUT', `/admin/nodes/${node.id}`, { ws_path: 'no-slash' })).status).toBe(400);
     expect((await req('PUT', `/admin/nodes/${node.id}`, { network: 'tcp' })).status).toBe(400);
+    expect((await req('PUT', `/admin/nodes/${node.id}`, { network: 'ws' })).status).toBe(400);
 
     const xhttp = await req('PUT', `/admin/nodes/${node.id}`, { network: 'xhttp', ws_path: '/xh' });
     expect(xhttp.status).toBe(200);

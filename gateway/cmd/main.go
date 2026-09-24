@@ -7,58 +7,59 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/server"
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/sync"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/config"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/server"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/sync"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("[daemon] RFPlay Node Daemon starting...")
+	log.Println("[gateway] RFPlay Node Gateway starting...")
 
 	// Load configuration from file or environment
-	configPath := "daemon.json"
+	configPath := "gateway.json"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
 	}
-	if envPath := os.Getenv("DAEMON_CONFIG"); envPath != "" {
+	if envPath := firstEnv("GATEWAY_CONFIG", "DAEMON_CONFIG"); envPath != "" {
 		configPath = envPath
 	}
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("[daemon] failed to load config: %v", err)
+		log.Fatalf("[gateway] failed to load config: %v", err)
 	}
 
-	// Override from environment variables (takes precedence)
-	if v := os.Getenv("DAEMON_MANAGER_URL"); v != "" {
+	// Override from environment variables (takes precedence).
+	// GATEWAY_* is preferred; DAEMON_* is accepted for upgrade compatibility.
+	if v := firstEnv("GATEWAY_MANAGER_URL", "DAEMON_MANAGER_URL"); v != "" {
 		cfg.ManagerURL = v
 	}
-	if v := os.Getenv("DAEMON_MANAGER_TOKEN"); v != "" {
+	if v := firstEnv("GATEWAY_MANAGER_TOKEN", "DAEMON_MANAGER_TOKEN"); v != "" {
 		cfg.ManagerToken = v
 	}
-	if v := os.Getenv("DAEMON_NODE_ID"); v != "" {
+	if v := firstEnv("GATEWAY_NODE_ID", "DAEMON_NODE_ID"); v != "" {
 		var id uint
 		if _, err := fmt.Sscanf(v, "%d", &id); err == nil {
 			cfg.NodeID = id
 		}
 	}
-	if v := os.Getenv("DAEMON_LISTEN_ADDR"); v != "" {
+	if v := firstEnv("GATEWAY_LISTEN_ADDR", "DAEMON_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
 	}
-	if v := os.Getenv("DAEMON_XRAY_BINARY"); v != "" {
+	if v := firstEnv("GATEWAY_XRAY_BINARY", "DAEMON_XRAY_BINARY"); v != "" {
 		cfg.XrayBinary = v
 	}
-	if v := os.Getenv("DAEMON_DATA_DIR"); v != "" {
+	if v := firstEnv("GATEWAY_DATA_DIR", "DAEMON_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("[daemon] invalid configuration: %v", err)
+		log.Fatalf("[gateway] invalid configuration: %v", err)
 	}
 
-	log.Printf("[daemon] manager=%s listen=%s sync=%s (node_id comes from the manager)",
+	log.Printf("[gateway] manager=%s listen=%s sync=%s (node_id comes from the manager)",
 		cfg.ManagerURL, cfg.ListenAddr, cfg.SyncInterval)
 
 	// Create syncer; Stop also terminates the managed xray process.
@@ -72,7 +73,7 @@ func main() {
 		srvErr <- srv.Start()
 	}()
 
-	log.Println("[daemon] all services started")
+	log.Println("[gateway] all services started")
 
 	// Wait for shutdown signal (or a server failure). Cleanup runs explicitly
 	// so xray is never left behind as an orphan.
@@ -81,13 +82,22 @@ func main() {
 	exitCode := 0
 	select {
 	case <-sigCh:
-		log.Println("[daemon] shutting down...")
+		log.Println("[gateway] shutting down...")
 	case err := <-srvErr:
-		log.Printf("[daemon] server error: %v", err)
+		log.Printf("[gateway] server error: %v", err)
 		exitCode = 1
 	}
 
 	_ = srv.Shutdown()
 	syncer.Stop()
 	os.Exit(exitCode)
+}
+
+func firstEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
 }

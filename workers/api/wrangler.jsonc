@@ -30,7 +30,7 @@
   // Turnstile ON for login/register (requires TURNSTILE_SECRET secret + portal VITE_TURNSTILE_SITE_KEY)
   "vars": {
     "MOCK_PAY_ENABLED": "0",
-    "PORTAL_URL": "https://www.rfplay.uk",
+    "PORTAL_URL": "https://xv.rfplay.uk",
     "COOKIE_DOMAIN": "rfplay.uk"
   },
   "triggers": { "crons": ["0 * * * *"] },

@@ -1,16 +1,5 @@
 <template>
-  <div class="page pay-page">
-    <nav class="topbar">
-      <span class="brand">RFPlay</span>
-      <div class="nav-links">
-        <router-link to="/dashboard">Dashboard</router-link>
-        <router-link to="/plans">Plans</router-link>
-        <router-link to="/account">Account</router-link>
-        <a href="#" @click.prevent="auth.logout(); $router.push('/')">Logout</a>
-      </div>
-      <span class="user-badge">{{ auth.username }}</span>
-    </nav>
-
+  <AppShell>
     <main class="content">
       <!-- Error state -->
       <div v-if="error" class="error-msg">{{ error }}</div>
@@ -62,7 +51,7 @@
         <div class="status-icon">❌</div>
         <h2>Payment Failed</h2>
         <p class="status-hint">{{ failReason || 'The payment was not completed. Please try again.' }}</p>
-        <button class="btn" @click="router.push('/plans')">Back to Plans</button>
+        <button class="btn" @click="router.push('/dashboard#plans')">Back to Plans</button>
       </div>
 
       <!-- Order not found -->
@@ -70,21 +59,20 @@
         <div class="status-icon">❓</div>
         <h2>Order Not Found</h2>
         <p class="status-hint">This order could not be found. It may have expired or been cancelled.</p>
-        <button class="btn" @click="router.push('/plans')">Browse Plans</button>
+        <button class="btn" @click="router.push('/dashboard#plans')">Browse Plans</button>
       </div>
     </main>
-  </div>
+  </AppShell>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
 import api from '../api/index'
 import { clearApiCache } from '../api/cache'
 import QrCode from '../components/QrCode.vue'
+import AppShell from '../components/AppShell.vue'
 
-const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -174,24 +162,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.pay-page {
-  min-height: 100vh;
-  background: #1a1a2e;
-  color: #e0e0e0;
-}
-.topbar {
-  display: flex;
-  align-items: center;
-  padding: 0.75rem 2rem;
-  background: #16213e;
-  border-bottom: 1px solid #0f3460;
-  gap: 2rem;
-}
-.brand { font-weight: 700; color: #e94560; font-size: 1.2rem; }
-.nav-links { display: flex; gap: 1.25rem; flex: 1; }
-.nav-links a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.nav-links a:hover, .nav-links a.router-link-active { color: #e94560; }
-.user-badge { background: rgba(233,69,96,0.15); color: #e94560; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
 .content { max-width: 560px; margin: 0 auto; padding: 2rem; }
 .error-msg { color: #ff6b6b; background: rgba(255,107,107,0.1); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
 

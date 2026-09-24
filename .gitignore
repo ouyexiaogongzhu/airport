@@ -6,9 +6,10 @@ client/
 *.exe
 *.test
 
-# Daemon runtime (real config carries the node token)
-daemon/daemon.json
-daemon/data/
+# Gateway runtime (real config carries the node token)
+gateway/gateway.json
+gateway/daemon.json
+gateway/data/
 
 # Node / Vue
 node_modules/
@@ -18,7 +19,6 @@ dist/
 # Build output
 portal/dist/
 admin/dist/
-xray-core/
 
 # Secrets & runtime
 .env

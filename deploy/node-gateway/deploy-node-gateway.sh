@@ -1,25 +1,36 @@
 #!/usr/bin/env bash
-# RFPlay — 節點部署（VLESS/VMess over WS 或 XHTTP，cloudflared Tunnel 回源）
+# RFPlay — 節點部署（VLESS/VMess over XHTTP，cloudflared Tunnel 回源）
 #
 #   客戶端 ──TLS 443──> Cloudflare 邊緣 ──Tunnel──> cloudflared ──> Xray 127.0.0.1:<local-port>
 #
-# 傳輸（ws / xhttp）由後台 nodes.network 決定；本腳本不寫死 streamSettings，daemon 拉取配置後啟動 Xray。
-# Xray 只監聽 127.0.0.1；節點不開任何代理端口、不需要證書。TLS 在 CF 邊緣終結。
-# 後台先建節點（域名 = --hostname，本地端口 = --local-port，Transport = ws|xhttp），再點 Token 生成 nd_... token。
+# 傳輸由後台 nodes.network 決定（生產僅 xhttp）；本腳本不寫死 streamSettings，
+# gateway 拉取配置後啟動 Xray。Xray 只監聽 127.0.0.1；節點不開任何代理端口、不需要證書。
+# TLS 在 CF 邊緣終結。後台先建節點（域名 = --hostname，本地端口 = --local-port），
+# 再點 Token 生成 nd_... token。
 #
 # Tunnel：在 Cloudflare Zero Trust → Networks → Tunnels 建一個 cloudflared Tunnel，複製其 token。
 #   - 給了 --cf-api-token（權限：Account > Cloudflare Tunnel: Edit，Zone > DNS: Edit）時，
 #     腳本自動寫入 Tunnel ingress（hostname → http://127.0.0.1:<local-port>）並建橙雲 CNAME；
 #   - 否則需在 Tunnel 的 Public Hostname 頁手動添加同樣的映射（會自動建 CNAME）。
-#   - XHTTP 與 WS 的 Tunnel ingress 形態相同（HTTP 明文回源）；無需為 xhttp 改 service URL。
+#   - XHTTP 的 Tunnel ingress 形態為 HTTP 明文回源。
 #
-# 依賴：Debian/Ubuntu（apt）。AlmaLinux/RHEL 請手動安裝 Xray + Go daemon + cloudflared（rpm），
+# 依賴：Debian/Ubuntu（apt）。AlmaLinux/RHEL 請手動安裝 Xray + Go gateway + cloudflared（rpm），
 # 配置與單元文件可參照本腳本後續步驟。
 #
-# Usage:
-#   sudo ./deploy-node-cf-ws.sh --manager-url https://api.rfplay.uk \
+# Usage（新裝）:
+#   sudo ./deploy-node-gateway.sh --manager-url https://api.rfplay.uk \
 #        --node-token nd_xxx --tunnel-token eyJ... \
 #        --hostname node-hk.rfplay.uk --local-port 20001 [--cf-api-token XXX] [--xray-version vX.Y.Z]
+#
+# --- 從 rfplay-daemon 升級到 rfplay-gateway（不銷毀節點）---
+#   1) 在已 clone 的倉庫根目錄拉最新代碼（含 gateway/ 與本腳本）
+#   2) 用與當初相同的 --manager-url / --node-token / --tunnel-token / --hostname / --local-port 再跑本腳本
+#   3) 腳本會：stop+disable rfplay-daemon → 安裝 rfplay-gateway 二進制與 unit →
+#      寫入 /etc/rfplay-gateway.json（CLI 參數）→ 啟用並重啟 rfplay-gateway；
+#      cloudflared / Xray 數據目錄 /var/lib/rfplay 保留；舊 /etc/rfplay-daemon.json 不刪以便回滾
+#   4) 確認：systemctl status rfplay-gateway && journalctl -u rfplay-gateway -f
+#   5) 可選清理：rm -f /usr/local/bin/rfplay-daemon /etc/rfplay-daemon.json /etc/systemd/system/rfplay-daemon.service
+#      （腳本停用舊 unit 但默認不刪配置/二進制，以便回滾）
 set -euo pipefail
 
 MANAGER_URL=""
@@ -28,7 +39,7 @@ TUNNEL_TOKEN=""
 HOSTNAME_FQDN=""
 LOCAL_PORT=""
 CF_API_TOKEN=""
-# 已驗證版本（含 XHTTP）；Xray 26 已將 WS 標為 deprecated，升級前先確認 WS 仍可用
+# 已驗證版本（含 XHTTP）
 XRAY_VERSION="v26.3.27"
 
 usage() {
@@ -54,13 +65,13 @@ done
 [[ "$LOCAL_PORT" =~ ^[0-9]+$ ]] && (( LOCAL_PORT >= 1 && LOCAL_PORT <= 65535 )) || { echo "invalid --local-port" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 1; }
 
-log() { printf '\033[1;34m[node-cf-ws]\033[0m %s\n' "$*"; }
-die() { printf '\033[1;31m[node-cf-ws]\033[0m %s\n' "$*" >&2; exit 1; }
+log() { printf '\033[1;34m[node-gateway]\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m[node-gateway]\033[0m %s\n' "$*" >&2; exit 1; }
 
 apt-get update -qq
 apt-get install -y -qq curl jq iproute2 >/dev/null
 
-# --- 1. Xray-core（由 daemon 管理，停用安裝腳本自帶的 xray.service）---
+# --- 1. Xray-core（由 gateway 管理，停用安裝腳本自帶的 xray.service）---
 if ! command -v xray >/dev/null 2>&1; then
   log "installing Xray-core $XRAY_VERSION"
   bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version "$XRAY_VERSION"
@@ -71,19 +82,34 @@ systemctl disable --now xray.service 2>/dev/null || true
 XRAY_BIN="$(command -v xray)"
 mkdir -p /var/lib/rfplay /var/log/xray
 
-# --- 2. rfplay-daemon ---
-DAEMON_BIN=/usr/local/bin/rfplay-daemon
+# --- 2. rfplay-gateway（原 rfplay-daemon）---
+GATEWAY_BIN=/usr/local/bin/rfplay-gateway
+GATEWAY_CFG=/etc/rfplay-gateway.json
+GATEWAY_UNIT=/etc/systemd/system/rfplay-gateway.service
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-log "building rfplay-daemon"
+
+# 升級路徑：先停舊 daemon，避免與新 gateway 同時拉起兩個 Xray
+if systemctl list-unit-files rfplay-daemon.service >/dev/null 2>&1 \
+   || [[ -f /etc/systemd/system/rfplay-daemon.service ]]; then
+  log "migrating from rfplay-daemon → rfplay-gateway"
+  systemctl disable --now rfplay-daemon.service 2>/dev/null || true
+fi
+# 若仍有舊二進制在跑（無 unit），盡力結束
+if command -v pkill >/dev/null 2>&1; then
+  pkill -x rfplay-daemon 2>/dev/null || true
+fi
+
+log "building rfplay-gateway"
 if ! command -v go >/dev/null 2>&1; then
   log "Go not found — installing golang"
   apt-get install -y -qq golang-go >/dev/null
 fi
-(cd "$REPO_DIR/daemon" && go build -o /tmp/rfplay-daemon ./cmd/main.go)
-install -m 0755 /tmp/rfplay-daemon "$DAEMON_BIN"
+(cd "$REPO_DIR/gateway" && go build -o /tmp/rfplay-gateway ./cmd/main.go)
+install -m 0755 /tmp/rfplay-gateway "$GATEWAY_BIN"
 
-# node_id 由配置接口響應提供，不再寫死；:9090 只監聽本機
-cat > /etc/rfplay-daemon.json << EOF
+# node_id 由配置接口響應提供；:9090 只監聽本機。
+# 舊 /etc/rfplay-daemon.json 保留不刪，便於回滾；本輪以 CLI 參數寫 gateway 配置。
+cat > "$GATEWAY_CFG" << EOF
 {
   "manager_url": "${MANAGER_URL}",
   "manager_token": "${NODE_TOKEN}",
@@ -93,23 +119,23 @@ cat > /etc/rfplay-daemon.json << EOF
   "xray_binary": "${XRAY_BIN}"
 }
 EOF
-chmod 0600 /etc/rfplay-daemon.json
+chmod 0600 "$GATEWAY_CFG"
 
-# 舊版腳本的獨立 xray unit 會與 daemon 拉起的 Xray 搶端口
+# 舊版腳本的獨立 xray unit 會與 gateway 拉起的 Xray 搶端口
 if [[ -f /etc/systemd/system/rfplay-xray.service ]]; then
   systemctl disable --now rfplay-xray.service 2>/dev/null || true
   rm -f /etc/systemd/system/rfplay-xray.service
 fi
 
-cat > /etc/systemd/system/rfplay-daemon.service << 'EOF'
+cat > "$GATEWAY_UNIT" << 'EOF'
 [Unit]
-Description=RFPlay Node Daemon (config pull, Xray supervision, traffic report)
+Description=RFPlay Node Gateway (config pull, Xray supervision, traffic report)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/rfplay-daemon /etc/rfplay-daemon.json
+ExecStart=/usr/local/bin/rfplay-gateway /etc/rfplay-gateway.json
 Restart=always
 RestartSec=5
 KillMode=control-group
@@ -174,12 +200,12 @@ fi
 
 # --- 5. 啟動 ---
 systemctl daemon-reload
-systemctl enable rfplay-daemon cloudflared >/dev/null
-systemctl restart rfplay-daemon
+systemctl enable rfplay-gateway cloudflared >/dev/null
+systemctl restart rfplay-gateway
 systemctl restart cloudflared
 
 # --- 6. 驗證：Xray 端口只在回環地址監聽 ---
-log "waiting for daemon to sync config and start Xray on port ${LOCAL_PORT}..."
+log "waiting for gateway to sync config and start Xray on port ${LOCAL_PORT}..."
 for _ in $(seq 1 30); do
   ss -ltnH "sport = :${LOCAL_PORT}" | grep -q . && break
   sleep 3
@@ -199,7 +225,7 @@ out="$(check_loopback_only "$LOCAL_PORT")" || rc=$?
 case "$rc" in
   0) log "OK: port ${LOCAL_PORT} listens on loopback only";;
   1) die "port ${LOCAL_PORT} is listening on a public interface: ${out} — refusing to continue (check local port / Xray config)";;
-  2) log "WARN: nothing listening on ${LOCAL_PORT} yet — check the node is active in admin and 'journalctl -u rfplay-daemon'";;
+  2) log "WARN: nothing listening on ${LOCAL_PORT} yet — check the node is active in admin and 'journalctl -u rfplay-gateway'";;
 esac
 for p in 9090 10085 10086; do
   rc=0
@@ -208,6 +234,6 @@ for p in 9090 10085 10086; do
 done
 
 log "done. Node: https://${HOSTNAME_FQDN} (443 via Cloudflare) → 127.0.0.1:${LOCAL_PORT}"
-log "  journalctl -u rfplay-daemon -f     # config sync / traffic report / xray"
+log "  journalctl -u rfplay-gateway -f    # config sync / traffic report / xray"
 log "  journalctl -u cloudflared -f       # tunnel"
 log "Recommended firewall: allow inbound SSH only (e.g. ufw default deny incoming && ufw allow OpenSSH && ufw enable)."

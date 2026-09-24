@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/config"
 )
 
 // defaultAPIPort is the Xray StatsService port used when the manager's config

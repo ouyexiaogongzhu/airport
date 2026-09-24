@@ -1,4 +1,4 @@
-// 純函數契約測試 — 節點為 Cloudflare Tunnel 形態：ws|xhttp + tls + 443，host/sni = 節點域名
+// 純函數契約測試 — 節點為 Cloudflare Tunnel 形態：xhttp + tls + 443，host/sni = 節點域名
 import { describe, expect, it } from 'vitest';
 import { buildClash, buildSingbox, buildV2ray, goJSON } from './subformats';
 import { encodeNodeToURI, queryEscape } from './xrayuri';
@@ -14,6 +14,7 @@ const vmessNode: NodeRow = {
   address: 'hk.example.com',
   protocol: 'vmess',
   ws_path: '/vcheck/',
+  network: 'xhttp',
 };
 
 const vlessNode: NodeRow = {
@@ -21,6 +22,7 @@ const vlessNode: NodeRow = {
   address: 'sg.example.com',
   protocol: 'vless',
   ws_path: '/vcheck/',
+  network: 'xhttp',
 };
 
 const vlessXhttp: NodeRow = {
@@ -52,17 +54,17 @@ describe('queryEscape（Go url.QueryEscape 語義）', () => {
 });
 
 describe('encodeNodeToURI', () => {
-  it('vmess：ws + tls + 443，host/sni 為節點域名', () => {
+  it('vmess：xhttp + tls + 443，host/sni 為節點域名', () => {
     const uri = encodeNodeToURI(vmessNode, user);
     expect(uri.startsWith('vmess://')).toBe(true);
     expect(atob(uri.slice('vmess://'.length))).toBe(
-      '{"add":"hk.example.com","aid":0,"host":"hk.example.com","id":"11111111-2222-3333-4444-555555555555","net":"ws","path":"/vcheck/","port":443,"ps":"HK-01","sni":"hk.example.com","tls":"tls","type":"none","v":"2"}',
+      '{"add":"hk.example.com","aid":0,"host":"hk.example.com","id":"11111111-2222-3333-4444-555555555555","net":"xhttp","path":"/vcheck/","port":443,"ps":"HK-01","sni":"hk.example.com","tls":"tls","type":"none","v":"2"}',
     );
   });
 
-  it('vless：ws + tls + 443，無 flow', () => {
+  it('vless：xhttp + tls + 443，無 flow', () => {
     expect(encodeNodeToURI(vlessNode, user)).toBe(
-      'vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?encryption=none&fp=chrome&host=sg.example.com&path=%2Fvcheck%2F&security=tls&sni=sg.example.com&type=ws#SG-CF',
+      'vless://11111111-2222-3333-4444-555555555555@sg.example.com:443?alpn=h2&encryption=none&fp=chrome&host=sg.example.com&mode=packet-up&path=%2Fvcheck%2F&security=tls&sni=sg.example.com&type=xhttp&xhttpMode=packet-up#SG-CF',
     );
   });
 
@@ -72,13 +74,14 @@ describe('encodeNodeToURI', () => {
     );
   });
 
-  it('vmess xhttp：net=xhttp', () => {
-    const uri = encodeNodeToURI({ ...vmessNode, network: 'xhttp' }, user);
-    expect(atob(uri.slice('vmess://'.length))).toContain('"net":"xhttp"');
+  it('存量 network=ws 仍輸出 xhttp', () => {
+    const uri = encodeNodeToURI({ ...vlessNode, network: 'ws' }, user);
+    expect(uri).toContain('type=xhttp');
+    expect(uri).not.toContain('type=ws');
   });
 
-  it('ws_path 為空時默認 /', () => {
-    expect(encodeNodeToURI({ ...vlessNode, ws_path: null }, user)).toContain('&path=%2F&');
+  it('ws_path 為空時默認 /rfhttp/', () => {
+    expect(encodeNodeToURI({ ...vlessNode, ws_path: null }, user)).toContain('&path=%2Frfhttp%2F&');
   });
 
   it('已下線的 shadowsocks / trojan 回空字串', () => {
@@ -110,9 +113,10 @@ describe('buildClash', () => {
     const out = buildClash(user, [vmessNode, ssNode]);
     expect(out.ct).toBe('text/yaml; charset=utf-8');
     expect(out.body).toContain(
-      '  - name: "HK-01"\n    type: vmess\n    server: hk.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    alterId: 0\n    cipher: auto\n    tls: true\n    servername: hk.example.com\n    network: ws\n    ws-opts:\n      path: "/vcheck/"\n      headers:\n        Host: hk.example.com\n\n',
+      '  - name: "HK-01"\n    type: vmess\n    server: hk.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    alterId: 0\n    cipher: auto\n    tls: true\n    servername: hk.example.com\n    network: xhttp\n    alpn:\n      - h2\n    client-fingerprint: chrome\n    xhttp-opts:\n      path: "/vcheck/"\n      host: hk.example.com\n      mode: packet-up\n\n',
     );
     expect(out.body).not.toContain('JP-01');
+    expect(out.body).not.toContain('ws-opts');
     expect(out.body.endsWith('rules:\n  - GEOIP,CN,DIRECT\n  - MATCH,Proxy\n')).toBe(true);
     expect(out.body).toContain(
       'proxy-groups:\n  - name: Proxy\n    type: select\n    proxies:\n      - Auto\n      - "HK-01"\n      - DIRECT\n  - name: Auto\n    type: url-test\n    proxies:\n      - "HK-01"\n    url:',
@@ -122,10 +126,11 @@ describe('buildClash', () => {
   it('vless 節點：無 flow / reality-opts', () => {
     const out = buildClash(user, [vlessNode]);
     expect(out.body).toContain(
-      '  - name: "SG-CF"\n    type: vless\n    server: sg.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    tls: true\n    servername: sg.example.com\n    network: ws\n',
+      '  - name: "SG-CF"\n    type: vless\n    server: sg.example.com\n    port: 443\n    uuid: 11111111-2222-3333-4444-555555555555\n    tls: true\n    servername: sg.example.com\n    network: xhttp\n',
     );
     expect(out.body).not.toContain('flow');
     expect(out.body).not.toContain('reality');
+    expect(out.body).not.toContain('ws-opts');
   });
 
   it('vless xhttp：xhttp-opts + alpn h2 + packet-up', () => {

@@ -52,15 +52,10 @@ export function buildClash(user: UserCreds, allNodes: NodeRow[]): FormatOutput {
     }
     sb.push('    tls: true\n');
     sb.push(`    servername: ${t.host}\n`);
-    if (t.network === 'xhttp') {
-      sb.push('    network: xhttp\n');
-      sb.push('    alpn:\n      - h2\n');
-      sb.push('    client-fingerprint: chrome\n');
-      sb.push(`    xhttp-opts:\n      path: "${t.path}"\n      host: ${t.host}\n      mode: ${XHTTP_CLIENT_MODE}\n`);
-    } else {
-      sb.push('    network: ws\n');
-      sb.push(`    ws-opts:\n      path: "${t.path}"\n      headers:\n        Host: ${t.host}\n`);
-    }
+    sb.push('    network: xhttp\n');
+    sb.push('    alpn:\n      - h2\n');
+    sb.push('    client-fingerprint: chrome\n');
+    sb.push(`    xhttp-opts:\n      path: "${t.path}"\n      host: ${t.host}\n      mode: ${XHTTP_CLIENT_MODE}\n`);
     sb.push('\n');
   }
 

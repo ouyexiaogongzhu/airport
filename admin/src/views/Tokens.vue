@@ -9,6 +9,11 @@
         </div>
       </header>
 
+      <p class="hint">
+        Copy Clash or Base64 subscription URLs for an existing user — no new account needed.
+        Rotate token only when the old link should stop working.
+      </p>
+
       <div v-if="loading" class="loading">Loading users…</div>
       <div v-if="error" class="error-msg">{{ error }}</div>
       <div v-if="successMsg" class="success-msg">{{ successMsg }}</div>
@@ -31,13 +36,28 @@
               <td><strong>{{ u.username }}</strong></td>
               <td>
                 <code class="token-text">{{ maskToken(u.client_token) }}</code>
-                <button class="btn-tiny" @click="copyToken(u.client_token)" title="Copy token">📋</button>
               </td>
               <td><span :class="['status', u.status]">{{ u.status }}</span></td>
               <td class="date-cell">{{ formatDate(u.created_at) }}</td>
               <td class="actions-cell">
-                <button class="btn-tiny" @click="regenerateToken(u)" :disabled="regeneratingId === u.id">
-                  {{ regeneratingId === u.id ? '⟳…' : '🔄 Regenerate' }}
+                <button
+                  class="btn-tiny btn-sub"
+                  :disabled="!u.client_token"
+                  title="Copy v2rayNG / Base64 subscription URL"
+                  @click="copySubUrl(u, 'base64')"
+                >Copy Base64</button>
+                <button
+                  class="btn-tiny btn-sub"
+                  :disabled="!u.client_token"
+                  title="Copy Clash subscription URL"
+                  @click="copySubUrl(u, 'clash')"
+                >Copy Clash</button>
+                <button
+                  class="btn-tiny"
+                  @click="regenerateToken(u)"
+                  :disabled="regeneratingId === u.id"
+                >
+                  {{ regeneratingId === u.id ? '…' : 'Rotate token' }}
                 </button>
               </td>
             </tr>
@@ -54,6 +74,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import api from '../api/index'
+import { buildSubscriptionUrl, type SubscriptionFormat } from '../utils/subscriptionUrl'
 
 interface User {
   id: number
@@ -72,6 +93,11 @@ const error = ref('')
 const successMsg = ref('')
 const regeneratingId = ref<number | null>(null)
 
+function flashSuccess(msg: string) {
+  successMsg.value = msg
+  setTimeout(() => { if (successMsg.value === msg) successMsg.value = '' }, 2500)
+}
+
 function maskToken(token?: string): string {
   if (!token || token.length < 12) return token || '—'
   return token.substring(0, 7) + '***' + token.substring(token.length - 4)
@@ -86,21 +112,16 @@ function formatDate(dateStr?: string): string {
   }
 }
 
-async function copyToken(token?: string) {
-  if (!token) return
+async function copySubUrl(u: User, format: SubscriptionFormat) {
+  const url = buildSubscriptionUrl(u.client_token || '', format)
+  if (!url) return
   try {
-    await navigator.clipboard.writeText(token)
-    successMsg.value = 'Token copied to clipboard'
-    setTimeout(() => { successMsg.value = '' }, 2000)
+    await navigator.clipboard.writeText(url)
+    const label = format === 'clash' ? 'Clash' : 'Base64'
+    flashSuccess(`${label} subscription URL copied for ${u.username}`)
   } catch {
-    // fallback
+    error.value = 'Failed to copy to clipboard'
   }
-}
-
-function generateToken(): string {
-  const bytes = new Uint8Array(32)
-  crypto.getRandomValues(bytes)
-  return 'rf_' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
 // `skipCache` is set by the explicit Refresh button so a manual refresh
@@ -122,18 +143,17 @@ async function loadUsers(skipCache = false) {
 }
 
 async function regenerateToken(u: User) {
-  if (!confirm(`Regenerate token for user "${u.username}"? The current token will stop working immediately.`)) return
+  if (!confirm(`Rotate token for "${u.username}"? Existing subscription URLs stop working immediately.`)) return
   regeneratingId.value = u.id
   error.value = ''
   successMsg.value = ''
   try {
-    const newToken = generateToken()
-    await api.put(`/admin/users/${u.id}`, { client_token: newToken })
-    u.client_token = newToken
-    successMsg.value = `Token regenerated for ${u.username}`
-    setTimeout(() => { successMsg.value = '' }, 3000)
+    const res = await api.put(`/admin/users/${u.id}`, { regenerate_token: true })
+    const fresh = res.data as User
+    if (fresh?.client_token) u.client_token = fresh.client_token
+    flashSuccess(`Token rotated for ${u.username}`)
   } catch (e: any) {
-    error.value = e.response?.data?.error || e.message || 'Failed to regenerate token'
+    error.value = e.response?.data?.error || e.message || 'Failed to rotate token'
   } finally {
     regeneratingId.value = null
   }
@@ -151,6 +171,7 @@ onMounted(loadUsers)
 
 <style scoped>
 .tokens-page { min-height: 100vh; background: #12141a; color: #e0e0e0; }
+.hint { margin: 0 2rem 0.5rem; color: #888; font-size: 0.85rem; line-height: 1.4; }
 .search-input { padding: 0.45rem 0.75rem; border: 1px solid #444; border-radius: 6px; background: #1e2028; color: #e0e0e0; outline: none; min-width: 200px; }
 .search-input:focus { border-color: #4a9eff; }
 .btn-sm { padding: 0.45rem 0.9rem; border: 1px solid #4a9eff; border-radius: 6px; background: transparent; color: #4a9eff; cursor: pointer; font-size: 0.85rem; }
@@ -158,7 +179,7 @@ onMounted(loadUsers)
 .loading { padding: 3rem; text-align: center; color: #888; }
 .error-msg { padding: 1rem 2rem; color: #ff6b6b; background: #2a1515; margin: 1rem 2rem; border-radius: 8px; }
 .success-msg { padding: 1rem 2rem; color: #4caf50; background: #1a3a1a; margin: 1rem 2rem 0; border-radius: 8px; }
-.table-wrap { padding: 1.5rem 2rem; flex: 1; }
+.table-wrap { padding: 1.5rem 2rem; flex: 1; overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th { text-align: left; padding: 0.75rem 0.5rem; color: #888; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2a2d35; }
 .data-table td { padding: 0.75rem 0.5rem; border-bottom: 1px solid #22252b; font-size: 0.9rem; }
@@ -175,4 +196,6 @@ onMounted(loadUsers)
 .btn-tiny { padding: 0.2rem 0.5rem; border: 1px solid #444; border-radius: 4px; background: transparent; color: #aaa; cursor: pointer; font-size: 0.75rem; margin: 0 0.15rem; }
 .btn-tiny:hover { border-color: #4a9eff; color: #4a9eff; }
 .btn-tiny:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sub { border-color: #3d6a9e; color: #7eb6ff; }
+.btn-sub:hover:not(:disabled) { border-color: #4a9eff; color: #4a9eff; background: #4a9eff18; }
 </style>

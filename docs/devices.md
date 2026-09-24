@@ -9,7 +9,7 @@ A **device** is a fingerprint bound when a client successfully pulls the subscri
 | :--- | :--- | :--- |
 | Subscription pull + fingerprint | **Yes** | Enforceable in Workers/D1 today |
 | Portal JWT session | No | Login sessions ≠ VPN clients; TTL unchanged |
-| Live Xray connection | No | CF Tunnel hides real client IPs; would need daemon/online registry |
+| Live Xray connection | No | CF Tunnel hides real client IPs; would need gateway/online registry |
 
 ## Fingerprint resolution (priority)
 
@@ -34,4 +34,4 @@ A **device** is a fingerprint bound when a client successfully pulls the subscri
 
 This caps **subscription importers**, not simultaneous Xray TCP sessions. Two phones using the
 same Clash User-Agent without an explicit device id share one slot. True online-connection
-limiting needs daemon-side presence tracking (out of scope for this version).
+limiting needs gateway-side presence tracking (out of scope for this version).

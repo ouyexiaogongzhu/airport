@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/config"
-	"github.com/ouyexiaogongzhu/airport/daemon/internal/sync"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/config"
+	"github.com/ouyexiaogongzhu/airport/gateway/internal/sync"
 )
 
 func setupTestServer(t *testing.T) (*Server, *sync.Syncer) {
@@ -84,8 +84,8 @@ func TestHealthEndpoint(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("expected status=ok, got %v", body["status"])
 	}
-	if body["service"] != "daemon-api" {
-		t.Errorf("expected service=daemon-api, got %v", body["service"])
+	if body["service"] != "gateway-api" {
+		t.Errorf("expected service=gateway-api, got %v", body["service"])
 	}
 	if _, ok := body["timestamp"]; !ok {
 		t.Error("expected timestamp field")
