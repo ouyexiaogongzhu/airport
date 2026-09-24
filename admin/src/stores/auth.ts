@@ -19,9 +19,11 @@ export const useAuthStore = defineStore('auth', () => {
     role.value = null
   })
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string, turnstileToken?: string) {
     try {
-      const res = await api.post('/admin/auth/login', { username, password })
+      const body: Record<string, string> = { username, password }
+      if (turnstileToken) body['cf-turnstile-response'] = turnstileToken
+      const res = await api.post('/admin/auth/login', body)
       if (res.data.token) localStorage.setItem(AUTH_TOKEN_KEY, res.data.token)
       if (res.data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, res.data.refresh_token)
       user.value = res.data.user ?? null

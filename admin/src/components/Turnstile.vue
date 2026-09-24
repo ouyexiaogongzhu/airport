@@ -111,6 +111,6 @@ defineExpose({
 <style scoped>
 .turnstile-wrap { margin: 0.5rem 0 0.75rem; }
 .turnstile-box { min-height: 0; }
-.turnstile-status { margin: 0.35rem 0 0; font-size: 0.8rem; color: #666; }
-.turnstile-status.error { color: #d93025; }
+.turnstile-status { margin: 0.35rem 0 0; font-size: 0.8rem; color: #aaa; }
+.turnstile-status.error { color: #ff6b6b; }
 </style>

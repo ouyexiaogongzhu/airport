@@ -8,6 +8,7 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
 import { verifyJwt } from '../lib/jwt';
+import { verifyTurnstile } from '../lib/turnstile';
 import {
   PORTAL_SESSION_TTL,
   ADMIN_SESSION_TTL,
@@ -196,6 +197,14 @@ export function authRoutes() {
     if ((username !== undefined && typeof username !== 'string') || (password !== undefined && typeof password !== 'string')) {
       return c.json({ error: 'invalid request body' }, 400);
     }
+
+    const ts = await verifyTurnstile(
+      (body as Record<string, unknown>)['cf-turnstile-response'],
+      c.req.header('CF-Connecting-IP'),
+      c.env,
+    );
+    if (!ts.ok) return c.json({ error: ts.error }, ts.status);
+
     const u = (username ?? '') as string;
     const p = (password ?? '') as string;
     if (u === '' || p === '') {
