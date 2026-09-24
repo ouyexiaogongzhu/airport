@@ -19,6 +19,7 @@
 | 会话 | HS256 JWT（httpOnly cookie）+ CSRF；密钥存 KV，约每日轮换，双钥宽限 |
 | 节点代理 | `gateway/`（原 rfplay-daemon）HMAC 拉配置 / 报流量 |
 | 支付 | **暂缓**；Admin grant 开通 |
+| 版本 | **v0.1.1**（里程碑 A + Bug fix）；见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md) §5 |
 | 出口 IP | **不隐藏**（VPS 公网 IP） |
 
 ## 目录

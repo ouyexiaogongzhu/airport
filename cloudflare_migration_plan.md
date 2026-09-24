@@ -1,6 +1,6 @@
 # RFPlay 运维与 backlog
 
-> **状态（2026-09-24）**：v0.1.0 — Workers + D1 + Tunnel + XHTTP 已验收；支付（里程碑 B）暂缓。  
+> **状态（2026-09-24）**：v0.1.1 — 里程碑 A 已验收；**Bug fix** 已合入生产；支付（里程碑 B）暂缓。  
 > **架构**：[airport_system_design.md](airport_system_design.md)（现行）。入口：[README.md](README.md)。
 
 ---
@@ -88,5 +88,20 @@ Vars：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`COOKIE_DOMAIN`。
 | 里程碑 | 内容 | 状态 |
 | :--- | :--- | :--- |
 | **A** | 无支付跑通：建节点、开通、订阅、上网、记账、停服 | ✅ v0.1.0 |
+| **Bug fix** | 生产加固与缺陷收敛（见下） | ✅ v0.1.1 |
 | **B** | 支付 | 暂缓 |
 | **C** | sing-box / 备份 / 体验补全 | 按需 |
+
+### 5.1 里程碑 Bug fix（✅ 2026-09-24 / v0.1.1）
+
+面向线上稳定与可排障，不引入支付：
+
+| 面 | 已做 |
+| :--- | :--- |
+| 流量 | `traffic_records` 14 天保留 + `traffic_daily` 日汇总（0007）；上报 `batch_id` 幂等去重（0008）；gateway 未确认批次落盘重发 |
+| 会话 | refresh 7 天用时换发；拒绝存量超长寿 token；JWT KV 轮换；logout CSRF |
+| 安全 | OAuth 不按 email 自动绑账号；jwtkeys 降级不覆写；CORS；登录时序枚举；Turnstile 重试 |
+| Admin | `at_` 自建 token 发放/吊销/续期（0009）；UpdateNode 校验 |
+| gateway | 原子配置（`.tmp.json`，Xray 可识别格式）；孤儿 Xray 探测；优雅退出；健康同步降噪 |
+| 可观测 | Xray `loglevel=error` + `/var/log/xray/error.log`（关 access）；gateway journald |
+| 节点 | NY / Amsterdam 均已升到现行 `rfplay-gateway` |

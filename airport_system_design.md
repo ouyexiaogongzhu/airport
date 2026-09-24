@@ -1,7 +1,7 @@
 # Airport Proxy System Architecture Design Plan
 
 > **状态（2026-09-24）**：以当前实现 + 目标终态为准。细节实现见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)、[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)、代码。  
-> **版本**：v0.1.0（里程碑 A：Workers + Tunnel + XHTTP 已验收；支付暂缓）。
+> **版本**：v0.1.1（里程碑 A 验收 + **Bug fix** 已合入；支付暂缓）。
 
 ---
 
