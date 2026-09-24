@@ -21,21 +21,19 @@
 
 ## 代理协议与订阅格式
 
-**入站经 Cloudflare 隐藏源站**：VLESS / VMess over WebSocket；用户连 Cloudflare 边缘 TLS（443），Tunnel 回源到节点本机 `127.0.0.1`。VPS 不对外开放代理端口，DNS 无源站 A 记录。Reality 已删除（见迁移方案 §1）。
+**入站经 Cloudflare 隐藏源站**：VLESS / VMess + **XHTTP**（或 WS），用户连 CF 边缘 TLS（443），Tunnel 回源本机 `127.0.0.1`。VPS 不开放代理端口。细节：[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)。
 
-> **出口 IP 不隐藏**：代理上网时目标站看到的是 VPS 公网 IP。隐藏的是「谁扫得到你的入站」，不是「你从哪出去」。
+> **出口 IP 不隐藏**：目标站看到的是 VPS 公网 IP。
 
-**v0.1.0（2026-09-24）** 已在 Android / Ubuntu / MacBook 验证：v2rayNG、v2rayA（Base64）、Clash Verge（`/clash`）。
-
-订阅端点 `GET /api/v1/client/links/:token`：
+订阅 `GET /api/v1/client/links/:token`：
 
 | 路径 | 格式 | 适用客户端 |
 | :--- | :--- | :--- |
-| `/links/:token` | 多行分享链接整体 Base64（vless/vmess） | v2rayNG、v2rayA、Shadowrocket、OpenWrt |
-| `/links/:token/clash` | Clash YAML | Clash Verge（mihomo）、Stash |
-| `/links/:token/singbox` | sing-box JSON | **未完成**（占位） |
+| `/links/:token` | Base64（vless/vmess） | v2rayNG、v2rayA（需较新 xray-core） |
+| `/links/:token/clash` | Clash YAML | Clash Verge / mihomo（主推） |
+| `/links/:token/singbox` | sing-box JSON | **未完成** |
 
-响应头 `Subscription-Userinfo` 携带已用流量 / 总流量 / 到期时间。进度见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)。
+响应头 `Subscription-Userinfo`：流量与到期。总进度见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)。
 
 ## 目录结构
 
@@ -59,10 +57,9 @@ airport/
 
 | 版本 | 说明 |
 | :--- | :--- |
-| **v0.1.0** | 里程碑 A：Workers + Tunnel 节点；订阅在 v2rayNG / v2rayA / Clash Verge（Android / Ubuntu / MacBook）验证通过 |
+| **v0.1.0** | 里程碑 A：Workers + Tunnel；XHTTP+TLS 已上线（见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)） |
 
-后续传输：XHTTP + Cloudflare Tunnel 设计见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)（草案，未实现）。
-设备槽位（订阅拉取侧，默认 5）：[docs/devices.md](docs/devices.md)。
+设备槽位（默认 5）：[docs/devices.md](docs/devices.md)。
 
 ## 部署
 

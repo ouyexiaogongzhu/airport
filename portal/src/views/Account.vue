@@ -283,11 +283,9 @@
             <a href="https://v2raya.org/docs/manual/use-other-core/" target="_blank" rel="noopener" class="method-btn">Use xray-core</a>
           </div>
           <ol class="steps">
-            <li>Install <strong>v2rayA ≥ 2.2.7.5</strong>（推荐最新 2.5.x）；XHTTP 节点勿用 2.2.7.3 的 minimal 实现</li>
-            <li>核心必须是 <strong>xray</strong>（不是 v2ray）：<code>xray version</code>，或设置 <code>V2RAYA_V2RAY_BIN</code> 指向 xray</li>
-            <li>导入 <strong>Base64</strong> 订阅（不要带 <code>/clash</code>），更新订阅</li>
-            <li>XHTTP 节点（如 w2）测速常显示 <strong>TIMEOUT</strong>：v2rayA HTTP 探测硬超时 8 秒，经 Cloudflare 冷启动常更慢——请<strong>直接连接</strong>试用，勿仅看测速</li>
-            <li>若仍不通：用 <strong>w1（ws）</strong>，或改用 Clash Verge 连 XHTTP 节点</li>
+            <li>推荐 <strong>v2rayA ≥ 2.2.7.5</strong> + <strong>xray-core</strong>（OpenWrt 官方 2.2.7.3 对 XHTTP 不可靠，请用 mihomo / Clash）</li>
+            <li>导入 <strong>Base64</strong> 订阅（不要带 <code>/clash</code>）</li>
+            <li>测速 TIMEOUT 多为假阳（8s 硬超时）——请<strong>直接连接</strong></li>
           </ol>
         </div>
       </section>
