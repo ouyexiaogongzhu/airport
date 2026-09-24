@@ -99,8 +99,8 @@ async function revokeFromRequest(c: Context<AppEnv>, names: string[]) {
   }
 }
 
-// Logout 的會話 cookie 是 SameSite=None：不做 CSRF 校驗的話，任意網站可跨站強制登出
-// 受害者（token_version+1 連 localStorage Bearer 一起吊銷）。cookie 通道要求雙提交；
+// Logout 的會話 cookie 是 SameSite=Lax（同站 xv/xva/api）；仍要求 CSRF 雙提交，
+// 防同站子域或誤配回 None 時被強制登出（token_version+1 連 localStorage Bearer 一起吊銷）。
 // Bearer / body refresh_token 非 cookie 通道，免疫 CSRF，照常豁免。
 async function logoutCsrfOk(c: Context<AppEnv>, csrfCookieName: string): Promise<boolean> {
   const body = await c.req.json<{ refresh_token?: unknown }>().catch(() => null);

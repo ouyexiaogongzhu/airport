@@ -1,0 +1,16 @@
+# Cloudflare Pages — portal (xv.rfplay.uk)
+# Deploy: wrangler pages deploy dist --project-name=rfplay-portal
+# Functions live in ./functions and are picked up automatically from this cwd.
+#
+# Local with Service Binding:
+#   (terminal 1) cd workers/api && npx wrangler dev
+#   (terminal 2) npx wrangler pages dev dist --service API=rfplay-api
+
+name = "rfplay-portal"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-09-01"
+
+# Service Binding → Worker rfplay-api (same-origin /api proxy)
+[[services]]
+binding = "API"
+service = "rfplay-api"

@@ -85,14 +85,15 @@ describe('csrf', () => {
 });
 
 describe('cookies (portal 2h / admin 30d / refresh 7d)', () => {
-  it('portal session cookie: 2h, HttpOnly, Secure, SameSite=None, Path=/', () => {
+  it('portal session cookie: 2h, HttpOnly, Secure, SameSite=Lax, Path=/', () => {
     const v = sessionCookie('session', 'tok', undefined);
     expect(v).toContain('session=tok');
     expect(v).toContain(`Max-Age=${PORTAL_SESSION_TTL}`);
     expect(PORTAL_SESSION_TTL).toBe(2 * 3600);
     expect(v).toContain('HttpOnly');
     expect(v).toContain('Secure');
-    expect(v).toContain('SameSite=None');
+    expect(v).toContain('SameSite=Lax');
+    expect(v).not.toContain('SameSite=None');
     expect(v).not.toContain('SameSite=Strict');
     expect(v).toContain('Path=/');
     expect(v).not.toContain('Domain=');
@@ -130,9 +131,10 @@ describe('cookies (portal 2h / admin 30d / refresh 7d)', () => {
     expect(withDomain.filter((v) => !v.includes('Domain='))).toHaveLength(6);
   });
 
-  it('clearAuthCookies always pairs SameSite=None with Secure (browsers reject otherwise)', () => {
+  it('clearAuthCookies uses SameSite=Lax with Secure (aligned with buildSetCookie)', () => {
     for (const v of clearAuthCookies()) {
-      expect(v).toContain('SameSite=None');
+      expect(v).toContain('SameSite=Lax');
+      expect(v).not.toContain('SameSite=None');
       expect(v).toContain('Secure');
     }
   });

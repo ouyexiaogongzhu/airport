@@ -65,6 +65,13 @@ Vars：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`COOKIE_DOMAIN`。
 | Workers | 订阅拉取为主；超限升 Paid |
 | D1 写 | 流量上报是大户；控制上报间隔 |
 | KV 写 | 订阅缓存勿按请求写；JWT 轮换日 ≤2 写 |
+| WAF Free | **1** 条 Rate Limiting；**5** 条 Custom rules — 见 [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) |
+
+### 3.5 Free WAF：登录保护（dashboard）
+
+Dashboard 手工配置（非 Terraform）。要点：Bot Fight Mode Off；**唯一**一条 RL 只罩 `api`+`xv`+`xva` 的 login/register（含 admin login）；可选空 UA 仅限这些 path；**不要** RL 全部 `/api`；Turnstile 仍开。同站 proxy 后浏览器打的是 xv/xva，规则必须含这两 host。
+
+完整步骤：[docs/waf-free-api-protect.md](docs/waf-free-api-protect.md)。
 
 ---
 
@@ -78,6 +85,7 @@ Vars：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`COOKIE_DOMAIN`。
 | — | gateway | `sync_interval` 须纳秒整数；用户变更仍整进程重启 Xray |
 | — | 限速 | `rate_limit_bps` 不下发（Xray 无按用户限速） |
 | — | 运维增强 | 拨测自动 inactive、额度告警、Telegram bot |
+| — | Free WAF | Dashboard 按 [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) 配 RL + 可选空 UA（Free：1 RL / 5 custom） |
 
 **已完成（摘要）**：节点 HMAC 配置/流量、资格判定 + Cron、Tunnel XHTTP、会话 `token_version` + refresh、设备槽、JWT KV 轮换、Google OAuth 代码路径、Admin 复制订阅 URL、portal Dashboard 合并套餐/设备、流量明细 14 天保留 + traffic_daily 每日汇总（0007）、上报幂等 batch UUID 去重（0008，gateway 未确认批次原样重发）、refresh 7 天用时换发 + 存量长寿 token 拒绝（部署切换点：全体重登一次）、Admin `at_` 自建 token 免注册发放/吊销/续期（0009，合成 token_only 用户）。
 

@@ -222,7 +222,7 @@ const general = reactive({
   appVersion: '0.0.1',
 })
 
-// Real health check against the Worker's /health endpoint (baseURL minus /api/v1).
+// Real health check against the Worker /health (not same-origin /api proxy).
 const services = ref<ServiceHealth[]>([
   { name: 'API', status: 'unreachable' },
 ])
@@ -301,8 +301,8 @@ async function loadTrafficStats(skipCache = false) {
 
 async function checkHealth() {
   try {
-    const healthURL = (general.apiBase.replace(/\/+$/, '').replace(/\/api\/v1$/, '') || '') + '/health'
-    const res = await api.get(healthURL, { cache: { skipCache: true } })
+    // /health is on Worker root; Pages Function only covers /api/* — always hit public API host.
+    const res = await api.get('https://api.rfplay.uk/health', { cache: { skipCache: true } })
     services.value[0].status = res.data?.status === 'ok' ? 'healthy' : 'degraded'
   } catch {
     services.value[0].status = 'unreachable'

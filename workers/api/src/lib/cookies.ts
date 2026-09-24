@@ -1,5 +1,6 @@
 // 會話 cookie — portal / admin 分開 TTL；refresh 共用較長壽命。
-// 屬性：Path=/ Secure HttpOnly SameSite=None；Domain 取 COOKIE_DOMAIN（host-only 為空）。
+// 屬性：Path=/ Secure HttpOnly SameSite=Lax；Domain 取 COOKIE_DOMAIN（host-only 為空）。
+// SameSite=Lax：xv/xva/api 同站（eTLD+1 rfplay.uk）經 same-origin proxy 後足夠；pages.dev 仍有 Bearer fallback。
 
 /** Portal access session（session cookie + JWT）：2 小時 */
 export const PORTAL_SESSION_TTL = 2 * 3600;
@@ -18,7 +19,7 @@ export type CookieOptions = {
 };
 
 export function buildSetCookie(name: string, value: string, opts: CookieOptions): string {
-  const parts = [`${name}=${value}`, 'Path=/', `Max-Age=${opts.maxAge}`, 'Secure', 'SameSite=None'];
+  const parts = [`${name}=${value}`, 'Path=/', `Max-Age=${opts.maxAge}`, 'Secure', 'SameSite=Lax'];
   if (opts.httpOnly !== false) parts.push('HttpOnly');
   if (opts.domain) parts.push(`Domain=${opts.domain}`);
   return parts.join('; ');
@@ -41,8 +42,8 @@ export function csrfCookie(name: string, token: string, domain?: string): string
 }
 
 function clearOne(name: string, domain?: string): string {
-  // SameSite=None 必須帶 Secure，否則瀏覽器拒收這條 Set-Cookie
-  const parts = [`${name}=`, 'Path=/', 'Max-Age=0', 'Secure', 'SameSite=None'];
+  // 與 buildSetCookie 對齊：Secure + SameSite=Lax（Domain 可選）
+  const parts = [`${name}=`, 'Path=/', 'Max-Age=0', 'Secure', 'SameSite=Lax'];
   if (!name.includes('csrf')) parts.push('HttpOnly');
   if (domain) parts.push(`Domain=${domain}`);
   return parts.join('; ');

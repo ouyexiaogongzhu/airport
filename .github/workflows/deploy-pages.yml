@@ -46,14 +46,19 @@ jobs:
 
       - name: Build
         env:
+          # Same-origin /api via Pages Function + Service Binding (portal + admin).
           # axios baseURL must include /api/v1 — routes are /api/v1/public/login etc.
-          VITE_API_BASE_URL: https://api.rfplay.uk/api/v1
+          VITE_API_BASE_URL: /api/v1
           # subscription helper appends /api/v1 if missing; host-only is correct here
+          # Keep absolute so Clash/v2rayNG links never resolve against xv/xva
           VITE_SUBSCRIPTION_BASE_URL: https://api.rfplay.uk
-          # Shared Turnstile sitekey for portal + admin (xv / xva)
+          # Shared Turnstile sitekey for portal + admin (xv / xva) — keep ON
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run build
 
+      # workingDirectory = portal|admin: wrangler picks up ./functions + wrangler.toml
+      # service binding API → rfplay-api when deploying dist.
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v4
         with:
