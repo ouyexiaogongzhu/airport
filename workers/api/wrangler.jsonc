@@ -27,6 +27,7 @@
     }
   ],
   // security: mock 回調生產關閉（fail-closed）；本地開發在 .dev.vars 設 "1" 才開啟
+  // Turnstile ON for login/register (requires TURNSTILE_SECRET secret + portal VITE_TURNSTILE_SITE_KEY)
   "vars": {
     "MOCK_PAY_ENABLED": "0",
     "PORTAL_URL": "https://www.rfplay.uk",

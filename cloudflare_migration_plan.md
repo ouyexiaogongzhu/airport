@@ -76,7 +76,10 @@
 | :--- | :--- | :--- |
 | 1 | **里程碑 B（暂缓）** | BEpusdt / PayPal 商户与 webhook，收款前再配 |
 
-**已配**：Turnstile widget `0x4AAAAAAEpbIStMjRfsMhzq`（域名含 `localhost`/`rfplay.uk`/`www`/`xv`/`xva`）；Pages CI `VITE_TURNSTILE_SITE_KEY`；Worker `TURNSTILE_SECRET`；已移除 `TURNSTILE_DISABLED`。Access 应用 `RFPlay xva + api` 护 `xva.rfplay.uk` + `api.rfplay.uk`（`/health`、`/api/v1/client|node|public|payment/*` 公开绕过）。新节点步骤见 §3.3。
+**已配（现状）**：
+- **Access**：已删除应用 `RFPlay xva + api`（原护 `xva.rfplay.uk` + `api.rfplay.uk`）。门户跨域调 API 时 Access 302 会破坏 CORS，故 **api / xva 均不再挂 Access**。保留无关的 Warp Login App。
+- **Turnstile（基础防护）**：widget `0x4AAAAAAEpbIStMjRfsMhzq`（域名含 `localhost`/`rfplay.uk`/`www`/`xv`/`xva`）；Pages CI `VITE_TURNSTILE_SITE_KEY`；Worker secret `TURNSTILE_SECRET`；**已移除** `TURNSTILE_DISABLED`，登录/注册须通过 widget 拿 token 再提交。
+- 新节点步骤见 §3.3。
 
 ### 3.5 免费额度风险
 

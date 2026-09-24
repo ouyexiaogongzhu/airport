@@ -14,9 +14,9 @@
           <label>Password</label>
           <input v-model="password" type="password" placeholder="Enter password" required />
         </div>
-        <Turnstile v-model="turnstileToken" />
+        <Turnstile ref="turnstileRef" v-model="turnstileToken" />
         <p v-if="error" class="error">{{ error }}</p>
-        <button type="submit" class="btn" :disabled="loading">
+        <button type="submit" class="btn" :disabled="loading || turnstileBlocked">
           {{ loading ? 'Signing in…' : 'Sign In' }}
         </button>
       </form>
@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import Turnstile from '../components/Turnstile.vue'
@@ -41,11 +41,19 @@ const auth = useAuthStore()
 const username = ref('')
 const password = ref('')
 const turnstileToken = ref('')
+const turnstileRef = ref<InstanceType<typeof Turnstile> | null>(null)
 const error = ref('')
 const loading = ref(false)
 
+const turnstileSiteKey = (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined)?.trim() || ''
+const turnstileBlocked = computed(() => !!turnstileSiteKey && !turnstileToken.value)
+
 async function handleLogin() {
   error.value = ''
+  if (turnstileBlocked.value) {
+    error.value = '请先完成人机验证'
+    return
+  }
   loading.value = true
   const res = await auth.login(username.value, password.value, turnstileToken.value)
   loading.value = false
@@ -53,6 +61,7 @@ async function handleLogin() {
     router.push('/dashboard')
   } else {
     error.value = res.error || 'Login failed'
+    turnstileRef.value?.reset()
   }
 }
 </script>

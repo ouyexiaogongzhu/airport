@@ -1,22 +1,28 @@
 <template>
-  <div v-if="siteKey" ref="widgetEl" class="turnstile-box"></div>
+  <div v-if="siteKey" class="turnstile-wrap">
+    <div ref="widgetEl" class="turnstile-box"></div>
+    <p v-if="status === 'pending'" class="turnstile-status">正在验证…</p>
+    <p v-else-if="status === 'error'" class="turnstile-status error">{{ statusError }}</p>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 
-// Cloudflare Turnstile widget. Renders nothing (no error) when
-// VITE_TURNSTILE_SITE_KEY is not configured. The verified token is exposed
-// via v-model for the parent form to send as `cf-turnstile-response`.
+// Cloudflare Turnstile widget. Renders nothing when VITE_TURNSTILE_SITE_KEY
+// is unset. Exposes the verified token via v-model as `cf-turnstile-response`.
 const token = defineModel<string>()
 
-const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY
+const siteKey = (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined)?.trim() || ''
 const widgetEl = ref<HTMLElement>()
+const status = ref<'idle' | 'pending' | 'ready' | 'error'>(siteKey ? 'pending' : 'idle')
+const statusError = ref('人机验证加载失败，请刷新重试')
 let widgetId = ''
 
 interface TurnstileApi {
   render: (el: HTMLElement, opts: Record<string, unknown>) => string
   remove: (id: string) => void
+  reset: (id: string) => void
 }
 declare global {
   interface Window {
@@ -24,8 +30,6 @@ declare global {
   }
 }
 
-// Load the official api.js once per page; render mode is explicit so the
-// widget works after SPA navigation (implicit rendering only scans on load).
 let scriptPromise: Promise<void> | null = null
 function loadTurnstileScript(): Promise<void> {
   if (window.turnstile) return Promise.resolve()
@@ -41,26 +45,69 @@ function loadTurnstileScript(): Promise<void> {
 }
 
 onMounted(async () => {
-  if (!siteKey || !widgetEl.value) return
+  if (!siteKey) return
+  status.value = 'pending'
+  await nextTick()
+  if (!widgetEl.value) {
+    status.value = 'error'
+    statusError.value = '人机验证控件未就绪，请刷新重试'
+    return
+  }
   try {
     await loadTurnstileScript()
   } catch {
-    return // Script blocked/failed — widget stays hidden, token stays empty
+    status.value = 'error'
+    statusError.value = '人机验证脚本加载失败（请检查网络或广告拦截）'
+    return
   }
   const ts = window.turnstile
-  if (!ts || !widgetEl.value) return
+  if (!ts || !widgetEl.value) {
+    status.value = 'error'
+    return
+  }
   widgetId = ts.render(widgetEl.value, {
     sitekey: siteKey,
-    callback: (t: string) => { token.value = t },
-    'expired-callback': () => { token.value = '' },
+    // managed mode (widget default) — interactive challenge only when needed
+    callback: (t: string) => {
+      token.value = t
+      status.value = 'ready'
+    },
+    'expired-callback': () => {
+      token.value = ''
+      status.value = 'pending'
+    },
+    'error-callback': () => {
+      token.value = ''
+      status.value = 'error'
+      statusError.value = '人机验证失败，请刷新重试'
+    },
   })
 })
 
 onBeforeUnmount(() => {
   if (widgetId) window.turnstile?.remove(widgetId)
 })
+
+defineExpose({
+  reset() {
+    token.value = ''
+    if (widgetId && window.turnstile) {
+      status.value = 'pending'
+      window.turnstile.reset(widgetId)
+    }
+  },
+  get ready() {
+    return !siteKey || !!token.value
+  },
+  get required() {
+    return !!siteKey
+  },
+})
 </script>
 
 <style scoped>
-.turnstile-box { margin: 0.5rem 0 0.75rem; }
+.turnstile-wrap { margin: 0.5rem 0 0.75rem; }
+.turnstile-box { min-height: 65px; }
+.turnstile-status { margin: 0.35rem 0 0; font-size: 0.8rem; color: #666; }
+.turnstile-status.error { color: #d93025; }
 </style>
