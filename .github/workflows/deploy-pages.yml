@@ -50,6 +50,8 @@ jobs:
           VITE_API_BASE_URL: https://api.rfplay.uk/api/v1
           # subscription helper appends /api/v1 if missing; host-only is correct here
           VITE_SUBSCRIPTION_BASE_URL: https://api.rfplay.uk
+          # portal only — Turnstile sitekey (admin build ignores unused Vite vars)
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
         run: npm run build
 
       - name: Deploy to Cloudflare Pages

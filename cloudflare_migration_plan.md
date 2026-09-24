@@ -11,12 +11,12 @@
 | :--- | :--- |
 | 后端 | 单个 Worker `rfplay-api`（Hono 按 public/client/web/admin/node 分路由），共享 D1；不拆微服务 |
 | 客户端 | 不自研 App。用户用通用客户端导入订阅 URL：Clash 系（mihomo 内核，`/clash`）为主，V2rayNG 等用 Base64（`/links/:token`） |
-| 节点形态 | **Cloudflare Tunnel**：VLESS/VMess + **XHTTP**（生产默认；代码仍支持 `ws`）。Xray 只听 `127.0.0.1`，零公网代理端口。见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) |
+| 节点形态 | **Cloudflare Tunnel**：VLESS/VMess + **XHTTP** + TLS（唯一传输；WS 已下线）。Xray 只听 `127.0.0.1`，零公网代理端口。见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) |
 | 协议 | 只保留 `vless`、`vmess`；Shadowsocks / Trojan 已下线 |
 | 商品 | 每个商品单独配置时长、流量（每 30 天额度）、限速 |
 | 支付 | 暂不做（里程碑 B）。先由管理员在后台手动开通 |
 | 出口 IP | 不处理：节点出站直连（`freedom`），目标网站可见 VPS 出口 IP |
-| 节点面板 | 不引入 Marzban / 3X-UI：自研 daemon + Worker 为唯一控制面，只借鉴其设计 |
+| 节点面板 | 不引入 Marzban / 3X-UI：自研 gateway + Worker 为唯一控制面，只借鉴其设计 |
 | 会话 | HS256 JWT 放 httpOnly cookie（`session` / `admin_session` / `refresh`）+ CSRF 双提交；跨站 pages.dev 用 Bearer 兜底 |
 | 限流 / 人机校验 | 不在 Worker 内做进程级限流；由 CF WAF 规则 + Turnstile 承担 |
 
@@ -37,17 +37,17 @@
   │         pay.rfplay.uk     → VPS BEpusdt（里程碑 B）            │
   └───────────────┬───────────────────────────┬────────────────┘
                   │ 订阅 URL                    │ /api/v1/node/:token/*（HMAC）
-          用户的 Clash / V2rayNG              VPS：Xray + daemon（Go）+ cloudflared
+          用户的 Clash / V2rayNG              VPS：Xray + gateway（Go）+ cloudflared
                                               入站只留 SSH
 ```
 
-**节点数据流**：daemon 定时拉 `GET /node/:token/config`，按版本号决定是否重载 Xray；从 Xray StatsService 读按用户流量，`POST /node/:token/traffic/report` 批量上报；上报成功后才扣除本地增量。
+**节点数据流**：gateway 定时拉 `GET /node/:token/config`，按版本号决定是否重载 Xray；从 Xray StatsService 读按用户流量，`POST /node/:token/traffic/report` 批量上报；上报成功后才扣除本地增量。
 
 **支付数据流（里程碑 B）**：portal 下单 → Worker 调 BEpusdt 建单拿收银台 URL → 用户付款 → BEpusdt 回调 Worker 验签（MD5，WebCrypto 不支持，用自带 `md5.ts`）→ D1 batch 以「订单仍为 pending」为闸门开通，重复回调零副作用。PayPal 走 Orders v2 + 官方 verify-webhook-signature 接口，商品须以 USD 计价。
 
 **Worker Secrets**：`JWT_SECRET`、`TURNSTILE_SECRET`；里程碑 B 另需 `BEPUSDT_API_URL`、`BEPUSDT_TOKEN`、`BEPUSDT_SECRET`、`PAYPAL_CLIENT_ID`、`PAYPAL_CLIENT_SECRET`、`PAYPAL_WEBHOOK_ID`。批量写入：`deploy/cloudflare/push-secrets.sh`。
 
-**wrangler vars**：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`TURNSTILE_DISABLED="1"`（⚠️ 配好 `TURNSTILE_SECRET` 后必须删掉）。
+**wrangler vars**：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`COOKIE_DOMAIN`。
 
 ---
 
@@ -66,21 +66,17 @@
 
 ### 3.3 新增节点（手动步骤，自动化见 §5.3 部署脚本）
 
-1. 后台建节点（域名、本地端口、WS Path）→ `POST /admin/nodes/:id/token` 生成 token
-2. VPS 上运行 `deploy-node-cf-ws.sh`（装 Xray + daemon + cloudflared）
+1. 后台建节点（域名、本地端口、XHTTP Path）→ `POST /admin/nodes/:id/token` 生成 token
+2. VPS 上运行 `deploy/node-gateway/deploy-node-gateway.sh`（装 Xray + gateway + cloudflared；旧节点升级见同目录 `UPGRADE.md`）
 3. Zero Trust 里给 Tunnel 加公共主机名 `node-xx.rfplay.uk → http://127.0.0.1:<port>`（自动建橙云 CNAME）
 
 ### 3.4 尚需人工完成
 
-| # | 事项 | 阻塞什么 |
+| # | 事项 | 说明 |
 | :--- | :--- | :--- |
-| 1 | Turnstile site key → Pages env；`wrangler secret put TURNSTILE_SECRET`；删掉 `TURNSTILE_DISABLED` | 注册/登录防刷 |
-| 2 | 正式 `JWT_SECRET` | 正式会话 |
-| 3 | VPS：Tunnel token + 公共主机名 | 节点回源 |
-| 4 | Access 保护 `admin.rfplay.uk`；Email Routing | 运维 |
-| 5 | 老用户数据（若 VPS 上有 `manager.db`）→ `deploy/cloudflare/dump-to-seed.sh` → `wrangler d1 import` | 老用户迁移（无则跳过） |
-| 6 | git 凭据需要 `workflow` 权限才能推送改动 `.github/workflows/` 的提交 | 推送 |
-| 7 | 里程碑 B：BEpusdt（VPS 上只开 TRON 单链）、PayPal 应用与 webhook | 收款 |
+| 1 | **里程碑 B（暂缓）** | BEpusdt / PayPal 商户与 webhook，收款前再配 |
+
+**已配**：Turnstile widget `0x4AAAAAAEpbIStMjRfsMhzq`（域名含 `localhost`/`rfplay.uk`/`www`/`xv`/`xva`）；Pages CI `VITE_TURNSTILE_SITE_KEY`；Worker `TURNSTILE_SECRET`；已移除 `TURNSTILE_DISABLED`。Access 应用 `RFPlay xva + api` 护 `xva.rfplay.uk` + `api.rfplay.uk`（`/health`、`/api/v1/client|node|public|payment/*` 公开绕过）。新节点步骤见 §3.3。
 
 ### 3.5 免费额度风险
 
@@ -100,11 +96,11 @@
 
 | # | 问题 | 位置 |
 | :--- | :--- | :--- |
-| 1 | ✅ Worker 没有 daemon 调用的 `GET /api/v1/node/:token/config` 和 `POST /api/v1/node/:token/traffic/report`（A2：`routes/node.ts` + HMAC） | `index.ts`；daemon `sync.go:166,404` |
-| 2 | ✅ 补路由须对齐格式：daemon 期望 `{node_id,name,protocol,config}`，批量上报 `{node_id,traffic:[...]}`（A2） | `sync.go:157,398` |
-| 3 | ✅ 无按用户流量统计（A2：`email: u{id}` + StatsService，daemon 用 `statsquery` 读取） | `admin.ts` buildNodeXrayConfig；`sync.go:430` |
+| 1 | ✅ Worker 没有 gateway 调用的 `GET /api/v1/node/:token/config` 和 `POST /api/v1/node/:token/traffic/report`（A2：`routes/node.ts` + HMAC） | `index.ts`；gateway `sync.go:166,404` |
+| 2 | ✅ 补路由须对齐格式：gateway 期望 `{node_id,name,protocol,config}`，批量上报 `{node_id,traffic:[...]}`（A2） | `sync.go:157,398` |
+| 3 | ✅ 无按用户流量统计（A2：`email: u{id}` + StatsService，gateway 用 `statsquery` 读取） | `admin.ts` buildNodeXrayConfig；`sync.go:430` |
 | 4 | — Reality `privateKey` 为空（Reality 已删除） | |
-| 5 | ✅ 配置版本号只按用户 ID 集合计算，改节点端口/传输后 daemon 不重载（A2：版本号含传输配置） | `admin.ts` userSetVersion；`sync.go:228` |
+| 5 | ✅ 配置版本号只按用户 ID 集合计算，改节点端口/传输后 gateway 不重载（A2：版本号含传输配置） | `admin.ts` userSetVersion；`sync.go:228` |
 | 6 | ✅ 服务端与客户端共用一个 `security` 字段，inbound 监听所有网卡（A2：固定 Tunnel 形态，只监听 127.0.0.1） | `xrayuri.ts`；`admin.ts` |
 | 7 | ✅ 部署脚本写死 `node_id: 1`（A2：取自配置响应） | `deploy/node-*/deploy-*.sh` |
 | 8 | ✅ Shadowsocks / Trojan 已从白名单、订阅、Clash 下线，存量节点由 `0002` 置为 inactive | |
@@ -144,12 +140,12 @@
 | 27 | ✅ 未配 Turnstile secret 时放行（A0，改为 fail closed） | |
 | 28 | ✅ 改用户名不校验空值/重名（A0） | |
 
-### 4.5 P2：daemon
+### 4.5 P2：gateway
 
 | # | 问题 | 位置 |
 | :--- | :--- | :--- |
 | 29 | ✅ 上报前就更新流量快照，上报失败则增量丢失；拉配置失败时本轮不上报（A2） | `sync.go` |
-| 30 | 部分 ✅ Xray 重启失败仍记为已应用、不重试；崩溃不拉起；daemon 退出留孤儿进程（A2 已修）。剩余：用户变更仍整进程重启 Xray，全节点连接会断一次 | `sync.go`；`main.go` |
+| 30 | 部分 ✅ Xray 重启失败仍记为已应用、不重试；崩溃不拉起；gateway 退出留孤儿进程（A2 已修）。剩余：用户变更仍整进程重启 Xray，全节点连接会断一次 | `sync.go`；`main.go` |
 | 31 | `sync_interval` 是 `time.Duration`，JSON 须写纳秒整数（`60000000000`），写 `"30s"` 解析失败 | `config.go` |
 | 32 | 部分 ✅ 默认 `default-token`/`localhost:8080` 能通过校验；`:9090` HTTP API 无鉴权（A2：默认值与非回环 `listen_addr` 拒绝启动）。剩余：`/api/v1/traffic` 流量恒为 0 | `config.go`；`server.go` |
 
@@ -194,23 +190,23 @@
 
 **完成情况**
 
-- Worker：`routes/node.ts`（`GET /node/:token/config`、`POST /node/:token/traffic/report`）+ `lib/nodehmac.ts`（与 daemon `signRequest` 同算法，时间戳容差 ±300s，签名覆盖 body）。上报经 `json_each` 展开，一个 batch 固定 2–3 条语句，与用户数无关（D1 单次调用有查询数上限）；同一用户多条合并，不存在的用户不记录，节点计数与心跳一并更新。节点非 active 时下发空用户列表（daemon 应用后断开所有连接），而不是 403（403 会让 daemon 保留旧配置继续服务）
+- Worker：`routes/node.ts`（`GET /node/:token/config`、`POST /node/:token/traffic/report`）+ `lib/nodehmac.ts`（与 gateway `signRequest` 同算法，时间戳容差 ±300s，签名覆盖 body）。上报经 `json_each` 展开，一个 batch 固定 2–3 条语句，与用户数无关（D1 单次调用有查询数上限）；同一用户多条合并，不存在的用户不记录，节点计数与心跳一并更新。节点非 active 时下发空用户列表（gateway 应用后断开所有连接），而不是 403（403 会让 gateway 保留旧配置继续服务）
 - `lib/nodeconfig.ts`：`buildNodeXrayConfig` 从 `admin.ts` 移出，后台预览与节点接口共用；用户列表用 `SERVICEABLE_SQL`，缺 `vless_uuid` 的用户跳过（不再内存补随机 UUID）。StatsService 走 `127.0.0.1:10085`（与节点端口冲突时 10086，写入 `_meta.api_port`）。路由屏蔽私网/回环目标，否则用户可经代理连本机 StatsService 重置流量计数；为此去掉了 `inboundTag → direct` 规则，让域名目标经 `IPIfNonMatch` 解析后再匹配 IP 规则。版本号 = FNV-1a（配置结构版本、协议、端口、path、api 端口、每个用户 `id:uuid`）截成 53 位，JSON 往返不丢精度
 - #13 已知限制：Xray 没有按用户限速（policy 只有超时与统计开关），`speed_limit_bps` / `rate_limit_bps` 不下发到节点，推迟处理
 - 订阅：按 `nodes.network` 下发；XHTTP 固定 `mode`/`xhttpMode=packet-up`、`alpn=h2`（详见 [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)）。`nodes.port` 仅本机端口；后台 Transport + path；`/admin/nodes/:id/config` 预览不记心跳
-- daemon：`xray api statsquery -reset` 读流量，读出的增量进 `pending`，上报 200 后才扣除；拉配置失败也上报；应用新配置前先 `xray run -test`，失败保留旧进程；重启前先收一次流量；重启失败不记为已应用（下轮重试）；崩溃后指数退避自动拉起；`Stop()` 与退出时结束 Xray（`main.go` 不再 `log.Fatalf` 跳过清理）；`node_id` 取自配置响应（配置里可省略）；默认 token/地址、非回环 `listen_addr` 拒绝启动
-- 部署脚本：安装 cloudflared 并 `cloudflared service install <tunnel token>`；给 `--cf-api-token` 时经 API 写 Tunnel ingress（`hostname → http://127.0.0.1:<port>`）与橙云 CNAME，否则打印手动步骤；Xray 改由 daemon 独占管理（停用 `xray.service` 与旧 `rfplay-xray.service`，避免两个 Xray 抢端口）；结尾检查节点端口、9090、10085/10086 只监听回环地址，否则报错退出。原固定的 Xray `v25.3.8` 不存在（404），改为已验证的 `v26.3.27`（Xray 26 已把 WS 与 VMess 标为 deprecated，升级前需确认）
+- gateway：`xray api statsquery -reset` 读流量，读出的增量进 `pending`，上报 200 后才扣除；拉配置失败也上报；应用新配置前先 `xray run -test`，失败保留旧进程；重启前先收一次流量；重启失败不记为已应用（下轮重试）；崩溃后指数退避自动拉起；`Stop()` 与退出时结束 Xray（`main.go` 不再 `log.Fatalf` 跳过清理）；`node_id` 取自配置响应（配置里可省略）；默认 token/地址、非回环 `listen_addr` 拒绝启动
+- 部署脚本：安装 cloudflared 并 `cloudflared service install <tunnel token>`；给 `--cf-api-token` 时经 API 写 Tunnel ingress（`hostname → http://127.0.0.1:<port>`）与橙云 CNAME，否则打印手动步骤；Xray 改由 gateway 独占管理（停用 `xray.service` 与旧 `rfplay-xray.service`，避免两个 Xray 抢端口）；结尾检查节点端口、9090、10085/10086 只监听回环地址，否则报错退出。原固定的 Xray `v25.3.8` 不存在（404），改为已验证的 `v26.3.27`。脚本现为 `deploy/node-gateway/deploy-node-gateway.sh`（原 `deploy/node-cf-ws/`，agent 原名 rfplay-daemon）
 - 已删除 `deploy/node-reality/`
-- 验证：`node.routes.test.ts`（真实 SQLite，19 例：签名正确/错误/过期/篡改 body、配置只含可服务用户、版本号变化、上报记账）；`subformats.test.ts` 更新。daemon 用本机缓存的 Go 1.26.5 工具链 `go vet` + `go test -race` 通过；并用 Xray 26.3.27 实测：生成的 vless/vmess 配置 `-test` 通过，经 WS 代理正常上网，`statsquery` 读到 `u{id}` 流量，经代理访问 `127.0.0.1:10085`/`localhost` 被拦；daemon 对假 manager 实测上报失败重发、`kill -9` 后 2s 拉起、SIGTERM 后 Xray 退出
-- w1 实测（2026-09-24）：`deploy-node-cf-ws.sh` + Tunnel；Xray 仅 `127.0.0.1:28001`；daemon 拉配置/上报流量；客户端经 `w1.rfplay.uk:443` 连通，出口 IP 为 VPS（入站隐藏、出站不隐藏，见 §1）
+- 验证：`node.routes.test.ts`（真实 SQLite，19 例：签名正确/错误/过期/篡改 body、配置只含可服务用户、版本号变化、上报记账）；`subformats.test.ts` 更新。gateway 用本机缓存的 Go 1.26.5 工具链 `go vet` + `go test -race` 通过；并用 Xray 26.3.27 实测：生成的 vless/vmess 配置 `-test` 通过，经代理正常上网，`statsquery` 读到 `u{id}` 流量，经代理访问 `127.0.0.1:10085`/`localhost` 被拦；gateway 对假 manager 实测上报失败重发、`kill -9` 后 2s 拉起、SIGTERM 后 Xray 退出
+- w1 实测（2026-09-24）：`deploy-node-cf-ws.sh`（现 `deploy-node-gateway.sh`）+ Tunnel；Xray 仅 `127.0.0.1:28001`；gateway 拉配置/上报流量；客户端经 `w1.rfplay.uk:443` 连通，出口 IP 为 VPS（入站隐藏、出站不隐藏，见 §1）
 
 **节点模型（唯一形态）**
 
 | 项 | 取值 |
 | :--- | :--- |
-| Xray inbound | `listen: 127.0.0.1`，端口 = `port`，`network` = `nodes.network`（`ws`\|`xhttp`），`security=none`，path = `ws_path` |
-| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名；XHTTP 另带 `mode=packet-up`、`xhttpMode=packet-up`、`alpn=h2` |
-| 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>`（WS 与 XHTTP 相同） |
+| Xray inbound | `listen: 127.0.0.1`，端口 = `port`，`network=xhttp`，`security=none`，path = `ws_path`（空则 `/rfhttp/`） |
+| 客户端链接 | 地址 = 节点域名（`address`），端口固定 443，`security=tls`，host/sni = 节点域名；带 `mode=packet-up`、`xhttpMode=packet-up`、`alpn=h2` |
+| 回源 | cloudflared：`node-xx.rfplay.uk → http://127.0.0.1:<port>` |
 | DNS | Tunnel 自动创建的 CNAME（橙云），源站 IP 不出现在任何 DNS 记录里 |
 | VPS 防火墙 | 入站只留 SSH（建议 SSH 也限制来源或改用 Cloudflare Access） |
 
@@ -229,12 +225,12 @@
 
 测试节点：`w1`（`w1.rfplay.uk` → Tunnel → `127.0.0.1:28001`）。
 
-- [x] 用 `deploy-node-cf-ws.sh` 部署 Tunnel 节点；Xray 只监听回环，公网不可达代理端口
+- [x] 用 `deploy-node-gateway.sh`（当时名 `deploy-node-cf-ws.sh`）部署 Tunnel 节点；Xray 只监听回环，公网不可达代理端口
 - [x] 后台建节点，给测试用户开通商品
 - [x] **Clash Verge**（`/clash`）、**v2rayNG**（Base64）、**v2rayA**（Base64）均可导入并连通；已在 **Android / Ubuntu / MacBook** 验证
-- [x] 产生流量后，D1 用户已用流量随 daemon 上报更新
+- [x] 产生流量后，D1 用户已用流量随 gateway 上报更新
 - [x] 用户 `suspended` 时订阅返回 `ACCOUNT_DISABLED`（403）
-- [ ] 过期 / 超额后一个同步周期内现有连接被断开（订阅 403 已覆盖；在线踢断依赖 daemon 下一轮空用户配置）
+- [ ] 过期 / 超额后一个同步周期内现有连接被断开（订阅 403 已覆盖；在线踢断依赖 gateway 下一轮空用户配置）
 - [ ] 封禁再解封后，原 `client_token` 仍可用（未故意轮换 token 时）
 - [ ] 管理员被降权后，下一次请求即失去后台权限
 - [x] 节点域名解析为 Cloudflare；入站隐藏源站。**出口 IP = VPS 公网 IP**（预期，非缺陷）
