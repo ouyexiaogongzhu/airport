@@ -1,6 +1,7 @@
 import api from '../api'
 
 const API_V1_PREFIX = '/api/v1'
+const PUBLIC_API_ORIGIN = 'https://api.rfplay.uk'
 
 // Builds a fully-qualified subscription URL for import into external proxy
 // apps (V2rayNG, Shadowrocket, Clash Verge, Stash, etc.).
@@ -13,8 +14,9 @@ const API_V1_PREFIX = '/api/v1'
 //
 // If the base does not already end with "/api/v1" the prefix is appended, so
 // the result always targets the real manager endpoint
-// /api/v1/client/links/{token}[{/clash}]. Relative bases are resolved against
-// the page origin to produce an absolute URL (e.g. https://api.rfplay.uk/api/v1/...).
+// /api/v1/client/links/{token}[{/clash}]. Absolute http(s) bases are kept as-is
+// (including local dev). Relative bases are prefixed with the public API
+// origin so clipboard URLs never follow the page host (xv / xva).
 export type SubscriptionFormat = 'base64' | 'clash'
 
 export function buildSubscriptionUrl(token: string, format: SubscriptionFormat = 'base64'): string {
@@ -28,5 +30,5 @@ export function buildSubscriptionUrl(token: string, format: SubscriptionFormat =
   const suffix = format === 'clash' ? '/clash' : ''
   const url = `${withPrefix}/client/links/${token}${suffix}`
   if (/^https?:\/\//i.test(url)) return url
-  return `${window.location.origin}${url}`
+  return `${PUBLIC_API_ORIGIN}${url}`
 }

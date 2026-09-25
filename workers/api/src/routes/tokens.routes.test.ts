@@ -151,6 +151,47 @@ describe('token 訂閱生命週期', () => {
 });
 
 describe('鑑權', () => {
+  it('假 Bearer + admin cookie 簽發仍要 CSRF，不建 token 用戶', async () => {
+    const s = setup();
+    const session = await signJwt({ user_id: 1, username: 'admin', role: 'admin' }, SECRET, 3600);
+    const before = (s.raw.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n;
+    const res = await s.app.request(
+      '/api/v1/admin/tokens',
+      {
+        method: 'POST',
+        headers: {
+          Cookie: `admin_session=${session}`,
+          Authorization: 'Bearer not-a-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ duration_days: 1, traffic_limit_gb: 1 }),
+      },
+      s.env,
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'CSRF_INVALID' });
+    expect((s.raw.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(before);
+  });
+
+  it('admin cookie + 雙提交 CSRF 可以簽發', async () => {
+    const s = setup();
+    const session = await signJwt({ user_id: 1, username: 'admin', role: 'admin' }, SECRET, 3600);
+    const res = await s.app.request(
+      '/api/v1/admin/tokens',
+      {
+        method: 'POST',
+        headers: {
+          Cookie: `admin_session=${session}; admin_csrf=ct`,
+          'X-CSRF-Token': 'ct',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ duration_days: 1, traffic_limit_gb: 1 }),
+      },
+      s.env,
+    );
+    expect(res.status).toBe(201);
+  });
+
   it('非 admin → 403；無憑證 → 401', async () => {
     const s = setup();
     const userJwt = await signJwt({ user_id: 2, username: 'alice', role: 'user' }, SECRET, 3600);

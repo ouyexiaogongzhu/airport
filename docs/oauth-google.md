@@ -68,12 +68,15 @@ GOOGLE_CLIENT_SECRET=
 
 ## Portal 环境变量
 
-Pages / 本地 `.env`：
+生产 Pages（`deploy-pages.yml`）注入：
 
 ```
 VITE_GOOGLE_CLIENT_ID=<与 Worker 相同的 Client ID>
-VITE_API_BASE_URL=https://api.rfplay.uk/api/v1
+VITE_API_BASE_URL=/api/v1
+VITE_SUBSCRIPTION_BASE_URL=https://api.rfplay.uk
 ```
+
+普通 API 走同站 `/api/v1`（Pages Function → Worker）。**OAuth start / callback 仍绝对**在 `https://api.rfplay.uk/api/v1/public/oauth/google/...`：`portal/src/utils/googleAuth.ts` 在 `VITE_API_BASE_URL` 为相对路径时强制使用公网 API 主机（已注册的 redirect URI）。本地若把 `VITE_API_BASE_URL` 设成绝对地址（例如 `http://127.0.0.1:8787/api/v1`），OAuth 跟随该主机。
 
 `VITE_GOOGLE_CLIENT_ID` 仅控制是否显示 Google 按钮；真正换码在 Worker。
 

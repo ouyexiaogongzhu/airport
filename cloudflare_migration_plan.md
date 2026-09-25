@@ -1,6 +1,6 @@
 # RFPlay 运维与 backlog
 
-> **状态（2026-09-24）**：v0.1.1 — 里程碑 A 已验收；**Bug fix** 已合入生产；支付（里程碑 B）暂缓。  
+> **状态（2026-09-25）**：v0.1.1 — 里程碑 A 已验收；**Bug fix** 已合入生产；同站 `/api` proxy 与 Free WAF 登录规则已生效；支付（里程碑 B）暂缓。  
 > **架构**：[airport_system_design.md](airport_system_design.md)（现行）。入口：[README.md](README.md)。
 
 ---
@@ -25,7 +25,10 @@
 
 ```
   Pages   xv.rfplay.uk（portal） / xva.rfplay.uk（admin）
+          浏览器打同站 /api/v1；Function 经 binding API → rfplay-api
+          （两项目 wrangler.toml [[services]]，生产 deployment_configs 已绑定）
   Worker  api.rfplay.uk  → D1 + KV（订阅缓存 + JWT 密钥）+ Cron
+  订阅 / Google OAuth start·callback 仍绝对 https://api.rfplay.uk
   Tunnel  w1/w2…rfplay.uk → VPS 127.0.0.1:<port>（Xray + gateway + cloudflared）
 ```
 
@@ -39,7 +42,7 @@ Vars：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`COOKIE_DOMAIN`。
 ### 3.1 CI/CD
 
 - **Worker**：`main` → `deploy-worker.yml`（migrations + deploy）
-- **Pages**：`deploy-pages.yml` Direct Upload；注入 `VITE_TURNSTILE_SITE_KEY` / 可选 `VITE_GOOGLE_CLIENT_ID`
+- **Pages**：`deploy-pages.yml` Direct Upload；`VITE_API_BASE_URL=/api/v1`（订阅基址仍 `https://api.rfplay.uk`）；`rfplay-portal` 与 `rfplay-admin` 均有 Service Binding `API` → `rfplay-api`（生产已绑定）；注入 `VITE_TURNSTILE_SITE_KEY` / 可选 `VITE_GOOGLE_CLIENT_ID`
 - **本地**：`npm run db:migrate`、`wrangler dev`、`npx vitest run`
 - **回滚**：重部署上一 Worker；D1 Time Travel ~30 天
 
@@ -62,16 +65,16 @@ Vars：`MOCK_PAY_ENABLED="0"`、`PORTAL_URL`、`COOKIE_DOMAIN`。
 
 | 资源 | 注意 |
 | :--- | :--- |
-| Workers | 订阅拉取为主；超限升 Paid |
+| Workers | 免费请求额度共享：Pages Function 每次调用，与绑定的 Worker 调用，都可能各计一次；静态 HTML/JS 不计。订阅拉取为主；超限升 Paid |
 | D1 写 | 流量上报是大户；控制上报间隔 |
 | KV 写 | 订阅缓存勿按请求写；JWT 轮换日 ≤2 写 |
 | WAF Free | **1** 条 Rate Limiting；**5** 条 Custom rules — 见 [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) |
 
-### 3.5 Free WAF：登录保护（dashboard）
+### 3.5 Free WAF：登录保护（已生效）
 
-Dashboard 手工配置（非 Terraform）。要点：Bot Fight Mode Off；**唯一**一条 RL 只罩 `api`+`xv`+`xva` 的 login/register（含 admin login）；可选空 UA 仅限这些 path；**不要** RL 全部 `/api`；Turnstile 仍开。同站 proxy 后浏览器打的是 xv/xva，规则必须含这两 host。
+区上规则已生效（非 Terraform；重建仍走 Dashboard / API）。Bot Fight Mode Off；**唯一**一条 RL：login/register/admin-login 的 POST，5 次 / 10s 每 IP，characteristics `cf.colo.id` + `ip.src`，Block，hosts `api`+`xv`+`xva`；1 条 custom：仅这些登录路径空 UA → Block。**不要** RL 全部 `/api`；Turnstile 仍开。同站 proxy 后浏览器打的是 xv/xva，规则必须含这两 host。
 
-完整步骤：[docs/waf-free-api-protect.md](docs/waf-free-api-protect.md)。
+重建或改规则：[docs/waf-free-api-protect.md](docs/waf-free-api-protect.md)。
 
 ---
 
@@ -85,9 +88,9 @@ Dashboard 手工配置（非 Terraform）。要点：Bot Fight Mode Off；**唯�
 | — | gateway | `sync_interval` 须纳秒整数；用户变更仍整进程重启 Xray |
 | — | 限速 | `rate_limit_bps` 不下发（Xray 无按用户限速） |
 | — | 运维增强 | 拨测自动 inactive、额度告警、Telegram bot |
-| — | Free WAF | Dashboard 按 [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) 配 RL + 可选空 UA（Free：1 RL / 5 custom） |
+| — | Free WAF | **已生效**（2026-09-25）：登录 RL 5/10s + 登录路径空 UA（hosts api+xv+xva，BFM Off）。重建见 [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md)（Free：1 RL / 5 custom） |
 
-**已完成（摘要）**：节点 HMAC 配置/流量、资格判定 + Cron、Tunnel XHTTP、会话 `token_version` + refresh、设备槽、JWT KV 轮换、Google OAuth 代码路径、Admin 复制订阅 URL、portal Dashboard 合并套餐/设备、流量明细 14 天保留 + traffic_daily 每日汇总（0007）、上报幂等 batch UUID 去重（0008，gateway 未确认批次原样重发）、refresh 7 天用时换发 + 存量长寿 token 拒绝（部署切换点：全体重登一次）、Admin `at_` 自建 token 免注册发放/吊销/续期（0009，合成 token_only 用户）。
+**已完成（摘要）**：节点 HMAC 配置/流量、资格判定 + Cron、Tunnel XHTTP、会话 `token_version` + refresh、设备槽、JWT KV 轮换、Google OAuth 代码路径、Admin 复制订阅 URL、portal Dashboard 合并套餐/设备、流量明细 14 天保留 + traffic_daily 每日汇总（0007）、上报幂等 batch UUID 去重（0008，gateway 未确认批次原样重发）、refresh 7 天用时换发 + 存量长寿 token 拒绝（部署切换点：全体重登一次）、Admin `at_` 自建 token 免注册发放/吊销/续期（0009，合成 token_only 用户）、同站 `/api` proxy（Pages binding `API`）与 Free WAF 登录规则。
 
 ---
 

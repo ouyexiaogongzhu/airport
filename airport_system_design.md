@@ -1,6 +1,6 @@
 # Airport Proxy System Architecture Design Plan
 
-> **状态（2026-09-24）**：以当前实现 + 目标终态为准。细节实现见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)、[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)、代码。  
+> **状态（2026-09-25）**：以当前实现为准。生产 Portal/Admin 的普通 API 经同站 `/api` Pages Function + Service Binding 进 Worker（§2）；订阅与 Google OAuth 仍绝对走 `api.rfplay.uk`。细节见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md)、[docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md)、代码。  
 > **版本**：v0.1.1（里程碑 A 验收 + **Bug fix** 已合入；支付暂缓）。
 
 ---
@@ -35,6 +35,7 @@ flowchart TB
   subgraph Cloudflare
     Portal[Pages: portal<br/>xv.rfplay.uk]
     Admin[Pages: admin<br/>xva.rfplay.uk]
+    Fn["Pages Function /api/*<br/>binding API"]
     API[Worker: rfplay-api<br/>api.rfplay.uk]
     D1[(D1: rfplay)]
     KV[(KV: 订阅缓存 + JWT 密钥)]
@@ -49,8 +50,9 @@ flowchart TB
 
   Browser --> Portal
   AdminUI --> Admin
-  Portal -->|cookie + CSRF| API
-  Admin -->|cookie + CSRF| API
+  Portal -->|same-origin /api/v1| Fn
+  Admin -->|same-origin /api/v1| Fn
+  Fn -->|Service Binding, Host api.rfplay.uk| API
   API --> D1
   API --> KV
   Clash & V2NG -->|订阅 URL| API
@@ -66,7 +68,10 @@ flowchart TB
 
 | 路径 | 说明 |
 | :--- | :--- |
-| 用户 | Portal 注册/登录 → 复制订阅 URL → 客户端拉取 → 经 CF 连节点 |
+| 用户 API | 浏览器请求 `xv`/`xva` 上的 `/api/v1`；Function 原样转发 Cookie、CSRF、Authorization，Host 改为 `api.rfplay.uk`；非 GET/HEAD body 带 `duplex: 'half'`。`_routes.json` 只收 `/api/*`，静态 HTML/JS 不进 Function |
+| 用户 | Portal 注册/登录（同站 proxy）→ 复制订阅 URL（绝对 `https://api.rfplay.uk/...`）→ 客户端拉取 → 经 CF 连节点 |
+| OAuth | start/callback 留在 `https://api.rfplay.uk`（不走 Pages `/api` proxy） |
+| 健康检查 | Admin Settings 直接 `GET https://api.rfplay.uk/health`（Worker 根路径，不在 `/api/*`） |
 | 管理 | Admin 建节点、开通商品、改用户资格 |
 | 节点 | gateway 定时 `GET …/config` → 重载 Xray；`POST …/traffic/report` 记账 |
 | Cron | Worker 每小时：标记过期、按 30 天周期重置流量；JWT 签名密钥按日轮换（见 §7） |
@@ -78,8 +83,9 @@ flowchart TB
 | 组件 | 路径 / 域名 | 职责 |
 | :--- | :--- | :--- |
 | **Worker API** | `workers/api/` → `api.rfplay.uk` | Hono：`public` / `auth` / `oauth` / `client` / `web` / `admin` / `node`；D1 + KV；Cron |
-| **Portal** | `portal/` → `xv.rfplay.uk` | Vue 3：登录/注册（密码+可选 Google）、Dashboard（套餐+设备+订阅） |
-| **Admin** | `admin/` → `xva.rfplay.uk` | Vue 3：用户/商品/节点/订单；一键复制 Base64/Clash 订阅 URL |
+| **Portal** | `portal/` → `xv.rfplay.uk` | Vue 3：登录/注册（密码+可选 Google）、Dashboard（套餐+设备+订阅）。生产 `VITE_API_BASE_URL=/api/v1` |
+| **Admin** | `admin/` → `xva.rfplay.uk` | Vue 3：用户/商品/节点/订单；一键复制 Base64/Clash 订阅 URL。API 同样走同站 `/api/v1` |
+| **Pages Function** | `portal|admin/functions/api/[[path]].ts` | `/api/*` → Service Binding `API`（`rfplay-api`）。两项目 `wrangler.toml` `[[services]]`，生产 Pages `deployment_configs` 已绑定 |
 | **gateway** | `gateway/`（原 rfplay-daemon） | Pull 配置、管理 Xray、Stats 读流量并 HMAC 上报 |
 | **Xray** | VPS `/usr/local/bin/xray` | 官方二进制；inbound 仅 `127.0.0.1`；`network=xhttp`，`security=none` |
 | **CF Tunnel** | cloudflared | `w1.rfplay.uk` 等 → `http://127.0.0.1:<nodes.port>`；橙云 CNAME，无源站 IP |
@@ -95,7 +101,7 @@ flowchart TB
 
 > `network` 仅 `xhttp`（存量 `ws` 等读配置时 coerce）；`reality_*` 列停用。
 
-**Bindings / Secrets（Worker）**
+**Bindings / Secrets（Worker 与 Pages）**
 
 | 类型 | 名称 | 用途 |
 | :--- | :--- | :--- |
@@ -106,7 +112,8 @@ flowchart TB
 | Secret | `TURNSTILE_SECRET` | 人机 siteverify（登录/注册；OAuth 回调不校验） |
 | Secret | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 可选；Portal Google 登录 |
 | Vars | `PORTAL_URL`、`COOKIE_DOMAIN` 等 | 见 `.env.example` |
-| Pages | `VITE_TURNSTILE_SITE_KEY`、`VITE_GOOGLE_CLIENT_ID` | 构建注入 |
+| Pages service | `API` → `rfplay-api` | portal 与 admin 的 `/api/*` 转发 |
+| Pages 构建 | `VITE_API_BASE_URL=/api/v1`、`VITE_SUBSCRIPTION_BASE_URL=https://api.rfplay.uk`、`VITE_TURNSTILE_SITE_KEY`、`VITE_GOOGLE_CLIENT_ID` | `deploy-pages.yml` 注入；Turnstile 登录保持开启 |
 
 ---
 
@@ -212,13 +219,13 @@ Body：`{ node_id?, traffic: [{ user_id, upload_bytes, download_bytes }] }`
 
 | 面 | 机制 |
 | :--- | :--- |
-| Portal / Admin 会话 | HS256 JWT → httpOnly cookie（`session` / `admin_session` / `refresh`）+ CSRF double-submit；跨站 Bearer 兜底 |
+| Portal / Admin 会话 | HS256 JWT → httpOnly cookie（`session` / `admin_session` / `refresh`）+ CSRF double-submit。`session` / `refresh` / `csrf`：`SameSite=Lax`（不是 `None`）、`Secure`、`Domain=COOKIE_DOMAIN`（`rfplay.uk`）；`csrf` 非 HttpOnly。`xv`/`xva`/`api` 同站（eTLD+1 `rfplay.uk`）。`pages.dev` 预览仍靠 Bearer 兜底 |
 | JWT 密钥轮换 | KV `jwt:current` / `jwt:previous`（`{kid,secret,rotated_at}`）；hourly cron 内若距上次 ≥24h 则轮换；签发用 current（header `kid`）；校验 current→previous（~24h grace，不全局 bump `token_version`）；`JWT_SECRET` 仅首次种子 |
 | 吊销 | `token_version`：登出、封禁等 bump；role/status 每次回库校验 |
 | 节点 | HMAC（上节）；token 不进日志；非回环 `listen_addr` 拒绝启动 |
 | Tunnel | 代理端口不对公网开放；DNS 无源站 IP |
-| 边缘 | CF Universal SSL；WAF + Turnstile **non-interactive**（限流不在 Worker 内做） |
-| Access | **勿**挂在 `api` / `xva`（Access 302 破坏跨域 CORS）；人机靠 Turnstile |
+| 边缘 | CF Universal SSL；Turnstile **non-interactive** 登录保持开启（限流不在 Worker 内做）。Free WAF **已生效**：登录/注册/admin-login 的 POST，5 次/10s 每 IP，characteristics `cf.colo.id` + `ip.src`，Block；hosts `api`+`xv`+`xva`。另 1 条 custom：仅这些登录路径空 UA → Block。BFM Off。见 [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) |
+| Access | **勿**挂在 `api` / `xva`（302 会打断订阅、OAuth 回调与直连 `/health`）；人机靠 Turnstile |
 | Google OAuth | 见 [docs/oauth-google.md](docs/oauth-google.md)；回调写与密码登录相同 cookie |
 | Xray 出站 | 路由屏蔽私网/回环，防止经代理打 StatsService |
 
@@ -229,7 +236,7 @@ Body：`{ node_id?, traffic: [{ user_id, upload_bytes, download_bytes }] }`
 | 面 | 方式 |
 | :--- | :--- |
 | Worker | `main` → `deploy-worker.yml`：`d1 migrations apply` + `wrangler deploy` |
-| Pages | `deploy-pages.yml`：构建后 `wrangler pages deploy` Direct Upload |
+| Pages | `deploy-pages.yml`：`VITE_API_BASE_URL=/api/v1` 后 `wrangler pages deploy` Direct Upload。`rfplay-portal` 与 `rfplay-admin` 均绑定 `API` → `rfplay-api` |
 | Secrets | `deploy/cloudflare/push-secrets.sh` |
 | 节点 | 后台建节点 → 发 `nd_` token → `deploy/node-gateway/deploy-node-gateway.sh` → Tunnel 主机名 |
 | 证书 | 无源站证书；CF 边缘 SSL + Tunnel loopback 明文 |
@@ -243,7 +250,7 @@ Body：`{ node_id?, traffic: [{ user_id, upload_bytes, download_bytes }] }`
 | `api` | Worker Custom Domain |
 | `w1` / `w2`… | `<tunnel-id>.cfargotunnel.com`（橙云） |
 
-**额度注意**：D1 写以流量上报为主；KV 订阅缓存勿按请求写；JWT 轮换每日最多 2 次 KV 写（current+previous）。
+**额度注意**：D1 写以流量上报为主；KV 订阅缓存勿按请求写；JWT 轮换每日最多 2 次 KV 写（current+previous）。Free Workers 请求额度共享：一次同站 API 调用里，Pages Function 与被绑定的 Worker **都可能各计一次**；静态 HTML/JS 不计。
 
 ---
 
@@ -286,3 +293,4 @@ Body：`{ node_id?, traffic: [{ user_id, upload_bytes, download_bytes }] }`
 | [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) | XHTTP + Tunnel |
 | [docs/devices.md](docs/devices.md) | 设备槽 |
 | [docs/oauth-google.md](docs/oauth-google.md) | Google 登录 |
+| [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) | Free WAF 登录限速（已生效） |

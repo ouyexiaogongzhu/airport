@@ -8,13 +8,16 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { authenticateAccessCandidates } from '../lib/session';
 import { resolveJwtMaterial } from '../lib/jwtkeys';
-import { constantTimeEqual } from '../lib/csrf';
+import { constantTimeEqual, csrfExemptForVerifiedBearer } from '../lib/csrf';
 import { sanitizedUser, isValidEmail, USER_PROFILE_COLS, type UserRow } from '../lib/user';
 import { createPaymentURL } from '../lib/payments';
 import { clearUserDevices } from '../lib/devices';
 import type { Env } from '../index';
 
-type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
+type AppEnv = {
+  Bindings: Env;
+  Variables: { userId: number; username: string; role: string; sessionCredential: string };
+};
 
 const PROFILE_FIELDS = ['username', 'email', 'phone', 'display_name', 'billing_address'] as const;
 type ProfileField = (typeof PROFILE_FIELDS)[number];
@@ -48,6 +51,7 @@ export function webRoutes() {
     c.set('userId', r.user.id);
     c.set('username', r.user.username);
     c.set('role', r.user.role);
+    c.set('sessionCredential', r.credential);
     await next();
   });
 
@@ -57,8 +61,8 @@ export function webRoutes() {
       await next();
       return;
     }
-    // Bearer 認證不依賴 cookie，天然免疫 CSRF → 跳過雙提交
-    if (c.req.header('Authorization')) {
+    // 僅當本次驗過的 access JWT 就是 Authorization Bearer 才豁免；假 Bearer + cookie 會話仍要雙提交
+    if (csrfExemptForVerifiedBearer(c.req.header('Authorization'), c.get('sessionCredential'))) {
       await next();
       return;
     }
@@ -234,10 +238,26 @@ export function webRoutes() {
       return c.json({ error: 'failed to create order' }, 500);
     }
 
-    // URL 構造對齊 Go CreateOrder（回調走 Worker 公開路由 /public/payment/callback/）
-    const origin = new URL(c.req.url).origin;
-    const notifyURL = `${origin}/api/v1/public/payment/callback/${provider}`;
-    const redirectURL = `${origin}/user/orders/${orderId}`;
+    // 回調必須打到 API。線上固定 api.rfplay.uk；localhost / 127.0.0.1 用請求 origin 以便本地開發。
+    const reqUrl = new URL(c.req.url);
+    const notifyOrigin =
+      reqUrl.hostname === 'localhost' || reqUrl.hostname === '127.0.0.1'
+        ? reqUrl.origin
+        : 'https://api.rfplay.uk';
+    const notifyURL = `${notifyOrigin}/api/v1/public/payment/callback/${provider}`;
+    const redirectURL = `${(c.env.PORTAL_URL || 'https://xv.rfplay.uk').replace(/\/$/, '')}/pay/${orderId}`;
+
+    const failPendingAndRestoreStock = async () => {
+      const failedAt = new Date().toISOString();
+      await db
+        .prepare('UPDATE products SET stock = stock + 1, updated_at = ? WHERE id = ?')
+        .bind(failedAt, productId)
+        .run();
+      await db
+        .prepare("UPDATE orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'")
+        .bind(failedAt, orderId)
+        .run();
+    };
 
     let paymentURL: string;
     try {
@@ -249,6 +269,7 @@ export function webRoutes() {
         redirectURL,
       );
     } catch {
+      await failPendingAndRestoreStock();
       return c.json({ error: 'failed to create payment' }, 500);
     }
 
@@ -257,6 +278,7 @@ export function webRoutes() {
       .bind(paymentURL, now, orderId)
       .run();
     if ((saved.meta.changes ?? 0) === 0) {
+      await failPendingAndRestoreStock();
       return c.json({ error: 'failed to save payment url' }, 500);
     }
 

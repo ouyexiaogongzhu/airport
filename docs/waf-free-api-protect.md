@@ -2,11 +2,11 @@
 
 > 适用：Cloudflare **Free** 区 `rfplay.uk`。  
 > 目标：压登录爆破 / 空 UA 脚本，**不**误伤订阅拉取与一般 API。  
-> Free 额度提醒：**1** 条 Rate Limiting 规则；**5** 条 Custom rules（本 runbook 最多用掉 1 RL + 1 optional custom）。
+> Free 额度提醒：**1** 条 Rate Limiting 规则；**5** 条 Custom rules（已用 1 RL + 1 custom）。
 
-## 已通过 API 部署（2026-09-25）
+## 已生效（2026-09-25）
 
-下列 ruleset 已写入生产区（可在 Dashboard → Security → Security rules 核对）：
+生产区规则已生效（可在 Dashboard → Security → Security rules 核对）：
 
 | Phase | Ruleset | 规则 |
 | :--- | :--- | :--- |
@@ -25,7 +25,7 @@ Bot Fight Mode：保持 **Off**。Turnstile：应用层 **保持 ON**。
 | `xv.rfplay.uk` | Portal（same-origin proxy → API） |
 | `xva.rfplay.uk` | Admin（same-origin proxy → API） |
 
-应用层 **Turnstile 保持开启**（login/register）；本文件只补边缘限速与可选 UA 规则。
+应用层 **Turnstile 保持开启**（login/register）；边缘限速与登录路径空 UA 均已生效。下文是重建步骤。
 
 ---
 
@@ -67,8 +67,8 @@ Free 只有 **1** 条 RL，全部预算用在登录路径上。**不要**对整�
    ```
 
 4. **With the same characteristics** / counting：
-   - Characteristics：**IP**
-   - Requests：约 **5** / **10 seconds**（Free UI 若无精确「5/10s」，选最接近的阈值与窗口）
+   - Characteristics：`cf.colo.id` + `ip.src`（按 IP，并按 colo 分桶）
+   - Requests：**5** / **10 seconds**
 5. **Then take action**：
    - Action：**Block**
    - Duration / timeout：约 **10 seconds**（按 Free UI 可选项调整）
@@ -78,7 +78,7 @@ Free 只有 **1** 条 RL，全部预算用在登录路径上。**不要**对整�
 
 ---
 
-## 3.（可选）Custom rule：仅登录路径空 User-Agent → Block
+## 3. Custom rule：仅登录路径空 User-Agent → Block（已生效；以下为重建）
 
 占用 1/5 条 Free custom。**不要**全局「空 UA → Block」（会误伤健康检查 / 部分客户端）。
 
@@ -110,7 +110,7 @@ Free 只有 **1** 条 RL，全部预算用在登录路径上。**不要**对整�
 | :--- | :--- |
 | Bot Fight Mode | Off（至少不挡 api/xv/xva） |
 | Rate limiting | **仅 1 条**；hosts = api+xv+xva；paths = login/register/admin login；POST；~5/10s Block ~10s |
-| Custom（可选） | 仅上述登录路径 + 空 UA → Block；非全局空 UA |
+| Custom | **已生效**：仅上述登录路径 + 空 UA → Block；非全局空 UA |
 | 未对全部 `/api` RL | 是 |
 | Turnstile | login/register 仍开启（应用层，非本规则替代） |
 | Same-origin proxy | RL/custom **已含 xv、xva** |

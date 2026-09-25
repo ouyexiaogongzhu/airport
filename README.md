@@ -9,6 +9,12 @@
 | API | https://api.rfplay.uk | `workers/api/` → Worker `rfplay-api`（D1 + KV） |
 | 节点 | `w1`/`w2`…（如 `w1.rfplay.uk`） | VPS：Xray + `gateway/` + cloudflared |
 
+## 请求路径
+
+生产 Portal / Admin 的构建把 `VITE_API_BASE_URL` 设为 `/api/v1`（`.github/workflows/deploy-pages.yml`）。浏览器打**自己的源**（`xv` / `xva` 的 `/api/v1/...`）。Pages Function `portal/functions/api/[[path]].ts`、`admin/functions/api/[[path]].ts` 经 Service Binding `API` → `rfplay-api` 转发：Host 改写为 `api.rfplay.uk`，Cookie / CSRF / Authorization 保留；非 GET/HEAD 的 body 使用 `duplex: 'half'`。`public/_routes.json` 只包含 `/api/*`，静态资源不进 Functions。
+
+订阅 URL 与 Google OAuth 的 start/callback **仍是**绝对地址 `https://api.rfplay.uk/...`（`VITE_SUBSCRIPTION_BASE_URL`）。Admin Settings 健康检查打 `https://api.rfplay.uk/health`（Worker 根路径，不在 `/api/*` 下）。
+
 ## 现状（要点）
 
 | 项 | 说明 |
@@ -16,7 +22,7 @@
 | 传输 | **VLESS + XHTTP + TLS**（经 CF Tunnel）；无 WS 产品路径；无 Reality |
 | 订阅 | Base64 → v2rayNG/v2rayA；`/clash` → Clash Verge / mihomo（主推） |
 | 登录 | 用户名或邮箱 + 密码；Turnstile **non-interactive**；可选 [Google OAuth](docs/oauth-google.md) |
-| 会话 | HS256 JWT（httpOnly cookie）+ CSRF；密钥存 KV，约每日轮换，双钥宽限 |
+| 会话 | HS256 JWT（httpOnly cookie，`SameSite=Lax`，`Domain=rfplay.uk`）+ CSRF；`pages.dev` 预览仍 Bearer 兜底；密钥存 KV，约每日轮换，双钥宽限 |
 | 节点代理 | `gateway/`（原 rfplay-daemon）HMAC 拉配置 / 报流量 |
 | 支付 | **暂缓**；Admin grant 开通 |
 | 版本 | **v0.1.1**（里程碑 A + Bug fix）；见 [cloudflare_migration_plan.md](cloudflare_migration_plan.md) §5 |
@@ -46,6 +52,7 @@ airport/
 | [docs/xhttp-cloudflare-design.md](docs/xhttp-cloudflare-design.md) | XHTTP + Tunnel |
 | [docs/devices.md](docs/devices.md) | 设备槽（默认 5） |
 | [docs/oauth-google.md](docs/oauth-google.md) | Google 登录配置 |
+| [docs/waf-free-api-protect.md](docs/waf-free-api-protect.md) | Free WAF 登录限速（已生效） |
 
 ## 部署
 

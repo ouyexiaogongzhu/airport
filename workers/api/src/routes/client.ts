@@ -8,7 +8,7 @@ import { verifyJwt, type Claims } from '../lib/jwt';
 import { resolveJwtMaterial, verifySecrets } from '../lib/jwtkeys';
 import { serviceBlock } from '../lib/entitlement';
 import { checkClaims } from '../lib/session';
-import { constantTimeEqual } from '../lib/csrf';
+import { bearerJwt, constantTimeEqual } from '../lib/csrf';
 import {
   DEFAULT_MAX_DEVICES,
   deleteDevice,
@@ -63,8 +63,48 @@ async function getActiveNodes(env: Env): Promise<NodeRow[]> {
   return results ?? [];
 }
 
-// JWTProtected 移植：401 JSON 與 Go 逐字一致
-async function requireJwt(c: { env: Env; req: { header: (k: string) => string | undefined } }): Promise<Claims | Response> {
+type ClientAuth = Claims & { via: 'bearer' | 'cookie' };
+
+function sessionCookie(cookieHeader: string | undefined): string {
+  const m = (cookieHeader ?? '').match(/(?:^|;\s*)session=([^;]+)/);
+  return m ? m[1] : '';
+}
+
+// 沒有可用 session cookie 時才用這兩個格式錯誤；空 Bearer 仍是 invalid or expired token。
+function noCookieAuthError(authHeader: string | undefined): Response {
+  if (!authHeader) return Response.json({ error: 'missing authorization header' }, { status: 401 });
+  const idx = authHeader.indexOf(' '); // Go strings.SplitN(header, " ", 2)
+  const scheme = idx === -1 ? authHeader : authHeader.slice(0, idx);
+  if (idx === -1 || scheme.toLowerCase() !== 'bearer') {
+    return Response.json({ error: 'invalid authorization header format' }, { status: 401 });
+  }
+  return Response.json({ error: 'invalid or expired token' }, { status: 401 });
+}
+
+async function verifyAccess(
+  token: string,
+  secrets: readonly string[],
+  db: D1Database,
+): Promise<{ claims: Claims } | { error: Response }> {
+  const claims = await verifyJwt(token, secrets);
+  if (!claims || typeof claims.user_id !== 'number' || claims.typ === 'refresh') {
+    return { error: Response.json({ error: 'invalid or expired token' }, { status: 401 }) };
+  }
+  // 吊銷（token_version 不符）→ 401；帳號非 active → 403（與 serviceBlock 同一錯誤碼）
+  const s = await checkClaims(db, claims);
+  if ('error' in s) {
+    if (s.error === 'disabled') return { error: Response.json({ error: 'ACCOUNT_DISABLED' }, { status: 403 }) };
+    return { error: Response.json({ error: 'invalid or expired token' }, { status: 401 }) };
+  }
+  return { claims };
+}
+
+// JWTProtected 移植：401 JSON 與 Go 逐字一致。
+// Bearer access JWT 優先；缺失、格式不對、無效、過期或吊銷時回落 session cookie。
+async function requireJwt(c: {
+  env: Env;
+  req: { header: (k: string) => string | undefined };
+}): Promise<ClientAuth | Response> {
   const material = await resolveJwtMaterial(c.env);
   if (!material) {
     return new Response(goJSON({ error: 'server configuration error' }), {
@@ -72,34 +112,24 @@ async function requireJwt(c: { env: Env; req: { header: (k: string) => string | 
       headers: { 'Content-Type': 'application/json' },
     });
   }
+  const secrets = verifySecrets(material);
   const authHeader = c.req.header('Authorization');
-  let tokenStr: string;
-  if (!authHeader) {
-    // Portal（純 cookie 會話）兜底：同一 JWT/密鑰，僅傳輸通道不同（Go 設計缺陷修補）
-    const m = (c.req.header('Cookie') ?? '').match(/(?:^|;\s*)session=([^;]+)/);
-    tokenStr = m ? m[1] : '';
-    if (!tokenStr) {
-      return Response.json({ error: 'missing authorization header' }, { status: 401 });
-    }
-  } else {
-    const idx = authHeader.indexOf(' '); // Go strings.SplitN(header, " ", 2)
-    const scheme = idx === -1 ? authHeader : authHeader.slice(0, idx);
-    tokenStr = idx === -1 ? '' : authHeader.slice(idx + 1);
-    if (idx === -1 || scheme.toLowerCase() !== 'bearer') {
-      return Response.json({ error: 'invalid authorization header format' }, { status: 401 });
-    }
+  const bearer = bearerJwt(authHeader);
+  let bearerError: Response | undefined;
+  if (bearer) {
+    const got = await verifyAccess(bearer, secrets, c.env.DB);
+    if ('claims' in got) return { ...got.claims, via: 'bearer' };
+    bearerError = got.error;
   }
-  const claims = await verifyJwt(tokenStr, verifySecrets(material));
-  if (!claims || typeof claims.user_id !== 'number' || claims.typ === 'refresh') {
-    return Response.json({ error: 'invalid or expired token' }, { status: 401 });
+
+  const cookie = sessionCookie(c.req.header('Cookie'));
+  if (cookie) {
+    const got = await verifyAccess(cookie, secrets, c.env.DB);
+    if ('claims' in got) return { ...got.claims, via: 'cookie' };
+    return got.error;
   }
-  // 吊銷（token_version 不符）→ 401；帳號非 active → 403（與 serviceBlock 同一錯誤碼）
-  const s = await checkClaims(c.env.DB, claims);
-  if ('error' in s) {
-    if (s.error === 'disabled') return Response.json({ error: 'ACCOUNT_DISABLED' }, { status: 403 });
-    return Response.json({ error: 'invalid or expired token' }, { status: 401 });
-  }
-  return claims;
+
+  return bearerError ?? noCookieAuthError(authHeader);
 }
 
 function isResponse(x: unknown): x is Response {
@@ -198,12 +228,12 @@ export function clientRoutes() {
     return c.json(out);
   });
 
-  // DELETE /client/devices/:id — Bearer 免 CSRF；純 cookie 需雙提交
+  // DELETE /client/devices/:id — 驗過的 Bearer 免 CSRF；cookie 通道需雙提交
   r.delete('/devices/:id', async (c) => {
     const auth = await requireJwt(c);
     if (isResponse(auth)) return auth;
 
-    if (!c.req.header('Authorization')) {
+    if (auth.via !== 'bearer') {
       const header = c.req.header('X-CSRF-Token');
       const cookie = getCookie(c, 'csrf');
       if (!header || !cookie || !constantTimeEqual(header, cookie)) {

@@ -223,7 +223,7 @@ async function paypalVerifyCallback(
       transmission_sig: h('paypal-transmission-sig'),
       transmission_time: h('paypal-transmission-time'),
       webhook_id: webhookId,
-      webhook_event: JSON.stringify(event),
+      webhook_event: event,
     }),
     signal: AbortSignal.timeout(15000),
   });

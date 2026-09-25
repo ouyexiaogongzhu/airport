@@ -31,7 +31,9 @@ export type SessionUser = {
   token_version: number;
 };
 
-export type SessionResult = { user: SessionUser } | { error: 'invalid' | 'revoked' | 'disabled' };
+export type SessionResult =
+  | { user: SessionUser; /** 本次验过的 access JWT（cookie 或 Bearer 原文） */ credential: string }
+  | { error: 'invalid' | 'revoked' | 'disabled' };
 
 export async function checkClaims(db: D1Database, claims: Claims): Promise<SessionResult> {
   const user = await db
@@ -41,7 +43,7 @@ export async function checkClaims(db: D1Database, claims: Claims): Promise<Sessi
   if (!user) return { error: 'invalid' };
   if ((claims.tv ?? 0) !== user.token_version) return { error: 'revoked' };
   if (user.status !== 'active') return { error: 'disabled' };
-  return { user };
+  return { user, credential: '' };
 }
 
 // kind='access' 拒絕 refresh token（防 90 天 refresh 被當 access 用）；kind='refresh' 只收 refresh token
@@ -79,7 +81,7 @@ export async function authenticateAccessCandidates(
     if (!raw || seen.has(raw)) continue;
     seen.add(raw);
     last = await authenticate(db, raw, secrets, 'access');
-    if ('user' in last) return last;
+    if ('user' in last) return { user: last.user, credential: raw };
   }
   return last;
 }

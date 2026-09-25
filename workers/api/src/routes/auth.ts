@@ -17,7 +17,7 @@ import {
   clearAuthCookies,
   clearHostOnlyAuthCookies,
 } from '../lib/cookies';
-import { randomHex, constantTimeEqual } from '../lib/csrf';
+import { bearerJwt, constantTimeEqual, randomHex } from '../lib/csrf';
 import {
   authenticate,
   authenticateAccessCandidates,
@@ -99,13 +99,38 @@ async function revokeFromRequest(c: Context<AppEnv>, names: string[]) {
   }
 }
 
+function sessionCookiesForCsrf(csrfCookieName: string): string[] {
+  return csrfCookieName === 'admin_csrf' ? ['admin_session', 'admin_refresh'] : ['session', 'refresh'];
+}
+
+async function jwtUserId(token: string | undefined, secrets: string[]): Promise<number | undefined> {
+  if (!token) return undefined;
+  const claims = await verifyJwt(token, secrets);
+  if (!claims || typeof claims.user_id !== 'number') return undefined;
+  return claims.user_id;
+}
+
 // Logout 的會話 cookie 是 SameSite=Lax（同站 xv/xva/api）；仍要求 CSRF 雙提交，
 // 防同站子域或誤配回 None 時被強制登出（token_version+1 連 localStorage Bearer 一起吊銷）。
-// Bearer / body refresh_token 非 cookie 通道，免疫 CSRF，照常豁免。
+// 豁免僅限「驗過簽的 Bearer / body.refresh_token，且與 cookie 會話是同一用戶」。
+// 別人的有效 JWT 不能替 cookie 會話開閘（revoke 會先用 cookie）。
 async function logoutCsrfOk(c: Context<AppEnv>, csrfCookieName: string): Promise<boolean> {
   const body = await c.req.json<{ refresh_token?: unknown }>().catch(() => null);
-  if (c.req.header('Authorization')) return true;
-  if (typeof body?.refresh_token === 'string' && body.refresh_token !== '') return true;
+  const material = await resolveJwtMaterial(c.env);
+  if (material) {
+    const secrets = verifySecrets(material);
+    const bearer = bearerJwt(c.req.header('Authorization'));
+    const refresh = typeof body?.refresh_token === 'string' && body.refresh_token !== '' ? body.refresh_token : undefined;
+    const nonCookieIds = (
+      await Promise.all([jwtUserId(bearer, secrets), jwtUserId(refresh, secrets)])
+    ).filter((id): id is number => id !== undefined);
+    const cookieIds = (
+      await Promise.all(sessionCookiesForCsrf(csrfCookieName).map((name) => jwtUserId(getCookie(c, name), secrets)))
+    ).filter((id): id is number => id !== undefined);
+    // 沒有 cookie 會話時，持有有效 Bearer/refresh 即可退出自己。
+    // 有 cookie 時，非 cookie 憑證必須覆蓋這些 user id，避免 A 的 JWT 登出 B。
+    if (nonCookieIds.length > 0 && cookieIds.every((id) => nonCookieIds.includes(id))) return true;
+  }
   const header = c.req.header('X-CSRF-Token');
   const cookie = getCookie(c, csrfCookieName);
   return !!(header && cookie && constantTimeEqual(header, cookie));

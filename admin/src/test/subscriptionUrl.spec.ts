@@ -30,9 +30,9 @@ describe('buildSubscriptionUrl (admin)', () => {
     )
   })
 
-  it('resolves relative base against page origin', () => {
+  it('prefixes the public API origin for a relative base', () => {
     expect(buildSubscriptionUrl('tok_1')).toBe(
-      'https://xva.rfplay.uk/api/v1/client/links/tok_1',
+      'https://api.rfplay.uk/api/v1/client/links/tok_1',
     )
   })
 

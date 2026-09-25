@@ -264,6 +264,72 @@ describe('退出', () => {
     expect(out.status).toBe(403);
     expect((await req('/admin/auth/validate', { headers: { Cookie: `admin_session=${a.session}` } })).status).toBe(200);
   });
+
+  it('假 Authorization 不能豁免 cookie 退出的 CSRF，也不吊銷', async () => {
+    const { raw, req, tokens } = setup();
+    const u = await tokens(2);
+    const out = await req('/auth/logout', {
+      method: 'POST',
+      headers: { Cookie: `session=${u.session}`, Authorization: 'Bearer not-a-jwt' },
+    });
+    expect(out.status).toBe(403);
+    expect(await out.json()).toEqual({ error: 'CSRF_INVALID' });
+    expect(raw.prepare('SELECT token_version v FROM users WHERE id = 2').get()).toEqual({ v: 0 });
+  });
+
+  it('未驗簽的 body.refresh_token 不能豁免 cookie 退出的 CSRF', async () => {
+    const { raw, req, tokens } = setup();
+    const u = await tokens(2);
+    const out = await req('/auth/logout', {
+      method: 'POST',
+      headers: { Cookie: `session=${u.session}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: 'not-a-jwt' }),
+    });
+    expect(out.status).toBe(403);
+    expect(raw.prepare('SELECT token_version v FROM users WHERE id = 2').get()).toEqual({ v: 0 });
+  });
+
+  it('別人的有效 Bearer 不能豁免 cookie 退出的 CSRF', async () => {
+    const { raw, req, tokens } = setup();
+    const admin = await tokens(1);
+    const alice = await tokens(2);
+    const out = await req('/auth/logout', {
+      method: 'POST',
+      headers: { Cookie: `session=${alice.session}`, Authorization: `Bearer ${admin.bearer}` },
+    });
+    expect(out.status).toBe(403);
+    expect(await out.json()).toEqual({ error: 'CSRF_INVALID' });
+    expect(raw.prepare('SELECT token_version v FROM users WHERE id = 2').get()).toEqual({ v: 0 });
+  });
+
+  it('驗過簽的 refresh_token 可退出，不需 CSRF cookie', async () => {
+    const { req, bearer, tokens } = setup();
+    const u = await tokens(2);
+    const out = await req('/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: u.refresh }),
+    });
+    expect(out.status).toBe(200);
+    expect((await req('/auth/validate', bearer(u.bearer))).status).toBe(401);
+  });
+
+  it('假 Bearer + admin cookie 寫操作仍要 CSRF', async () => {
+    const { raw, req, tokens } = setup();
+    const a = await tokens(1);
+    const out = await req('/admin/users/2', {
+      method: 'PUT',
+      headers: {
+        Cookie: `admin_session=${a.session}`,
+        Authorization: 'Bearer not-a-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'banned' }),
+    });
+    expect(out.status).toBe(403);
+    expect(await out.json()).toEqual({ error: 'CSRF_INVALID' });
+    expect(raw.prepare('SELECT status s FROM users WHERE id = 2').get()).toEqual({ s: 'active' });
+  });
 });
 
 describe('/admin/auth/validate', () => {

@@ -120,3 +120,147 @@ describe('device limit on /client/links', () => {
     }
   });
 });
+
+describe('device auth: bearer fallback and CSRF', () => {
+  async function accessToken(ttl = 3600, extra: { tv?: number; typ?: 'refresh' } = {}) {
+    return signJwt({ user_id: 2, username: 'alice', role: 'user', tv: extra.tv ?? 0, ...extra }, SECRET, ttl);
+  }
+
+  it('invalid, expired, or revoked Bearer falls back to the session cookie', async () => {
+    const { req, raw } = setup();
+    const session = await accessToken();
+    const expired = await accessToken(-10);
+    const refresh = await accessToken(3600, { typ: 'refresh' });
+
+    const expiredOk = await req('/client/devices', {
+      headers: { Authorization: `Bearer ${expired}`, Cookie: `session=${session}` },
+    });
+    expect(expiredOk.status).toBe(200);
+
+    const refreshOk = await req('/client/devices', {
+      headers: { Authorization: `Bearer ${refresh}`, Cookie: `session=${session}` },
+    });
+    expect(refreshOk.status).toBe(200);
+
+    const stale = await accessToken();
+    raw.exec('UPDATE users SET token_version = 1 WHERE id = 2');
+    const fresh = await accessToken(3600, { tv: 1 });
+    const revokedOk = await req('/client/devices', {
+      headers: { Authorization: `Bearer ${stale}`, Cookie: `session=${fresh}` },
+    });
+    expect(revokedOk.status).toBe(200);
+
+    const badFormat = await req('/client/devices', {
+      headers: { Authorization: 'Token abc', Cookie: `session=${fresh}` },
+    });
+    expect(badFormat.status).toBe(200);
+  });
+
+  it('cookie-only GET does not require CSRF', async () => {
+    const { req } = setup();
+    const session = await accessToken();
+    const list = await req('/client/devices', { headers: { Cookie: `session=${session}` } });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({ max_devices: 2, used: 0, devices: [] });
+  });
+
+  it('returns header errors only when no session cookie can be used', async () => {
+    const { req, raw } = setup();
+
+    const missing = await req('/client/devices');
+    expect(missing.status).toBe(401);
+    expect(await missing.json()).toEqual({ error: 'missing authorization header' });
+
+    const format = await req('/client/devices', { headers: { Authorization: 'Token abc' } });
+    expect(format.status).toBe(401);
+    expect(await format.json()).toEqual({ error: 'invalid authorization header format' });
+
+    const emptyBearer = await req('/client/devices', { headers: { Authorization: 'Bearer' } });
+    expect(emptyBearer.status).toBe(401);
+    expect(await emptyBearer.json()).toEqual({ error: 'invalid authorization header format' });
+
+    const bothBad = await req('/client/devices', {
+      headers: { Authorization: 'Bearer not-a-jwt', Cookie: 'session=not-a-jwt' },
+    });
+    expect(bothBad.status).toBe(401);
+    expect(await bothBad.json()).toEqual({ error: 'invalid or expired token' });
+
+    const formatAndBadCookie = await req('/client/devices', {
+      headers: { Authorization: 'Token abc', Cookie: 'session=not-a-jwt' },
+    });
+    expect(formatAndBadCookie.status).toBe(401);
+    expect(await formatAndBadCookie.json()).toEqual({ error: 'invalid or expired token' });
+
+    const session = await accessToken();
+    raw.exec("UPDATE users SET status = 'banned' WHERE id = 2");
+    const disabled = await req('/client/devices', {
+      headers: { Authorization: 'Bearer not-a-jwt', Cookie: `session=${session}` },
+    });
+    expect(disabled.status).toBe(403);
+    expect(await disabled.json()).toEqual({ error: 'ACCOUNT_DISABLED' });
+  });
+
+  it('DELETE requires CSRF unless the accepted credential is the bearer token', async () => {
+    const { req } = setup(1);
+    expect(
+      (await req('/client/links/rf_alice', { headers: { 'X-Device-Id': 'csrf----01-aaaaaaaaaaaa' } })).status,
+    ).toBe(200);
+    const session = await accessToken();
+    const bearer = await accessToken();
+    const listed = (await (
+      await req('/client/devices', { headers: { Cookie: `session=${session}` } })
+    ).json()) as { devices: { id: number }[] };
+    const id = listed.devices[0].id;
+
+    const cookieOnly = await req(`/client/devices/${id}`, {
+      method: 'DELETE',
+      headers: { Cookie: `session=${session}` },
+    });
+    expect(cookieOnly.status).toBe(403);
+    expect(await cookieOnly.json()).toEqual({ error: 'CSRF_INVALID' });
+
+    const dummyAuth = await req(`/client/devices/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer not-a-jwt', Cookie: `session=${session}` },
+    });
+    expect(dummyAuth.status).toBe(403);
+    expect(await dummyAuth.json()).toEqual({ error: 'CSRF_INVALID' });
+
+    const mismatch = await req(`/client/devices/${id}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: 'Bearer not-a-jwt',
+        Cookie: `session=${session}; csrf=csrf-cookie`,
+        'X-CSRF-Token': 'wrong',
+      },
+    });
+    expect(mismatch.status).toBe(403);
+
+    const withCsrf = await req(`/client/devices/${id}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: 'Bearer not-a-jwt',
+        Cookie: `session=${session}; csrf=csrf-cookie`,
+        'X-CSRF-Token': 'csrf-cookie',
+      },
+    });
+    expect(withCsrf.status).toBe(200);
+    expect(await withCsrf.json()).toEqual({ ok: true });
+
+    expect(
+      (await req('/client/links/rf_alice', { headers: { 'X-Device-Id': 'csrf----02-bbbbbbbbbbbb' } })).status,
+    ).toBe(200);
+    const again = (await (
+      await req('/client/devices', { headers: { Authorization: `Bearer ${bearer}` } })
+    ).json()) as { devices: { id: number }[] };
+    const bearerDelete = await req(`/client/devices/${again.devices[0].id}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        Cookie: 'csrf=csrf-cookie',
+        'X-CSRF-Token': 'wrong',
+      },
+    });
+    expect(bearerDelete.status).toBe(200);
+  });
+});

@@ -5,8 +5,8 @@ import { buildSubscriptionUrl } from '../utils/subscriptionUrl'
 describe('buildSubscriptionUrl', () => {
   beforeEach(() => {
     vi.unstubAllEnvs()
-    // setup.ts replaces window.location with a bare { href: '' } stub, so give
-    // it an origin for the relative-base assertions below.
+    // setup.ts replaces window.location with a bare { href: '' } stub. Pin a
+    // page origin so a regression that reads it cannot pass as the public API.
     Object.defineProperty(globalThis, 'location', {
       value: { href: '', origin: 'https://portal.rfplay.uk' },
       writable: true,
@@ -31,10 +31,10 @@ describe('buildSubscriptionUrl', () => {
     )
   })
 
-  it('derives from a relative /api/v1 base and resolves against the origin', () => {
+  it('derives from a relative /api/v1 base and prefixes the public API origin', () => {
     api.defaults.baseURL = '/api/v1'
     expect(buildSubscriptionUrl('tok_1')).toBe(
-      'https://portal.rfplay.uk/api/v1/client/links/tok_1',
+      'https://api.rfplay.uk/api/v1/client/links/tok_1',
     )
   })
 
@@ -56,10 +56,10 @@ describe('buildSubscriptionUrl', () => {
     )
   })
 
-  it('resolves the clash format against the origin for a relative base', () => {
+  it('prefixes the public API origin for the clash format on a relative base', () => {
     api.defaults.baseURL = '/api/v1'
     expect(buildSubscriptionUrl('tok_1', 'clash')).toBe(
-      'https://portal.rfplay.uk/api/v1/client/links/tok_1/clash',
+      'https://api.rfplay.uk/api/v1/client/links/tok_1/clash',
     )
   })
 

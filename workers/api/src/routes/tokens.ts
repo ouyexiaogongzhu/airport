@@ -9,11 +9,14 @@ import { getCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
 import { authenticateAccessCandidates, bumpTokenVersion } from '../lib/session';
 import { resolveJwtMaterial } from '../lib/jwtkeys';
-import { constantTimeEqual, randomHex } from '../lib/csrf';
+import { constantTimeEqual, csrfExemptForVerifiedBearer, randomHex } from '../lib/csrf';
 import { ensureUserCredentials } from '../lib/portalSession';
 import type { Env } from '../index';
 
-type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
+type AppEnv = {
+  Bindings: Env;
+  Variables: { userId: number; username: string; role: string; sessionCredential: string };
+};
 
 const BCRYPT_COST = 10;
 const GB_BYTES = 1073741824;
@@ -110,6 +113,7 @@ export function tokenRoutes() {
     c.set('userId', r.user.id);
     c.set('username', r.user.username);
     c.set('role', r.user.role);
+    c.set('sessionCredential', r.credential);
     await next();
   });
 
@@ -123,7 +127,7 @@ export function tokenRoutes() {
       await next();
       return;
     }
-    if (c.req.header('Authorization')) {
+    if (csrfExemptForVerifiedBearer(c.req.header('Authorization'), c.get('sessionCredential'))) {
       await next();
       return;
     }

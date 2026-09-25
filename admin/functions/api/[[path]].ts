@@ -6,10 +6,17 @@
  */
 
 interface Env {
-  API: Fetcher
+  API?: Fetcher
 }
 
 export const onRequest: PagesFunction<Env> = async (context) => {
+  if (!context.env.API) {
+    return new Response(JSON.stringify({ error: 'api binding unavailable' }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
   const incoming = context.request
   const url = new URL(incoming.url)
   url.protocol = 'https:'

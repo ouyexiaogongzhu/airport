@@ -7,13 +7,16 @@ import { createMiddleware } from 'hono/factory';
 import { getCookie } from 'hono/cookie';
 import { authenticateAccessCandidates } from '../lib/session';
 import { resolveJwtMaterial } from '../lib/jwtkeys';
-import { constantTimeEqual, randomHex } from '../lib/csrf';
+import { constantTimeEqual, csrfExemptForVerifiedBearer, randomHex } from '../lib/csrf';
 import { activationStatement, type ProductPlan } from '../lib/entitlement';
 import { clearUserDevices } from '../lib/devices';
 import { buildNodeXrayConfig, type NodeConfigRow } from '../lib/nodeconfig';
 import type { Env } from '../index';
 
-type AppEnv = { Bindings: Env; Variables: { userId: number; username: string; role: string } };
+type AppEnv = {
+  Bindings: Env;
+  Variables: { userId: number; username: string; role: string; sessionCredential: string };
+};
 
 // parsePagination — 對齊 Go user.go parsePagination（page≥1、per_page 1..100，預設 20）
 function parsePagination(c: { req: { query: (k: string) => string | undefined } }): { offset: number; limit: number } {
@@ -174,6 +177,7 @@ export function adminRoutes() {
     c.set('userId', r.user.id);
     c.set('username', r.user.username);
     c.set('role', r.user.role);
+    c.set('sessionCredential', r.credential);
     await next();
   });
 
@@ -189,8 +193,8 @@ export function adminRoutes() {
       await next();
       return;
     }
-    // Bearer 認證不依賴 cookie，天然免疫 CSRF → 跳過雙提交
-    if (c.req.header('Authorization')) {
+    // 僅當本次驗過的 access JWT 就是 Authorization Bearer 才豁免；假 Bearer + cookie 會話仍要雙提交
+    if (csrfExemptForVerifiedBearer(c.req.header('Authorization'), c.get('sessionCredential'))) {
       await next();
       return;
     }
