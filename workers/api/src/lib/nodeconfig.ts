@@ -30,6 +30,32 @@ const PRIVATE_CIDRS = [
 // 配置結構變化時遞增，強制所有節點重新應用（a4：僅 xhttp；a4-2：error 級日誌、關 access）
 const SCHEMA = 'a4-xhttp-only-2';
 
+// 可服務用戶列表是熱讀。按 D1 實例 + 30 秒時間桶緩存；桶變了 bound `now` 也跟著變。
+// production node configs can trail user entitlement changes by up to 30 seconds.
+const SERVICEABLE_USERS_TTL_S = 30;
+
+type ServiceableUserRow = { id: number; vless_uuid: string | null };
+
+let serviceableUsersCache = new WeakMap<D1Database, { bucket: number; users: ServiceableUserRow[] }>();
+
+export function clearServiceableUsersCache(): void {
+  serviceableUsersCache = new WeakMap();
+}
+
+async function serviceableUsers(db: D1Database, now: number): Promise<ServiceableUserRow[]> {
+  const bucket = Math.floor(now / SERVICEABLE_USERS_TTL_S);
+  const hit = serviceableUsersCache.get(db);
+  if (hit?.bucket === bucket) return hit.users;
+  const users = (
+    await db
+      .prepare(`SELECT id, vless_uuid FROM users WHERE ${SERVICEABLE_SQL} ORDER BY id`)
+      .bind(now)
+      .all<ServiceableUserRow>()
+  ).results;
+  serviceableUsersCache.set(db, { bucket, users });
+  return users;
+}
+
 export function nodeApiPort(nodePort: number): number {
   return nodePort === API_PORT ? API_PORT + 1 : API_PORT;
 }
@@ -60,15 +86,9 @@ export function configVersion(input: string): number {
 
 // 節點非 active 時下發空用戶列表：gateway 應用後即斷開所有連接
 export async function buildNodeXrayConfig(db: D1Database, node: NodeConfigRow, now: number): Promise<Record<string, unknown>> {
+  // 非 active 不下發用戶，也不把空列表寫進活躍節點的緩存
   const users =
-    node.status === undefined || node.status === 'active'
-      ? (
-          await db
-            .prepare(`SELECT id, vless_uuid FROM users WHERE ${SERVICEABLE_SQL} ORDER BY id`)
-            .bind(now)
-            .all<{ id: number; vless_uuid: string | null }>()
-        ).results
-      : [];
+    node.status === undefined || node.status === 'active' ? await serviceableUsers(db, now) : [];
 
   const protocol = node.protocol;
   const path = nodeWsPath(node);

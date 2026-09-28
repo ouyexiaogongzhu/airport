@@ -2,7 +2,8 @@
 // 結構：jwt:current + jwt:previous；簽發只用 current；校驗先 current 再 previous（grace）。
 // JWT_SECRET 僅作首次 bootstrap / KV 不可用時的兜底；輪換後的活密鑰在 KV。
 //
-// 不在 isolate 內長緩存材料：避免測試與多 secret 場景串擾；KV 讀成本可接受。
+// isolate 內短緩存成功讀到的 JwtMaterial（60s）。WeakMap 以 CACHE 物件為鍵，
+// 測試用的不同 memoryKv() 與多 secret 綁定互不共享。null 與 KV 讀取失敗不緩存（fail closed）。
 
 import { randomHex } from './csrf';
 
@@ -24,6 +25,26 @@ export type JwtMaterial = {
 };
 
 type JwtEnv = { CACHE: KVNamespace; JWT_SECRET?: string };
+
+/** 每 isolate、每 CACHE 綁定一份。60s 內的成功材料可重複使用，避開每請求讀 KV。 */
+const JWT_MATERIAL_CACHE_TTL_MS = 60_000;
+
+type CachedJwtMaterial = {
+  material: JwtMaterial;
+  expiresAtMs: number;
+};
+
+const jwtMaterialCache = new WeakMap<KVNamespace, CachedJwtMaterial>();
+
+function cachedJwtMaterial(cache: KVNamespace, nowMs = Date.now()): JwtMaterial | null {
+  const hit = jwtMaterialCache.get(cache);
+  if (!hit || nowMs >= hit.expiresAtMs) return null;
+  return hit.material;
+}
+
+function storeJwtMaterial(cache: KVNamespace, material: JwtMaterial, nowMs = Date.now()): void {
+  jwtMaterialCache.set(cache, { material, expiresAtMs: nowMs + JWT_MATERIAL_CACHE_TTL_MS });
+}
 
 export function generateJwtSecret(): string {
   return randomHex(32);
@@ -72,30 +93,38 @@ function bootstrapKey(secret: string, now: number): JwtKey {
  * 無 KV 且無 env secret → null。
  */
 export async function resolveJwtMaterial(env: JwtEnv, now = Math.floor(Date.now() / 1000)): Promise<JwtMaterial | null> {
+  const cached = cachedJwtMaterial(env.CACHE);
+  if (cached) return cached;
+
   let current: JwtKey | null;
   try {
     current = await readKvKey(env.CACHE, JWT_KV_CURRENT);
   } catch (e) {
     // 讀取失敗時不可回落 JWT_SECRET：那會把已輪換的活密鑰覆寫回 bootstrap key，
     // 使所有現存會話失效、且洩漏過 JWT_SECRET 的一方重新獲得簽名能力。fail closed。
+    // 不緩存：下一次請求仍會再讀 KV。
     console.error(JSON.stringify({ level: 'error', msg: 'jwt key kv read failed; refusing bootstrap fallback', error: String(e) }));
     return null;
   }
   if (current) {
     const previous = await readKvKeyTolerant(env.CACHE, JWT_KV_PREVIOUS);
-    return { current, previous };
+    const material: JwtMaterial = { current, previous };
+    storeJwtMaterial(env.CACHE, material);
+    return material;
   }
 
   const bootstrap = env.JWT_SECRET?.trim();
   if (!bootstrap) return null;
 
   const key = bootstrapKey(bootstrap, now);
+  const material: JwtMaterial = { current: key, previous: null };
   try {
     await writeKvKey(env.CACHE, JWT_KV_CURRENT, key);
+    storeJwtMaterial(env.CACHE, material);
   } catch {
-    // KV 寫失敗仍可用 bootstrap 簽驗（本請求）
+    // KV 寫失敗仍可用 bootstrap 簽驗（本請求）；不緩存，下一請求會再嘗試寫入。
   }
-  return { current: key, previous: null };
+  return material;
 }
 
 /**
@@ -120,7 +149,9 @@ export async function rotateJwtKeys(env: JwtEnv, now = Math.floor(Date.now() / 1
     return existing;
   }
 
-  return { current: next, previous: existing.current };
+  const rotated: JwtMaterial = { current: next, previous: existing.current };
+  storeJwtMaterial(env.CACHE, rotated);
+  return rotated;
 }
 
 /** hourly cron 調用：距上次輪換 ≥ JWT_ROTATION_INTERVAL_SEC 才真正輪換 */

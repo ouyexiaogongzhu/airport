@@ -141,12 +141,6 @@ export function nodeRoutes() {
       throw e;
     }
     const accepted = entries.length > 0 ? (results[1].meta.changes ?? 0) : 0;
-    if (Math.random() < 0.05) {
-      await db
-        .prepare('DELETE FROM traffic_batches WHERE recorded_at < ?')
-        .bind(new Date(Date.now() - 7 * 86400000).toISOString())
-        .run();
-    }
     return c.json({ ok: true, accepted });
   });
 

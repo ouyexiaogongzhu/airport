@@ -96,14 +96,11 @@ export async function runEntitlementMaintenance(db: D1Database, now: number): Pr
 
   // traffic_records 保留 14 天：先聚合進 traffic_daily，同一 batch 內刪除明細（原子，防重複累加）
   const cutoff = new Date((now - 14 * DAY) * 1000).toISOString();
-  const oldRows =
-    (
-      await db
-        .prepare('SELECT COUNT(*) AS n FROM traffic_records WHERE recorded_at < ?')
-        .bind(cutoff)
-        .first<{ n: number }>()
-    )?.n ?? 0;
-  if (oldRows > 0) {
+  const hasOld = await db
+    .prepare('SELECT 1 FROM traffic_records WHERE recorded_at < ? LIMIT 1')
+    .bind(cutoff)
+    .first();
+  if (hasOld) {
     const results = await db.batch([
       db
         .prepare(
@@ -116,11 +113,12 @@ export async function runEntitlementMaintenance(db: D1Database, now: number): Pr
         .bind(cutoff),
       db.prepare('DELETE FROM traffic_records WHERE recorded_at < ?').bind(cutoff),
     ]);
+    const deleted = results[1]?.meta?.changes ?? 0;
     console.log(
       JSON.stringify({
         event: 'traffic_daily_maintenance',
-        aggregated_rows: oldRows,
-        deleted_rows: results[1]?.meta?.changes ?? 0,
+        aggregated_rows: deleted,
+        deleted_rows: deleted,
         cutoff,
       }),
     );

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { createApp, type Env } from '../index';
 import { signJwt } from '../lib/jwt';
+import { clearServiceableUsersCache } from '../lib/nodeconfig';
 import { nodeSignature } from '../lib/nodehmac';
 import { createTestD1 } from '../testing/d1';
 
@@ -131,10 +132,13 @@ describe('GET /node/:token/config', () => {
     expect(v3).not.toBe(v2);
 
     raw.exec("UPDATE users SET status = 'banned' WHERE id = 2");
+    // production node configs can trail user entitlement changes by up to 30 seconds
+    clearServiceableUsersCache();
     const v4 = await version();
     expect(v4).not.toBe(v3);
 
     raw.exec("UPDATE users SET status = 'active', vless_uuid = 'uuid-2b' WHERE id = 2");
+    clearServiceableUsersCache();
     expect(await version()).not.toBe(v3);
   });
 

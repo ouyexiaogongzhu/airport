@@ -81,6 +81,9 @@ export type TouchResult =
   | { ok: true; deviceId: number; isNew: boolean }
   | { ok: false; error: 'DEVICE_LIMIT_EXCEEDED' };
 
+/** Skip last_seen writes when the same fingerprint was touched within this window. */
+const LAST_SEEN_WRITE_INTERVAL_SEC = 300;
+
 /**
  * Register or refresh a device on subscription pull.
  * maxDevices: 0 = unlimited; >0 enforces cap for new fingerprints only.
@@ -93,11 +96,16 @@ export async function touchDevice(
   now: number,
 ): Promise<TouchResult> {
   const existing = await db
-    .prepare('SELECT id FROM user_devices WHERE user_id = ? AND device_fingerprint = ? LIMIT 1')
+    .prepare(
+      'SELECT id, last_seen FROM user_devices WHERE user_id = ? AND device_fingerprint = ? LIMIT 1',
+    )
     .bind(userId, identity.fingerprint)
-    .first<{ id: number }>();
+    .first<{ id: number; last_seen: number }>();
 
   if (existing) {
+    if (now - existing.last_seen < LAST_SEEN_WRITE_INTERVAL_SEC) {
+      return { ok: true, deviceId: existing.id, isNew: false };
+    }
     await db
       .prepare(
         'UPDATE user_devices SET last_seen = ?, device_name = COALESCE(?, device_name), ' +

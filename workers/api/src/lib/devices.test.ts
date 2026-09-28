@@ -43,7 +43,8 @@ describe('devices helpers', () => {
     const over = await touchDevice(db, 1, 2, id3, now);
     expect(over).toEqual({ ok: false, error: 'DEVICE_LIMIT_EXCEEDED' });
 
-    // Same fingerprint refreshes without consuming a new slot
+    // Same fingerprint refreshes without consuming a new slot.
+    // now+10 is inside the 5-minute last_seen window, so this returns without writing.
     const again = await touchDevice(db, 1, 2, id1, now + 10);
     expect(again).toMatchObject({ ok: true, isNew: false });
 
