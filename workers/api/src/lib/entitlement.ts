@@ -39,6 +39,8 @@ export type ProductPlan = {
 };
 
 const DAY = 86400;
+/** 未付款訂單多久後回收庫存（cron 每小時跑，實際鎖定 30–90 分鐘） */
+const ORDER_TTL = 1800;
 
 // 開通/續費：到期時間從 max(now, 舊到期) 順延；流量額度重置為商品值並清零已用。
 // gate 為附加的 WHERE 條件（如支付回調的「訂單仍為 pending」），保證冪等。
@@ -132,5 +134,35 @@ export async function runEntitlementMaintenance(db: D1Database, now: number): Pr
       .run();
   } catch (e) {
     console.log(JSON.stringify({ event: 'traffic_batches_cleanup_skipped', error: String(e) }));
+  }
+
+  // 棄單佔用的庫存要回收：建單即扣 stock（web.ts:216），原本只有插單失敗與取支付連結失敗
+  // 兩條路徑會回補；用戶建單後不付款，庫存就永久被鎖住 —— 任何登入用戶反覆建單即可清空。
+  // 復用既有 hourly cron；orders 上已有 (status, created_at) 索引，無需遷移。
+  // 回補與改狀態放同一 db.batch（原子），否則兩次 cron 會重複加庫存。
+  // 用既有 'failed' 狀態，不新增枚舉值 —— payment.ts:127 已在用，且回調只在 pending 時激活，
+  // 過期單的遲到回調會被 payment.ts:55 擋下。
+  const orderCutoff = new Date((now - ORDER_TTL) * 1000).toISOString();
+  const stale = await db
+    .prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'pending' AND created_at < ?")
+    .bind(orderCutoff)
+    .first<{ n: number }>();
+  if ((stale?.n ?? 0) > 0) {
+    await db.batch([
+      db
+        .prepare(
+          'UPDATE products SET stock = stock + (' +
+            " SELECT COUNT(*) FROM orders o WHERE o.product_id = products.id AND o.status = 'pending' AND o.created_at < ?" +
+            ' ), updated_at = ?' +
+            " WHERE id IN (SELECT product_id FROM orders WHERE status = 'pending' AND created_at < ?)",
+        )
+        .bind(orderCutoff, ts, orderCutoff),
+      db
+        .prepare("UPDATE orders SET status = 'failed', updated_at = ? WHERE status = 'pending' AND created_at < ?")
+        .bind(ts, orderCutoff),
+    ]);
+    console.log(
+      JSON.stringify({ event: 'abandoned_orders_reclaimed', orders: stale?.n ?? 0, cutoff: orderCutoff }),
+    );
   }
 }
