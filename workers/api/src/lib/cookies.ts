@@ -67,3 +67,13 @@ export function clearAuthCookies(domain?: string): string[] {
 export function clearHostOnlyAuthCookies(names: string[]): string[] {
   return names.map((n) => clearOne(n));
 }
+
+/**
+ * 清掉這組 cookie 的 Domain= 變體。admin cookie 從寬域收回 host-only 時必須呼叫：
+ * 只發新的 host-only cookie 不夠，老瀏覽器裡的 Domain=rfplay.uk 版本會繼續被送到
+ * 每一個子域，漏洞等於沒修。
+ */
+export function clearDomainAuthCookies(names: string[], domain?: string): string[] {
+  if (!domain) return [];
+  return names.map((n) => clearOne(n, domain));
+}

@@ -401,3 +401,58 @@ describe('/admin/auth/validate', () => {
     expect(await r.json()).toMatchObject({ role: 'admin', token: expect.any(String), refresh_token: expect.any(String) });
   });
 });
+
+// C1：portal 的 Pages 代理原樣轉發 /api/*，而 auth cookie 原帶 Domain=rfplay.uk ——
+// xv.rfplay.uk 上的腳本可讓瀏覽器附上 admin_session，並讀到非 HttpOnly 的 admin_csrf，
+// 整套 admin API 在那個源上可被讀寫。admin cookie 必須是 host-only。
+describe('admin cookie 作用域', () => {
+  function setupWithDomain() {
+    const { db, raw } = createTestD1();
+    const hash = bcrypt.hashSync(PASSWORD, 4);
+    raw.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', ?, 'admin')").run(hash);
+    const env = {
+      DB: db,
+      CACHE: { get: async () => null, put: async () => {} } as unknown as KVNamespace,
+      JWT_SECRET: SECRET,
+      TURNSTILE_DISABLED: '1',
+      COOKIE_DOMAIN: 'rfplay.uk',
+    } as unknown as Env;
+    const app = createApp();
+    return (path: string, init: RequestInit = {}) => app.request(`/api/v1${path}`, init, env);
+  }
+
+  it('admin cookie 不帶 Domain，且舊的寬域版本被清除；portal cookie 仍帶 Domain', async () => {
+    const req = setupWithDomain();
+    const out = await req('/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: PASSWORD }),
+    });
+    expect(out.status).toBe(200);
+
+    const set = out.headers.getSetCookie();
+    const issued = (name: string) => set.filter((v) => v.startsWith(`${name}=`) && !v.includes('Max-Age=0'));
+
+    for (const name of ['admin_session', 'admin_refresh', 'admin_csrf']) {
+      const cookies = issued(name);
+      expect(cookies.length).toBeGreaterThan(0);
+      expect(cookies[0]).not.toContain('Domain=');
+      // 修復前發出的 Domain=rfplay.uk 版本必須被清掉，否則存量瀏覽器仍在往每個子域發舊 cookie
+      // （csrf cookie 按 clearOne 的既有規則不帶 HttpOnly）
+      const httpOnly = name.includes('csrf') ? '' : 'HttpOnly; ';
+      expect(set).toContain(`${name}=; Path=/; Max-Age=0; Secure; SameSite=Lax; ${httpOnly}Domain=rfplay.uk`);
+    }
+
+    // OAuth 回調在 api.rfplay.uk 下發 session cookie、門戶跑在 xv.rfplay.uk，門戶 cookie 不能改成 host-only
+    const portal = await req('/public/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: PASSWORD }),
+    });
+    expect(portal.status).toBe(200);
+    const pset = portal.headers.getSetCookie();
+    for (const name of ['session', 'refresh']) {
+      expect(pset.filter((v) => v.startsWith(`${name}=`) && !v.includes('Max-Age=0'))[0]).toContain('Domain=rfplay.uk');
+    }
+  });
+});

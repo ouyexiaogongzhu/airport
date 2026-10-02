@@ -15,7 +15,7 @@ import {
   refreshCookie,
   csrfCookie,
   clearAuthCookies,
-  clearHostOnlyAuthCookies,
+  clearDomainAuthCookies,
 } from '../lib/cookies';
 import { bearerJwt, constantTimeEqual, randomHex } from '../lib/csrf';
 import {
@@ -31,32 +31,42 @@ import type { Env } from '../index';
 type AppEnv = { Bindings: Env; Variables: { userId: number; role: string } };
 type UserWithHash = UserRow & { password_hash: string; token_version: number };
 
+/** 一律 host-only 的 admin cookie（見 issueAdminCookies 的說明） */
+const ADMIN_AUTH_COOKIES = ['admin_session', 'admin_refresh', 'admin_csrf'];
+
 // setAdminAuthCookies：admin_session(30d) + admin_refresh(7d 換發) + admin_csrf(30d 非 httpOnly)
+//
+// Admin cookie 一律 host-only。portal 與 admin 的 Pages Function 代理都把 /api/* 原樣轉發給
+// 本 worker，而 auth cookie 原帶 Domain=rfplay.uk —— 於是 xv.rfplay.uk（面向終端用戶、不受信任）
+// 上的腳本可以讓瀏覽器附上 admin_session，並用 document.cookie 讀到非 HttpOnly 的 admin_csrf，
+// CSRF 雙提交在那個源上形同虛設，整個 admin API 可被讀寫。host-only 把它們釘在 xva.rfplay.uk。
+// ponytail: 門戶 cookie（session/refresh/csrf）仍帶 Domain —— OAuth 回調在 api.rfplay.uk 下發 cookie
+// 而門戶跑在 xv.rfplay.uk，改成 host-only 會直接登不進去。
 async function issueAdminCookies(c: Context<AppEnv>, user: SessionUser | UserWithHash) {
   const material = await resolveJwtMaterial(c.env);
   if (!material) return null;
-  const domain = c.env.COOKIE_DOMAIN;
   const t = await signTokens(user, material, 'admin');
-  // Domain cookie 不會覆蓋舊 host-only；登入前先清，避免雙份同名 session
-  if (domain) {
-    for (const v of clearHostOnlyAuthCookies(['admin_session', 'admin_refresh', 'admin_csrf'])) {
-      c.header('Set-Cookie', v, { append: true });
-    }
+  c.header('Set-Cookie', sessionCookie('admin_session', t.session), { append: true });
+  c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh), { append: true });
+  c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32)), { append: true });
+  // 清掉修復前發出的寬域版本，否則存量 admin 瀏覽器仍在往每個子域發舊 cookie
+  for (const v of clearDomainAuthCookies(ADMIN_AUTH_COOKIES, c.env.COOKIE_DOMAIN)) {
+    c.header('Set-Cookie', v, { append: true });
   }
-  c.header('Set-Cookie', sessionCookie('admin_session', t.session, domain), { append: true });
-  c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh, domain), { append: true });
-  c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32), domain), { append: true });
   return t;
 }
 
 // GetCSRFToken 同一 handler 掛 /auth/csrf 與 /admin/auth/csrf：缺才發，雙 cookie 都補
+// admin_csrf 與其餘 admin cookie 同樣收回 host-only（見 issueAdminCookies 的說明）
 function csrfHandler(c: Context<AppEnv>) {
-  const domain = c.env.COOKIE_DOMAIN;
   if (!getCookie(c, 'csrf')) {
-    c.header('Set-Cookie', csrfCookie('csrf', randomHex(32), domain), { append: true });
+    c.header('Set-Cookie', csrfCookie('csrf', randomHex(32), c.env.COOKIE_DOMAIN), { append: true });
   }
   if (!getCookie(c, 'admin_csrf')) {
-    c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32), domain), { append: true });
+    c.header('Set-Cookie', csrfCookie('admin_csrf', randomHex(32)), { append: true });
+    for (const v of clearDomainAuthCookies(['admin_csrf'], c.env.COOKIE_DOMAIN)) {
+      c.header('Set-Cookie', v, { append: true });
+    }
   }
   return c.json({ ok: true });
 }
@@ -202,10 +212,13 @@ export function authRoutes() {
     const material = await resolveJwtMaterial(c.env);
     if (!material) return c.json({ error: 'SESSION_EXPIRED' }, 401);
     const t = await signTokens(user, material, 'admin');
-    c.header('Set-Cookie', sessionCookie('admin_session', t.session, c.env.COOKIE_DOMAIN), { append: true });
-    c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh, c.env.COOKIE_DOMAIN), { append: true });
     const adminCsrfVal = getCookie(c, 'admin_csrf');
-    c.header('Set-Cookie', csrfCookie('admin_csrf', adminCsrfVal || randomHex(32), c.env.COOKIE_DOMAIN), { append: true });
+    c.header('Set-Cookie', sessionCookie('admin_session', t.session), { append: true });
+    c.header('Set-Cookie', refreshCookie('admin_refresh', t.refresh), { append: true });
+    c.header('Set-Cookie', csrfCookie('admin_csrf', adminCsrfVal || randomHex(32)), { append: true });
+    for (const v of clearDomainAuthCookies(ADMIN_AUTH_COOKIES, c.env.COOKIE_DOMAIN)) {
+      c.header('Set-Cookie', v, { append: true });
+    }
     return c.json({ ok: true, token: t.bearer, refresh_token: t.refresh });
   });
 
